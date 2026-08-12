@@ -172,6 +172,12 @@ DeepSeek——协议兼容不代表用的是 OpenAI 的模型。三个环境变�
 
 某一轮完全没有产出时，那条用户消息会被回滚掉，避免历史里留下一个模型从未回答过的提问。
 
+渲染怎么做的（纯 REPL 实现细节，与循环无关）：`runTurn` 用
+`streamMode: ["messages", "values"]` 同时消费两路。`messages` 是 token 级 chunk，正文与
+reasoning 边写边出；`values` 是每个节点后的完整状态，工具活动从它的增量里渲染——**chunk 管
+散文，state 管结构**，两条通道不重叠。一轮结束后本地历史被最后一次 `values` 快照**整体替换**，
+所以 reducer 怎么合并、`ToolNode` 补了几条结果，REPL 都不需要知道。
+
 日志走 stderr，所以 `LOG_LEVEL=warn` 能得到干净的对话记录，`bun run chat 2>/dev/null` 也行。
 
 ## 核心循环
@@ -195,44 +201,44 @@ flowchart LR
 - `RECURSION_LIMIT = 24` 数的是**节点执行次数**，一圈两个节点，所以约 12 次模型调用。
   它是防跑飞的兜底，不是策略——识别"模型在原地打转"并体面收场是另一件事，没做
 
-### 一次用户输入，端到端
-
-REPL 用 `streamMode: ["messages", "values"]` 同时消费两路。**chunk 管散文，state 管结构。**
+### 一圈循环的内部次序
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor U as 用户
-    participant R as repl.ts<br/>runTurn
-    participant G as LangGraph
+    participant S as state.messages
+    participant L as llmCall
     participant M as ChatOpenAI
-    participant T as ToolNode
+    participant T as tools · ToolNode
+    participant F as Read / Glob / Grep
 
-    U->>R: 输入一行
-    R->>G: graph.stream，输入 = 历史 + HumanMessage
-    G->>M: llmCall 节点
-    M-->>R: messages 通道 · reasoning chunk → 暗色
-    M-->>R: messages 通道 · 正文 chunk → 常色
-    M-->>G: AIMessage，可能带 tool_calls
-    G-->>R: values 通道 · 状态快照 → 渲染工具调用行
-    Note over G: toolsCondition 读最后一条消息
-    G->>T: 带 tool_calls，转 tools 节点
-    T-->>G: 每个 tool_call 各回一条 ToolMessage
-    G-->>R: values 通道 · 新快照 → 渲染结果行
-    G->>M: 回边，再调一次模型
-    M-->>G: AIMessage，这次没有 tool_calls
-    G-->>R: values 通道 · 终态
-    R->>U: 历史整体替换为终态
+    Note over S: 入口状态 = system + 历史 + 新的 user 消息
+    S->>L: 传入全部消息
+    L->>M: invoke，附上 TOOLS 的 JSON Schema
+    M-->>L: AIMessage，带 tool_calls
+    L-->>S: 返回 messages 更新，reducer 追加
+    Note over S,T: toolsCondition 读最后一条：带 tool_calls → tools
+    S->>T: 传入全部消息
+    T->>F: 按名字查表，zod 校验参数，并行执行
+    F-->>T: 结果，或抛出的错误
+    T-->>S: 每个 tool_call 各追加一条 ToolMessage
+    Note over S,L: 回边，无条件
+    S->>L: 传入全部消息，现在含工具结果
+    L->>M: invoke
+    M-->>L: AIMessage，没有 tool_calls
+    L-->>S: 追加
+    Note over S: toolsCondition → END，一轮结束
 ```
 
 三处值得单独记住：
 
-- **`values` 只在节点边界到达。** 所以一个还没跑完的 `llmCall`，它已经流出去的正文只在终端上、
-  不在状态里——这就是 Ctrl+C 打断后那段回复不进历史的原因（见「控制台」）。
-- **工具消息不从 chunk 通道渲染。** `runTurn` 里显式 `if (chunk.getType() === "tool") continue`，
-  工具活动一律从状态快照的增量里渲染。两条通道各管一件事，不重叠。
-- **历史是整体替换，不是追加。** REPL 拿最后一次 `values` 快照直接替掉本地数组，所以
-  reducer 怎么合并、`ToolNode` 补了几条结果，REPL 都不需要知道。
+- **节点不改状态，节点返回更新。** `llmCall` 返回的是 `{ messages: [reply] }` 而不是一份新
+  历史，怎么并进去由 `MessagesValue` 的 reducer 决定——它按 id 匹配，新消息追加、同 id 原地
+  更新。所以看一个节点返回什么，**推不出**状态会怎么变，必须回去看 schema。
+- **状态只在节点边界提交。** 一个还没跑完的 `llmCall` 对状态毫无贡献，哪怕它已经流出了大半
+  段正文。这是崩溃可续跑的前提，也是 Ctrl+C 打断后那段回复不进历史的原因。
+- **每个 `tool_call` 都会被回答。** `ToolNode` 对失败也回一条消息，所以状态里不会留下悬空的
+  调用——provider 会拒绝那样的历史。实测一轮两个调用其中一个失败时，两条结果都在。
 
 当前只有三个**只读**工具：
 
