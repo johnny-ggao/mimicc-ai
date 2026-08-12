@@ -48,7 +48,6 @@ src/
   tools/
     readonly.ts  Read / Glob / Grep（LangChain tool，zod schema + 安全护栏）
     index.ts     注册表
-  llm/         手写的 OpenAI 兼容适配器 —— 已不在运行路径上，见「已知约束」
 tests/
   config.test.ts
   agent.test.ts
@@ -132,11 +131,13 @@ learn/                     教学工作区（讲义 / 参考卡 / 学习记录�
 - **机器上不需要 Node。** ESLint、Prettier、tsc 都是 Node CLI，但 Bun 能直接执行它们——
   `bun --bun run typecheck / lint / format:check` 三项本机实测通过，CI 也不再安装 Node。
 - `engines.bun` 只是声明，装依赖时不强制校验（见「版本固定」）。
+- **`@langchain/openai` 自带一份 `openai@6.49.0`**。跨副本的类身份不同，所以**不要用
+  `instanceof OpenAI.APIError` 判别错误**——会全部落到兜底分支。按 `status` 判别。
 
 ## LLM 接入
 
-`src/llm/` 走 **OpenAI 兼容协议**，但默认端点指向 DeepSeek——`openai` SDK 只是传输层，
-不代表用的是 OpenAI 的模型。三个环境变量控制它：
+模型层是 `@langchain/openai` 的 `ChatOpenAI`，走 **OpenAI 兼容协议**，但 `baseURL` 指向
+DeepSeek——协议兼容不代表用的是 OpenAI 的模型。三个环境变量控制它：
 
 | 变量           | 必填 | 默认值                     |
 | -------------- | ---- | -------------------------- |
@@ -160,12 +161,16 @@ learn/                     教学工作区（讲义 / 参考卡 / 学习记录�
 | `/exit`  | 退出，等同 Ctrl+D                                |
 | `Ctrl+C` | 回复进行中则中断本次回复；空闲时按下则退出       |
 
-被 Ctrl+C 打断的回复，**已生成的部分会保留进历史**——它仍然是有效上下文。反之，某一轮
-因报错而完全没有产出时，那条用户消息会被回滚掉，避免历史里留下一个模型从未回答过的提问。
+**被 Ctrl+C 打断的回复不会进入历史。**状态只在**节点边界**提交，所以一个还没跑完的
+`llmCall` 节点，它已经流出来的正文只存在于终端上，不在状态里。实测（中止 / 不中止对照）：
+在第 15 个 chunk 处中止 → 抛 `AbortError`，最后的状态快照仍是 `system → human`；不中止跑完
+→ `system → human → ai`。
 
-有个 SDK 行为要注意：请求发出**之前**中止会抛 `APIUserAbortError`，但**流进行中**中止时
-SDK 是干净地结束迭代器、不抛异常的。适配器在流结束后补查 `signal.aborted` 并抛出
-`LLMError`，否则 `ChatOptions.signal` 上写的契约就是假的。
+这与手写版**不同**：那一版会把已生成的部分留进历史，理由是「它仍然是有效上下文」。要恢复
+这个行为，需要 REPL 自己把流过的正文攒起来、在中止时补一条 assistant 消息（约十行）。
+目前没做。
+
+某一轮完全没有产出时，那条用户消息会被回滚掉，避免历史里留下一个模型从未回答过的提问。
 
 日志走 stderr，所以 `LOG_LEVEL=warn` 能得到干净的对话记录，`bun run chat 2>/dev/null` 也行。
 
@@ -173,10 +178,13 @@ SDK 是干净地结束迭代器、不抛异常的。适配器在流结束后补�
 
 循环建在 **LangGraph** 上（`src/agent.ts`）。整个文件里**没有 `while`**：
 
-```
-START ──▶ llmCall ──toolsCondition──▶ tools ──┐
-                        │                      │
-                        └──▶ END               └──▶ 回到 llmCall（这条边就是循环）
+```mermaid
+flowchart LR
+    S(["START"]) --> L["llmCall<br/>ChatOpenAI.invoke(state.messages)"]
+    L --> C{"toolsCondition<br/>最后一条消息带 tool_calls？"}
+    C -- "是" --> T["tools<br/>ToolNode(TOOLS)"]
+    C -- "否" --> E(["END"])
+    T -- "回边：这一条就是循环" --> L
 ```
 
 - `llmCall` 节点调 `ChatOpenAI`（`baseURL` 指向 DeepSeek）
@@ -187,9 +195,44 @@ START ──▶ llmCall ──toolsCondition──▶ tools ──┐
 - `RECURSION_LIMIT = 24` 数的是**节点执行次数**，一圈两个节点，所以约 12 次模型调用。
   它是防跑飞的兜底，不是策略——识别"模型在原地打转"并体面收场是另一件事，没做
 
-REPL 用 `streamMode: ["messages", "values"]` 同时消费两路：`messages` 是 token 级 chunk
-（正文与 reasoning 边写边出），`values` 是每个节点后的完整状态（既是要保留的历史，也是唯一
-可靠地发现"工具跑过了"的地方）。**chunk 管散文，state 管结构。**
+### 一次用户输入，端到端
+
+REPL 用 `streamMode: ["messages", "values"]` 同时消费两路。**chunk 管散文，state 管结构。**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant R as repl.ts<br/>runTurn
+    participant G as LangGraph
+    participant M as ChatOpenAI
+    participant T as ToolNode
+
+    U->>R: 输入一行
+    R->>G: graph.stream，输入 = 历史 + HumanMessage
+    G->>M: llmCall 节点
+    M-->>R: messages 通道 · reasoning chunk → 暗色
+    M-->>R: messages 通道 · 正文 chunk → 常色
+    M-->>G: AIMessage，可能带 tool_calls
+    G-->>R: values 通道 · 状态快照 → 渲染工具调用行
+    Note over G: toolsCondition 读最后一条消息
+    G->>T: 带 tool_calls，转 tools 节点
+    T-->>G: 每个 tool_call 各回一条 ToolMessage
+    G-->>R: values 通道 · 新快照 → 渲染结果行
+    G->>M: 回边，再调一次模型
+    M-->>G: AIMessage，这次没有 tool_calls
+    G-->>R: values 通道 · 终态
+    R->>U: 历史整体替换为终态
+```
+
+三处值得单独记住：
+
+- **`values` 只在节点边界到达。** 所以一个还没跑完的 `llmCall`，它已经流出去的正文只在终端上、
+  不在状态里——这就是 Ctrl+C 打断后那段回复不进历史的原因（见「控制台」）。
+- **工具消息不从 chunk 通道渲染。** `runTurn` 里显式 `if (chunk.getType() === "tool") continue`，
+  工具活动一律从状态快照的增量里渲染。两条通道各管一件事，不重叠。
+- **历史是整体替换，不是追加。** REPL 拿最后一次 `values` 快照直接替掉本地数组，所以
+  reducer 怎么合并、`ToolNode` 补了几条结果，REPL 都不需要知道。
 
 当前只有三个**只读**工具：
 
@@ -212,46 +255,42 @@ Write / Edit / Bash **没有实现**——它们需要先有确认机制，而 R
 `Grep` 因此把路径限定在工作目录内，并拒读 `.env*` / `id_*` / `*.pem` / `*.key` / `.git/`
 这类文件。想放开就改 `src/tools/readonly.ts` 里的 `SECRET`。
 
-## LLM 接入的设计
+## DeepSeek 的行为
 
-只有一条底层路径：`client.stream()` 返回 `AsyncIterable<Delta>`，非流式用法是
-`collect(stream)` 把增量收成完整消息。tool_calls 在流里是**按 index 分片**到达的（`id`
-和函数名只出现一次，`arguments` 是被切碎的 JSON 字符串），拼装逻辑集中在
-`accumulator.ts`——它是模块里唯一的纯函数，也是测试的重点。
+传输、分片拼装、错误映射现在都在 `ChatOpenAI` 里，不再是本仓库的代码。但下面这些 DeepSeek
+与 OpenAI 的差异仍然会影响你，**全部为 2026-08-12 对 deepseek-v4-flash / -pro 的实测**：
 
-几个 DeepSeek 与 OpenAI 不一致的地方，代码里已经处理或注释（v4 实测于 2026-08-12）：
-
-- DeepSeek 会多返回 `reasoning_content`，该字段不在 `openai` 的类型定义里，适配器用一处
-  收窄的断言取它，并映射成 `Delta` 的 `reasoning` 通道。**v4 默认就返回它**，所以这是常规
-  路径，不是推理模型专属的边缘情况。要关掉用 `thinking: { type: "disabled" }`。
+- DeepSeek 会多返回 `reasoning_content`，该字段不在 OpenAI 协议里。**v4 默认就返回它**，
+  不是推理模型专属。`ChatOpenAI` 把它放进 `additional_kwargs.reasoning_content`，流式 chunk
+  上也有——REPL 的暗色思考就是从那里读的。要关掉用 `thinking: { type: "disabled" }`，但实测
+  关掉后总 token 反而更多（模型不思考时正文写得更长），别当省钱手段用。
 - **`reasoning` 的回传约束反转了，但比看上去窄得多。**旧规则是「必须丢掉，否则 400」。
   v4 实测（2026-08-12）：只有当 assistant 轮带 `tool_calls`、**且那个 tool_call id 不是
   DeepSeek 自己签发过的**，才要求回传 `reasoning_content`（报错原文 “The
   \`reasoning_content\` in the thinking mode must be passed back to the API.”）。
   DeepSeek 签发过的 id——**哪怕来自另一段对话**——不带也是 200；格式相符但从未签发的假 id
   会 400。流式与否无差别；`thinking: { type: "disabled" }` 下一律通过。
-- 所以**正常 agent 循环不会撞上它**，id 都来自模型。`toWireMessage` 仍然在带 `toolCalls`
-  的轮次回传该字段，作为廉价保险：历史被持久化后隔久了重放（识别可能失效，**未实测**），
-  以及我们自己伪造 tool_call id 的场合。纯文本轮不发，省 token。
+- 所以**正常 agent 循环不会撞上它**，id 都来自模型。实测 `ChatOpenAI` 发出去时**会丢掉**
+  这个字段，而真实 API 依然返回 200——正因为 id 是它自己签发的。值得留意的只有两个场合：
+  历史被持久化后隔久了重放（识别是否过期**未实测**），以及自己伪造 tool_call id（测试夹具、
+  HITL 注入）。
 - **`tool_choice: "required"` 不被支持**：400 `Thinking mode does not support this tool_choice`。
   想强制调工具得靠提示词，或先关 thinking。
 - **v4 两个模型都支持 `tools`**（实测）。`temperature` / `top_p` 在 v4 上未实测；旧的
   `deepseek-reasoner` 三者都不支持，适配器只在字段存在时才发送，这个防御保留着。
-- 流式默认不返回 usage，必须带 `stream_options.include_usage`。
-- 余额不足是 402，归入 `LLMError` 的 `bad_request`。OpenAI 用 429——这是唯一的状态码语义差异。
-- `usage` 里除 OpenAI 标准字段外，还叠加了私有的 `prompt_cache_hit_tokens` /
-  `prompt_cache_miss_tokens`（适配器读前者）。**多出来的字段不影响协议兼容性**，客户端只读
-  自己认识的键。
-
-错误统一是 `LLMError`，用 `kind` 字段判别（`auth` / `rate_limit` / `timeout` /
-`bad_request` / `server` / `network` / `aborted` / `unknown`），原始错误保留在 `cause`。
-重试交给 SDK 自带的 `maxRetries`（2 次，只重试 408/409/429/5xx），不要在外面再套一层。
+- 余额不足是 **402**，OpenAI 用 429——这是唯一的状态码语义差异。`src/repl.ts` 的
+  `describe()` 按 `status` 给提示，因为跨包的 `instanceof` 判别不可靠（见「已知约束」）。
+- `usage` 里除 OpenAI 标准字段（`prompt_tokens_details.cached_tokens`、
+  `completion_tokens_details.reasoning_tokens`）外，还叠加了私有的
+  `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`。**多出来的字段不影响协议兼容性**
+  ——客户端只读自己认识的键，这也是「除 reasoning 之外都兼容」这个判断成立的原因。LangChain
+  把缓存数规范化成 `usage_metadata.input_token_details.cache_read`。
 
 ## 依赖说明
 
-| 依赖                   | 用途                                               |
-| ---------------------- | -------------------------------------------------- |
-| `openai`               | 传输层，OpenAI 兼容协议客户端；默认打到 DeepSeek   |
-| `zod`                  | 环境变量校验；同时是 LangGraph state schema 的载体 |
-| `@langchain/langgraph` | agent 核心循环的图运行时                           |
-| `@langchain/core`      | 消息类型等基础件，被 langgraph 依赖                |
+| 依赖                   | 用途                                                       |
+| ---------------------- | ---------------------------------------------------------- |
+| `@langchain/langgraph` | 核心循环的图运行时；`ToolNode` / `toolsCondition` 也来自它 |
+| `@langchain/openai`    | `ChatOpenAI`，模型层兼传输层                               |
+| `@langchain/core`      | 消息类型、`tool()`；被上面两个依赖                         |
+| `zod`                  | 环境变量校验、工具参数 schema、LangGraph state schema      |
