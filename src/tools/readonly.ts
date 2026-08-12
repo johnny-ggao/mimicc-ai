@@ -1,43 +1,22 @@
-import { relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
-/** Everything is resolved against this. Set once, at module load. */
-const ROOT = process.cwd();
+import {
+  MAX_FILE_BYTES,
+  ROOT,
+  isSecret,
+  resolveInside,
+  withPathLock,
+} from "./workspace";
 
-// Output caps. A tool result goes straight into the next prompt, so an
-// unbounded read is an unbounded bill — and it evicts the conversation.
-const MAX_FILE_BYTES = 64_000;
+// Result caps. Same reasoning as MAX_FILE_BYTES: what a tool returns is what the
+// next request pays for.
 const MAX_GLOB_HITS = 200;
 const MAX_GREP_HITS = 100;
 
 const IGNORED = ["node_modules/**", ".git/**", "dist/**", "coverage/**"];
-
-/**
- * Read-only is not risk-free. Tool output is sent to the model, which makes an
- * unconstrained path an exfiltration channel rather than merely a read. Two
- * guards: stay inside the working directory, and refuse the files whose whole
- * point is to hold secrets.
- *
- * Throwing here is the right move — `ToolNode` turns a thrown error into a tool
- * message, so the model reads the refusal and can explain it to the user.
- */
-const SECRET = /(^|\/)\.env(\.|$)|(^|\/)\.git\/|(^|\/)id_[a-z]+$|\.pem$|\.key$/;
-
-function resolveInside(path: string): string {
-  const full = resolve(ROOT, path);
-  if (full !== ROOT && !full.startsWith(ROOT + sep)) {
-    throw new Error(`path escapes the working directory: ${path}`);
-  }
-  const rel = relative(ROOT, full);
-  if (SECRET.test(`/${rel}`)) {
-    throw new Error(
-      `refusing to read ${rel}: it may hold credentials, and tool output is sent to the model`,
-    );
-  }
-  return full;
-}
 
 function ignored(path: string): boolean {
   return IGNORED.some((pattern) => new Bun.Glob(pattern).match(path));
@@ -45,19 +24,27 @@ function ignored(path: string): boolean {
 
 export const readTool = tool(
   async ({ path }): Promise<string> => {
-    const file = Bun.file(resolveInside(path));
-    if (!(await file.exists())) throw new Error(`no such file: ${path}`);
+    const full = resolveInside(path);
 
-    const text = await file.text();
-    const clipped = text.length > MAX_FILE_BYTES;
-    const numbered = (clipped ? text.slice(0, MAX_FILE_BYTES) : text)
-      .split("\n")
-      .map((line, i) => `${String(i + 1)}\t${line}`)
-      .join("\n");
+    // Reading takes the lock too, so a Read batched alongside an Edit of the
+    // same file cannot observe a half-written one. Glob and Grep do not — they
+    // are bulk scans, and locking every file they walk would cost real time to
+    // prevent at worst one bad line in a search result.
+    return withPathLock(full, async () => {
+      const file = Bun.file(full);
+      if (!(await file.exists())) throw new Error(`no such file: ${path}`);
 
-    return clipped
-      ? `${numbered}\n\n[clipped at ${String(MAX_FILE_BYTES)} bytes of ${String(text.length)}]`
-      : numbered;
+      const text = await file.text();
+      const clipped = text.length > MAX_FILE_BYTES;
+      const numbered = (clipped ? text.slice(0, MAX_FILE_BYTES) : text)
+        .split("\n")
+        .map((line, i) => `${String(i + 1)}\t${line}`)
+        .join("\n");
+
+      return clipped
+        ? `${numbered}\n\n[clipped at ${String(MAX_FILE_BYTES)} bytes of ${String(text.length)}]`
+        : numbered;
+    });
   },
   {
     name: "Read",
@@ -107,7 +94,7 @@ export const grepTool = tool(
 
     const hits: string[] = [];
     for await (const path of new Bun.Glob(glob).scan({ cwd: ROOT, onlyFiles: true })) {
-      if (ignored(path) || SECRET.test(`/${path}`)) continue;
+      if (ignored(path) || isSecret(path)) continue;
 
       const file = Bun.file(resolve(ROOT, path));
       if (file.size > MAX_FILE_BYTES) continue;

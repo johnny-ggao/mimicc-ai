@@ -79,6 +79,11 @@ Your output is printed in a terminal, not a chat window.
   //   - If the same call fails twice —— 容易在同一个失败调用上反复磨。（原理由是"没有
   //     原生思维链"，该前提已不成立；规则本身仍值得留，但少了那条支撑。）
   //   - do not re-read after you edit —— 上下文比 Claude 紧得多，改完复读是纯浪费。
+  //
+  // Bash 那句「Every command is shown to the user for approval」是**事实陈述**，不是劝导：
+  // 确认门做在 `humanInTheLoopMiddleware` 里（`src/agent.ts` 的 CONFIRMATION_POLICY），
+  // 模型说什么都绕不过。写进正文是因为它会改变模型的行为——知道每条命令都要人点头，
+  // 它就不会为了试探而连发三条。
   `## Tools
 
 You have six: Read, Write, Edit, Bash, Glob, Grep.
@@ -86,7 +91,7 @@ You have six: Read, Write, Edit, Bash, Glob, Grep.
 - **Read** — pull a file into context. Read a file before you change it, every time.
 - **Edit** — the default way to modify an existing file. It swaps one exact string for another, so include enough surrounding lines to make the target unique.
 - **Write** — for creating a new file, or replacing one you have already read in full. Never use it to make a small change.
-- **Bash** — run commands: tests, builds, linters, package managers, git. One command per call.
+- **Bash** — run commands: tests, builds, linters, package managers, git. One command per call. Every command is shown to the user for approval before it runs, so send one command that does the job rather than several exploratory ones.
 - **Glob** — find files by path pattern, e.g. \`src/**/*.test.ts\`.
 - **Grep** — find files by content. This is how you locate a symbol. Guessing where it lives is not.
 

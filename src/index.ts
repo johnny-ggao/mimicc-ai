@@ -11,4 +11,12 @@ export {
 export { loadConfig, type Config } from "./config";
 export { createLogger, type Logger, type LogLevel } from "./logger";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
-export { globTool, grepTool, readTool, TOOLS } from "./tools";
+export {
+  bashTool,
+  editTool,
+  globTool,
+  grepTool,
+  readTool,
+  writeTool,
+  TOOLS,
+} from "./tools";

@@ -113,6 +113,17 @@ test("a guard rejection comes back as a tool message, not an exception", async (
   );
 });
 
-test("registers exactly the read-only three", () => {
-  expect(TOOLS.map((tool) => tool.name)).toEqual(["Read", "Glob", "Grep"]);
+// The system prompt names all six by name and describes what each one does, so
+// the registry and `src/prompt.ts` are one specification in two places. A tool
+// the prompt promises but the registry lacks costs a whole lap of the loop:
+// ToolNode turns "not found" into a tool message and the model tries again.
+test("registers the six tools the prompt advertises, in order", () => {
+  expect(TOOLS.map((tool) => tool.name)).toEqual([
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep",
+  ]);
 });

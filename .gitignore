@@ -15,3 +15,6 @@ pnpm-lock.yaml
 
 # 教学工作区：讲义与学习记录含个人化内容，只留本地
 learn/
+
+# 测试夹具（tests/tools/mutating.test.ts 用完即删，这条防崩溃后残留）
+.test-tmp/

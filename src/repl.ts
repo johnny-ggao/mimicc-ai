@@ -5,6 +5,7 @@ import {
   SystemMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
+import { Command } from "@langchain/langgraph";
 
 import { RECURSION_LIMIT, type AgentGraph } from "./agent";
 
@@ -13,8 +14,9 @@ const RESET = "\x1b[0m";
 
 const BANNER = [
   "mimicc-ai — type a message and press enter",
-  "  tools    Read · Glob · Grep (read-only)",
-  "  /clear   forget the conversation so far",
+  "  tools    Read · Write · Edit · Bash · Glob · Grep",
+  "  Bash     stops and asks before it runs; the others do not",
+  "  /clear   start a new thread; the old one stays in the checkpointer",
   "  /exit    quit (same as Ctrl+D)",
   "  Ctrl+C   interrupt the current reply; at an idle prompt, quit",
 ].join("\n");
@@ -22,6 +24,33 @@ const BANNER = [
 export interface ReplOptions {
   graph: AgentGraph;
   systemPrompt: string;
+}
+
+/** One tool call waiting on a human. Shape comes from `__interrupt__`. */
+interface ActionRequest {
+  name: string;
+  args: Record<string, unknown>;
+  description?: string;
+}
+
+type Decision =
+  | { type: "approve" }
+  | { type: "edit"; editedAction: { name: string; args: Record<string, unknown> } }
+  | { type: "reject"; message?: string };
+
+/**
+ * A batch of tool calls the gate stopped, and the decisions collected so far.
+ *
+ * The console asks for these one line at a time through the *same* readline
+ * iterator that reads prompts, rather than through `rl.question`: both consume
+ * "line" events, and running them concurrently makes which one wins a matter of
+ * timing. A line is a line — what changes is how the loop reads it.
+ */
+interface Pending {
+  requests: ActionRequest[];
+  decisions: Decision[];
+  /** True once the user chose "edit" and the next line is the replacement. */
+  editing: boolean;
 }
 
 export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<void> {
@@ -45,10 +74,18 @@ export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<voi
     rl.close();
   });
 
-  // Turn zero, and it has to survive /clear: clearing the conversation forgets
-  // what the user said, not who the agent is.
-  const system = new SystemMessage(systemPrompt);
-  let messages: BaseMessage[] = [system];
+  // History lives in the checkpointer now, keyed by this. `/clear` mints a new
+  // one rather than deleting anything: the old thread stays addressable, which
+  // is what makes time travel possible at all.
+  let thread = crypto.randomUUID();
+  // The system message is turn zero of a thread, so it is sent once per thread
+  // rather than once per request.
+  let seeded = false;
+  // How many messages of this thread have already been rendered. The graph hands
+  // back the whole thread on every values event, so without a watermark every
+  // tool line would be reprinted each lap.
+  let rendered = 0;
+  let pending: Pending | null = null;
 
   process.stdout.write(`${BANNER}\n\n`);
   rl.setPrompt("> ");
@@ -56,6 +93,24 @@ export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<voi
 
   for await (const line of rl) {
     const input = line.trim();
+
+    if (pending) {
+      const resume = readDecision(input, pending);
+      if (resume === null) {
+        rl.prompt();
+        continue;
+      }
+      // The decision was typed at the "> " prompt, so the resumed output would
+      // otherwise start on that same line.
+      process.stdout.write("\n");
+      inFlight = new AbortController();
+      const turn = await runTurn(graph, resume, thread, rendered, inFlight.signal);
+      inFlight = null;
+      pending = finish(turn);
+      rendered = turn.rendered;
+      rl.prompt();
+      continue;
+    }
 
     if (input === "/exit") break;
 
@@ -65,27 +120,25 @@ export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<voi
     }
 
     if (input === "/clear") {
-      messages = [system];
-      process.stdout.write("(conversation cleared)\n\n");
+      thread = crypto.randomUUID();
+      seeded = false;
+      rendered = 0;
+      process.stdout.write("(new thread)\n\n");
       rl.prompt();
       continue;
     }
 
+    const messages: BaseMessage[] = seeded
+      ? [new HumanMessage(input)]
+      : [new SystemMessage(systemPrompt), new HumanMessage(input)];
+    seeded = true;
+
     inFlight = new AbortController();
-    const turn = await runTurn(
-      graph,
-      [...messages, new HumanMessage(input)],
-      inFlight.signal,
-    );
+    const turn = await runTurn(graph, { messages }, thread, rendered, inFlight.signal);
     inFlight = null;
 
-    // A turn that produced nothing leaves the transcript untouched, rather than
-    // recording a question the model never answered.
-    if (turn.messages !== null) messages = turn.messages;
-
-    if (turn.error !== null) process.stdout.write(`${describe(turn.error)}\n`);
-
-    process.stdout.write("\n");
+    pending = finish(turn);
+    rendered = turn.rendered;
     rl.prompt();
   }
 
@@ -93,29 +146,102 @@ export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<voi
   process.stdout.write("\nbye\n");
 }
 
+/** Prints whatever the turn produced, and returns the batch still waiting. */
+function finish(turn: TurnResult): Pending | null {
+  if (turn.error !== null) process.stdout.write(`${describe(turn.error)}\n`);
+  if (turn.requests === null) {
+    process.stdout.write("\n");
+    return null;
+  }
+
+  const pending: Pending = { requests: turn.requests, decisions: [], editing: false };
+  ask(pending);
+  return pending;
+}
+
+/** Prints the request now awaiting a decision. */
+function ask(pending: Pending): void {
+  const request = pending.requests[pending.decisions.length];
+  if (request === undefined) return;
+
+  const detail =
+    typeof request.args["command"] === "string"
+      ? request.args["command"]
+      : JSON.stringify(request.args);
+
+  const count =
+    pending.requests.length > 1
+      ? ` (${String(pending.decisions.length + 1)}/${String(pending.requests.length)})`
+      : "";
+
+  process.stdout.write(
+    `\n${DIM}⚠${RESET} ${request.name}${count} wants to run:\n    ${detail}\n` +
+      `${DIM}  [a] approve   [e] edit   [r] reject (any other text becomes the reason)${RESET}\n`,
+  );
+}
+
+/**
+ * Folds one line into the pending batch. Returns a Command once every request in
+ * the batch has a decision, and null while more input is needed.
+ */
+function readDecision(input: string, pending: Pending): Command | null {
+  const request = pending.requests[pending.decisions.length];
+  if (request === undefined) return null;
+
+  if (pending.editing) {
+    pending.editing = false;
+    pending.decisions.push({
+      type: "edit",
+      editedAction: { name: request.name, args: { ...request.args, command: input } },
+    });
+  } else if (input === "a" || input === "") {
+    pending.decisions.push({ type: "approve" });
+  } else if (input === "e") {
+    pending.editing = true;
+    process.stdout.write(`${DIM}  replacement command:${RESET}\n`);
+    return null;
+  } else if (input === "r") {
+    pending.decisions.push({ type: "reject" });
+  } else {
+    // Anything else is a rejection with a reason — the model reads it, so
+    // "not on production" is more useful than a bare refusal.
+    pending.decisions.push({ type: "reject", message: input });
+  }
+
+  if (pending.decisions.length < pending.requests.length) {
+    ask(pending);
+    return null;
+  }
+
+  return new Command({ resume: { decisions: pending.decisions } });
+}
+
 interface TurnResult {
-  /** The graph's final state, or null when the turn produced none. */
-  messages: BaseMessage[] | null;
+  /** Tool calls the gate stopped, or null when the turn ran to completion. */
+  requests: ActionRequest[] | null;
+  /** New watermark for how much of the thread has been printed. */
+  rendered: number;
   error: unknown;
 }
 
 /**
- * Runs one user turn through the graph and renders it as it arrives.
+ * Runs one turn through the graph and renders it as it arrives.
  *
  * Two stream modes at once, because they answer different questions.
  * `"messages"` carries token-level chunks — that is what makes the reply appear
  * as it is written. `"values"` carries the whole state after each node, which is
- * both the transcript to keep and the only reliable place to notice that a tool
- * ran. Rendering tool activity from state rather than from chunks keeps the two
- * concerns apart: chunks are for prose, state is for structure.
+ * the only reliable place to notice that a tool ran, and the only place an
+ * interrupt shows up. Rendering tool activity from state rather than from chunks
+ * keeps the two concerns apart: chunks are for prose, state is for structure.
  */
 async function runTurn(
   graph: AgentGraph,
-  input: BaseMessage[],
+  input: { messages: BaseMessage[] } | Command,
+  thread: string,
+  rendered: number,
   signal: AbortSignal,
 ): Promise<TurnResult> {
-  let latest: BaseMessage[] | null = null;
-  let rendered = input.length;
+  let requests: ActionRequest[] | null = null;
   let dimmed = false;
   let error: unknown = null;
 
@@ -135,16 +261,28 @@ async function runTurn(
   try {
     // The array form of streamMode yields [mode, payload] tuples; the typings do
     // not narrow that, so this is the one place we assert the shape.
-    const stream = (await graph.stream(
-      { messages: input },
-      { streamMode: ["messages", "values"], recursionLimit: RECURSION_LIMIT, signal },
-    )) as AsyncIterable<[string, unknown]>;
+    const stream = (await graph.stream(input, {
+      streamMode: ["messages", "values"],
+      recursionLimit: RECURSION_LIMIT,
+      signal,
+      configurable: { thread_id: thread },
+    })) as AsyncIterable<[string, unknown]>;
 
     for await (const [mode, payload] of stream) {
       if (mode === "values") {
-        const state = payload as { messages: BaseMessage[] };
-        latest = state.messages;
-        rendered = renderStructure(state.messages, rendered, closeDim);
+        // An interrupt arrives as a values event carrying *only* `__interrupt__`
+        // — no messages key at all. Reading state.messages unguarded here is a
+        // crash, not a missing feature.
+        const state = payload as {
+          messages?: BaseMessage[];
+          __interrupt__?: { value?: { actionRequests?: ActionRequest[] } }[];
+        };
+
+        const stopped = state.__interrupt__?.[0]?.value?.actionRequests;
+        if (stopped !== undefined) requests = stopped;
+        if (state.messages !== undefined) {
+          rendered = renderStructure(state.messages, rendered, closeDim);
+        }
         continue;
       }
 
@@ -174,7 +312,7 @@ async function runTurn(
     process.stdout.write("\n");
   }
 
-  return { messages: latest, error };
+  return { requests, rendered, error };
 }
 
 /**

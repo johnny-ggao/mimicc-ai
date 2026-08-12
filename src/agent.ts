@@ -8,7 +8,14 @@ import {
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import type { BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
-import { createAgent } from "langchain";
+import { MemorySaver } from "@langchain/langgraph";
+import type { Command } from "@langchain/langgraph";
+import {
+  createAgent,
+  humanInTheLoopMiddleware,
+  type AnyAgentMiddleware,
+  type InterruptOnConfig,
+} from "langchain";
 
 import { TOOLS } from "./tools";
 
@@ -46,11 +53,12 @@ export interface AgentOptions {
  */
 export interface AgentGraph {
   stream(
-    input: { messages: BaseMessage[] },
+    input: { messages: BaseMessage[] } | Command,
     options: {
       streamMode: ["messages", "values"];
       recursionLimit: number;
       signal: AbortSignal;
+      configurable: { thread_id: string };
     },
   ): Promise<AsyncIterable<unknown>>;
 }
@@ -119,20 +127,80 @@ export function createAgentGraph(options: AgentOptions) {
 }
 
 /**
- * The same loop, built by langchain instead of by us.
+ * Which tools stop and ask before they run.
+ *
+ * A tool that is **absent** from this map is auto-approved — the middleware
+ * treats "no config" as "no interrupt", which is fail-open. So every registered
+ * tool is listed explicitly, including the ones that do not ask, and
+ * `tests/agent.test.ts` fails if a newly registered tool is missing from here.
+ * The point is that adding a tool forces a decision rather than inheriting one.
+ *
+ * Why the split: Write and Edit are contained by `resolveInside` — they cannot
+ * leave the working directory and cannot touch a credential file — so the blast
+ * radius is bounded by code rather than by judgement. Bash has no such bound. It
+ * can curl, it can rm, it can rewrite git history, and telling a safe command
+ * from a dangerous one is a parsing arms race (`foo && rm -rf`). Asking every
+ * time costs a keypress and needs no parser.
+ */
+export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
+  Read: false,
+  Glob: false,
+  Grep: false,
+  Write: false,
+  Edit: false,
+  Bash: {
+    allowedDecisions: ["approve", "edit", "reject"],
+    description: "Bash runs with your shell. Approve, edit the command, or reject.",
+  },
+};
+
+/**
+ * Builds the gate, and quarantines one cast.
+ *
+ * `humanInTheLoopMiddleware`'s parameter resolves to `never` under
+ * `exactOptionalPropertyTypes: true`: langchain declares the optional fields of
+ * its options schema without `| undefined`, and the signature collapses. No
+ * value can satisfy `never`, so this is not fixable by typing the argument
+ * better — it is a defect in a dependency's types, and the runtime value is
+ * correct (the gate is exercised end to end in `tests/agent.test.ts`).
+ *
+ * The alternative was dropping the compiler flag, which the whole codebase pays
+ * for — `createModel` below spreads `maxTokens` conditionally precisely because
+ * that flag is on. One quarantined cast is cheaper than that. Try deleting this
+ * wrapper on the next langchain bump; verified needed against langchain 1.5.5.
+ */
+function confirmationGate(): AnyAgentMiddleware {
+  const options = { interruptOn: CONFIRMATION_POLICY };
+  return humanInTheLoopMiddleware(
+    options as unknown as Parameters<typeof humanInTheLoopMiddleware>[0],
+  ) as AnyAgentMiddleware;
+}
+
+/**
+ * The same loop, built by langchain instead of by us — and the one the console
+ * actually runs.
  *
  * `createAgent` is `new ReactAgent(...)`, which builds a StateGraph over the
  * same two nodes and the same back edge — the loop is not what it adds. What it
  * adds is four middleware slots (beforeAgent / beforeModel / afterModel /
  * afterAgent) plus `wrapModelCall` and `wrapToolCall`, and the routing between
- * them. That is where a confirmation gate, a doom-loop counter, or history
- * summarisation would hang; none of those has a place in the graph above.
+ * them. The confirmation gate below hangs off `afterModel`; there is no place in
+ * `createAgentGraph` to put it.
  *
- * This is what the console runs. Verified equivalent to `createAgentGraph` under
- * the console's stream modes — same message sequence, same values/messages event
- * counts — which is what makes the comparison in `tests/agent.test.ts` meaningful
- * rather than a formality.
+ * The checkpointer is not optional and not a feature request. `interrupt()` —
+ * which is how the gate asks — throws `GraphValueError: No checkpointer set`
+ * without one, because pausing mid-run means the run has to be persisted to be
+ * resumed. It also means every call needs `configurable.thread_id`.
+ *
+ * MemorySaver is in-process: history survives `/clear` and time travel within a
+ * session, and dies with the process. Durable history is a different saver, not
+ * a different design.
  */
 export function createUniversalAgent(options: AgentOptions) {
-  return createAgent({ model: createModel(options), tools: TOOLS });
+  return createAgent({
+    model: createModel(options),
+    tools: TOOLS,
+    checkpointer: new MemorySaver(),
+    middleware: [confirmationGate()],
+  });
 }

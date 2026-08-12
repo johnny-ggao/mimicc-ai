@@ -7,11 +7,13 @@ import {
 } from "@langchain/core/messages";
 
 import {
+  CONFIRMATION_POLICY,
   createAgentGraph,
   createUniversalAgent,
   RECURSION_LIMIT,
   type AgentOptions,
 } from "@/agent";
+import { TOOLS } from "@/tools";
 
 // A stubbed model endpoint, so the loop can be exercised without a network or a
 // key. The point is the graph's wiring — the back edge, the routing, the tool
@@ -77,6 +79,14 @@ function text(message: BaseMessage | undefined): string {
   return typeof content === "string" ? content : JSON.stringify(content);
 }
 
+/**
+ * `createUniversalAgent` compiles with a checkpointer — `interrupt()` requires
+ * one — and a checkpointer makes `thread_id` mandatory on every call. Passing it
+ * to both builders keeps the shared assertions shared; the one without a
+ * checkpointer ignores it.
+ */
+const CONFIG = { configurable: { thread_id: "test-thread" } };
+
 const start: BaseMessage[] = [
   new SystemMessage("be terse"),
   new HumanMessage("what is package.json?"),
@@ -94,9 +104,10 @@ const IMPLEMENTATIONS: [string, (options: AgentOptions) => { invoke: InvokeFn }]
   ["createAgent", createUniversalAgent],
 ];
 
-type InvokeFn = (input: {
-  messages: BaseMessage[];
-}) => Promise<{ messages: BaseMessage[] }>;
+type InvokeFn = (
+  input: { messages: BaseMessage[] },
+  config: typeof CONFIG,
+) => Promise<{ messages: BaseMessage[] }>;
 
 describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   function graph() {
@@ -113,7 +124,7 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   // state, and the model is called again. On our side `.addEdge("tools",
   // "llmCall")` is the only thing making that second call happen.
   test("runs a full lap of the loop and comes back with an answer", async () => {
-    const out = await graph().invoke({ messages: start });
+    const out = await graph().invoke({ messages: start }, CONFIG);
 
     expect(out.messages.map((message) => message.getType())).toEqual([
       "system",
@@ -126,7 +137,7 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   });
 
   test("feeds the real tool output back into state", async () => {
-    const out = await graph().invoke({ messages: start });
+    const out = await graph().invoke({ messages: start }, CONFIG);
 
     const toolMessage = out.messages.find((message) => message.getType() === "tool");
     // Read numbers its lines, so this is the actual file, not a fixture.
@@ -134,13 +145,16 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   });
 
   test("advertises the tools to the model on every call", async () => {
-    await graph().invoke({ messages: start });
+    await graph().invoke({ messages: start }, CONFIG);
 
     for (const request of requests) {
       const tools = (request as unknown as { tools?: { function: { name: string } }[] })
         .tools;
       expect(tools?.map((tool) => tool.function.name)).toEqual([
         "Read",
+        "Write",
+        "Edit",
+        "Bash",
         "Glob",
         "Grep",
       ]);
@@ -150,7 +164,7 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   // Pairing is a provider-level constraint: an assistant turn carrying tool_calls
   // has to be followed by a result for each one, or the next request is rejected.
   test("answers every tool call before calling the model again", async () => {
-    await graph().invoke({ messages: start });
+    await graph().invoke({ messages: start }, CONFIG);
 
     const second = requests[1]?.messages ?? [];
     const calls = second.filter((message) => Array.isArray(message.tool_calls));
@@ -160,6 +174,28 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
     expect(results).toHaveLength(1);
     expect(results[0]?.tool_call_id).toBe("call_1");
   });
+});
+
+/**
+ * The gate is fail-open: `humanInTheLoopMiddleware` auto-approves any tool that
+ * has no entry in `interruptOn`. That makes silence the dangerous answer — a
+ * tool added later would run unconfirmed, and nothing would say so. This test is
+ * the thing that says so.
+ */
+test("every registered tool has an explicit confirmation decision", () => {
+  expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(
+    TOOLS.map((tool) => tool.name).sort(),
+  );
+});
+
+// Bash is the one that cannot be contained by path guards, so it is the one that
+// asks. Changing this line is a security decision, not a refactor.
+test("Bash is the only tool that stops to ask", () => {
+  const asks = Object.entries(CONFIRMATION_POLICY)
+    .filter(([, config]) => config !== false)
+    .map(([name]) => name);
+
+  expect(asks).toEqual(["Bash"]);
 });
 
 // One lap is two nodes, so the ceiling has to be read in node executions, not
