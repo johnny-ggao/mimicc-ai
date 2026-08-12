@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支的新 push 取消尚未跑完的旧任务
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bun 是唯一的运行时与包管理器，版本取自 .bun-version
+      - name: Resolve Bun version
+        id: bun
+        run: echo "version=$(cat .bun-version)" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ steps.bun.outputs.version }}
+
+      - run: bun install --frozen-lockfile
+
+      # typecheck 是这里最关键的一步：Bun 运行时不做类型检查，
+      # 不在 CI 拦，类型错误就没有任何关卡。
+      - run: bun run check
+
+      - run: bun run test:coverage
+
+      - run: bun run build

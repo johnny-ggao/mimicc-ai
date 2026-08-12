@@ -1,0 +1,4 @@
+# lint-staged 尚未安装、也没有任何配置（README 里那张匹配表描述的行为不存在）。
+# 保持 no-op，避免第一次 git commit 就被一个跑不起来的 hook 拦下。
+# 要启用：先 bun add -d lint-staged 并加配置，再取消下面这行的注释。
+# bunx lint-staged

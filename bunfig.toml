@@ -1,0 +1,6 @@
+[test]
+# 覆盖率门槛。低于该值 `bun test --coverage` 以非零码退出，CI 会失败。
+# 注意 Bun 只统计被测试实际加载过的文件——完全没人 import 的模块不会拉低这个数字，
+# 所以它是"已测代码的质量"指标，不是"测了多少"的指标。
+coverageThreshold = 0.8
+coverageSkipTestFiles = true

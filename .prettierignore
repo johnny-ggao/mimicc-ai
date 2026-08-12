@@ -1,0 +1,7 @@
+dist
+coverage
+node_modules
+pnpm-lock.yaml
+
+# 教学工作区：讲义是 HTML/CSS/JS 手写产物，不按项目源码的格式规则约束
+learn

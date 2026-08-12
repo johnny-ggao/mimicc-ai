@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Bun 独占依赖解析；bun.lock 要提交。一份游离的 pnpm-lock.yaml 会与它漂移
+pnpm-lock.yaml
+
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
+
+# 教学工作区：讲义与学习记录含个人化内容，只留本地
+learn/
