@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { createAgentGraph } from "./agent";
+import { createUniversalAgent } from "./agent";
 import { loadConfig } from "./config";
 import { createLogger } from "./logger";
 import { buildSystemPrompt, type PromptEnvironment } from "./prompt";
@@ -11,7 +11,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config.LOG_LEVEL);
 
-  const graph = createAgentGraph({
+  const graph = createUniversalAgent({
     baseURL: config.LLM_BASE_URL,
     apiKey: config.LLM_API_KEY,
     model: config.LLM_MODEL,

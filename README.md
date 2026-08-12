@@ -261,6 +261,33 @@ Write / Edit / Bash **没有实现**——它们需要先有确认机制，而 R
 `Grep` 因此把路径限定在工作目录内，并拒读 `.env*` / `id_*` / `*.pem` / `*.key` / `.git/`
 这类文件。想放开就改 `src/tools/readonly.ts` 里的 `SECRET`。
 
+### 控制台跑的是哪一条
+
+**`createUniversalAgent`**（`langchain` 的 `createAgent`）。`src/main.ts` 只构造它一个。
+
+`createAgent` 内部就是 `new ReactAgent(...)`，它建的也是 model 节点 + tools 节点 + 一条回边
+——**循环不是它带来的东西**。它带来的是四个 middleware 插槽（beforeAgent / beforeModel /
+afterModel / afterAgent）外加 `wrapModelCall` / `wrapToolCall`，以及它们之间的路由。确认门、
+打转计数器、历史摘要该挂的地方在那里，上面那张图里没有位置放。
+
+### 那上面那张图还留着干嘛
+
+`createAgentGraph` **不再被任何运行代码调用**，但它没被删，理由写在
+`src/agent.ts` 的注释里，一句话版本：**它是这个仓库要产出的东西本身**（把核心循环建在
+LangGraph 上并弄懂它），同时是对照组。
+
+`tests/agent.test.ts` 用 `describe.each` 把两条循环跑同一组断言：同样的消息序列、同样的工具
+清单、同样的 `tool_call` 配对。控制台的双路 stream 两边也一致（各 4 个 `values`、7 个
+`messages` 事件）。这组测试是唯一能让「middleware 那层到底值什么」被量出来而不是被争论的东西，
+也是防止这段参考实现悄悄烂掉的唯一探针。
+
+**不要往 `createAgentGraph` 上加 middleware 插槽。** 那等于把 `node_modules` 里已有的约 760
+行重写一遍，落点还是 `createUniversalAgent`。需要它没有的能力时，换构造函数，不是扩展它。
+
+注意 `AgentGraph` 是**显式声明**的接口，不是 `ReturnType<typeof createAgentGraph>`——两边编译出
+的图类型确实不同（langchain 那边带它自己的内建 state），从任一边派生都会让它成为另一边必须
+模仿的标准，编译器直接拒绝。
+
 ## DeepSeek 的行为
 
 传输、分片拼装、错误映射现在都在 `ChatOpenAI` 里，不再是本仓库的代码。但下面这些 DeepSeek

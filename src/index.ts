@@ -2,6 +2,7 @@
 // entry point lives in src/main.ts.
 export {
   createAgentGraph,
+  createUniversalAgent,
   AgentState,
   RECURSION_LIMIT,
   type AgentGraph,
