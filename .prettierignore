@@ -5,3 +5,9 @@ pnpm-lock.yaml
 
 # 教学工作区：讲义是 HTML/CSS/JS 手写产物，不按项目源码的格式规则约束
 learn
+
+# 规划工作区：wayfinder 地图与量测脚本，同 learn/ 一样不受项目源码格式规则约束
+.scratch
+
+# 量测用的可写工作副本（bench/measure-reread.ts 每趟重建），同上
+bench-work
