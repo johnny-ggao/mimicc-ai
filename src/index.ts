@@ -15,6 +15,14 @@ export {
 } from "./checkpoint";
 export { loadConfig, type Config } from "./config";
 export { createLogger, type Logger, type LogLevel } from "./logger";
+export {
+  contextWindow,
+  KEEP_FRACTION,
+  TRIGGER_FRACTION,
+  WINDOW_LIMIT,
+  type ContextWindowOptions,
+  type WindowEvent,
+} from "./window";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
 export {
   bashTool,

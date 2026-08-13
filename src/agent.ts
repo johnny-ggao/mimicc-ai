@@ -1,3 +1,4 @@
+import { ContextOverflowError } from "@langchain/core/errors";
 import { SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
@@ -12,6 +13,7 @@ import {
 import { projectInstructions } from "./instructions";
 import { TOOLS } from "./tools";
 import { usageMeter, type ModelUsage } from "./usage";
+import { contextWindow, type ContextWindowOptions, type WindowEvent } from "./window";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -68,6 +70,23 @@ export interface AgentOptions {
    */
   checkpointer?: BaseCheckpointSaver;
   /**
+   * Told whenever the context window is recomputed.
+   *
+   * Optional in the same way `onUsage` is: the loop runs without a listener, but
+   * a summary silently changing what the model can see is exactly the kind of
+   * thing that should not be invisible, so main.ts always passes one.
+   */
+  onWindow?: (event: WindowEvent) => void;
+  /**
+   * Overrides for where the context window is cut.
+   *
+   * The defaults are the measured ones and nothing in the program changes them.
+   * They are reachable only so a test can trigger a summary without first
+   * producing eight hundred thousand tokens — which is the difference between
+   * this behaviour being tested and being asserted about.
+   */
+  window?: Omit<ContextWindowOptions, "model" | "onEvent">;
+  /**
    * Where per-request token and cache numbers go. Optional because the loop runs
    * fine without a scale — but every context-engineering change is judged on
    * these numbers, so main.ts always passes one.
@@ -105,6 +124,20 @@ function createModel(options: AgentOptions): ChatOpenAI {
     apiKey: options.apiKey,
     configuration: { baseURL: options.baseURL },
     ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+    // Retrying a request that was refused for being too long is retrying a
+    // request that cannot succeed: the bytes do not change between attempts.
+    // The default is six retries, and it applies here — measured: one oversized
+    // call hit the server **seven times** before the error came back. Near the
+    // window limit that is seven near-full-window requests, all billed, for one
+    // failure. Stopping on this one error costs nothing, because every other
+    // failure still retries normally.
+    //
+    // The contract is "throw to stop retrying, return to keep going", so this
+    // singles out the one error and leaves every other failure — timeouts, rate
+    // limits, provider hiccups — retrying exactly as before.
+    onFailedAttempt: (error: unknown) => {
+      if (ContextOverflowError.isInstance(error)) throw error;
+    },
   });
 }
 
@@ -181,8 +214,13 @@ function confirmationGate(): AnyAgentMiddleware {
  * design" was always claiming and now demonstrates.
  */
 export function createUniversalAgent(options: AgentOptions) {
+  // Built once and shared: the same model answers turns and writes summaries.
+  // A summary decides what every later turn can see, which is a poor place to
+  // economise, and this is a single-model program besides.
+  const model = createModel(options);
+
   return createAgent({
-    model: createModel(options),
+    model,
     tools: TOOLS,
     // Wrapped, not handed over as a string, and the difference is on the wire.
     // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
@@ -205,6 +243,15 @@ export function createUniversalAgent(options: AgentOptions) {
     // in the array is the outer wrapper.
     middleware: [
       usageMeter(options.onUsage ?? (() => {})),
+      // Inside the meter, so a summarising turn is measured with the extra
+      // model call it costs — and outside the gate, which has nothing to say
+      // about how much of the history the model is shown. Both matter: this
+      // middleware nests, and the first entry is the outermost wrapper.
+      contextWindow({
+        model,
+        ...options.window,
+        ...(options.onWindow !== undefined ? { onEvent: options.onWindow } : {}),
+      }),
       // Only a beforeAgent hook, so its position among the others is not
       // load-bearing the way the meter's is.
       ...(options.projectInstructions !== undefined

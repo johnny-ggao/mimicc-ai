@@ -43,6 +43,12 @@ async function main(): Promise<void> {
     onUsage: (usage) => {
       log.info("model_usage", { ...usage });
     },
+    // A summary changes what the model can see for the rest of the thread. The
+    // full history is still on disk, but the change itself should never be
+    // something you have to infer from the token counts.
+    onWindow: (event) => {
+      log.info("context_window", { ...event });
+    },
   });
 
   log.info("repl_start", {
