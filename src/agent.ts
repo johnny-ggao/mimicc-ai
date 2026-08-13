@@ -17,6 +17,7 @@ import {
   type InterruptOnConfig,
 } from "langchain";
 
+import { projectInstructions } from "./instructions";
 import { TOOLS } from "./tools";
 import { usageMeter, type ModelUsage } from "./usage";
 
@@ -56,6 +57,20 @@ export interface AgentOptions {
    *
    */
   systemPrompt?: string;
+  /**
+   * The repository's own instructions (AGENTS.md / CLAUDE.md), already read and
+   * wrapped, or undefined when the repository has none.
+   *
+   * A string rather than a path, because the reading is somebody else's job:
+   * `main.ts` calls `readProjectInstructions`, exactly as it calls
+   * `describeEnvironment` for the system prompt. That keeps the filesystem out
+   * of the agent builder, and it is also the seam that makes the current
+   * read-once-at-startup behaviour temporary — making instructions live means
+   * changing what main.ts passes, not this.
+   *
+   * `createAgentGraph` ignores this, like `onUsage` and `systemPrompt`.
+   */
+  projectInstructions?: string;
   /**
    * Where per-request token and cache numbers go. Optional because the loop runs
    * fine without a scale — but every context-engineering change is judged on
@@ -246,6 +261,14 @@ export function createUniversalAgent(options: AgentOptions) {
     // The meter is outermost so it times the gate rather than the gate timing
     // it. Order matters for `wrapModelCall`, which nests: the first middleware
     // in the array is the outer wrapper.
-    middleware: [usageMeter(options.onUsage ?? (() => {})), confirmationGate()],
+    middleware: [
+      usageMeter(options.onUsage ?? (() => {})),
+      // Only a beforeAgent hook, so its position among the others is not
+      // load-bearing the way the meter's is.
+      ...(options.projectInstructions !== undefined
+        ? [projectInstructions(options.projectInstructions)]
+        : []),
+      confirmationGate(),
+    ],
   });
 }
