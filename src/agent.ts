@@ -1,11 +1,3 @@
-import {
-  MessagesValue,
-  StateGraph,
-  StateSchema,
-  END,
-  START,
-} from "@langchain/langgraph";
-import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
 import { SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
@@ -31,9 +23,6 @@ import { usageMeter, type ModelUsage } from "./usage";
  * a separate job nobody has done yet.
  */
 export const RECURSION_LIMIT = 24;
-
-/** The loop's entire memory. One key, and the reducer decides how it grows. */
-export const AgentState = new StateSchema({ messages: MessagesValue });
 
 export interface AgentOptions {
   baseURL: string;
@@ -67,31 +56,27 @@ export interface AgentOptions {
    * of the agent builder, and it is also the seam that makes the current
    * read-once-at-startup behaviour temporary — making instructions live means
    * changing what main.ts passes, not this.
-   *
-   * `createAgentGraph` ignores this, like `onUsage` and `systemPrompt`.
    */
   projectInstructions?: string;
   /**
    * Where per-request token and cache numbers go. Optional because the loop runs
    * fine without a scale — but every context-engineering change is judged on
    * these numbers, so main.ts always passes one.
-   *
-   * `createAgentGraph` ignores this. Measuring costs a middleware, and that loop
-   * deliberately has none; see its doc comment.
    */
   onUsage?: (usage: ModelUsage) => void;
 }
 
 /**
- * All the console needs from either loop: hand it messages, get a stream back.
+ * All the console needs from the loop: hand it messages, get a stream back.
  *
- * Stated outright rather than derived from one of the builders below. They
- * compile to genuinely different graph types — langchain's carries its own
- * built-in state, ours carries AgentState — so `ReturnType<typeof …>` of either
- * one makes that one the standard the other has to imitate, and the compiler
- * rejects it. Naming the surface the caller actually uses is what lets both be
- * first-class. The payload stays `unknown`: the tuple shape depends on
- * streamMode, and repl.ts is the one place that asserts it.
+ * Stated outright rather than derived as `ReturnType<typeof
+ * createUniversalAgent>`. That alias would drag langchain's whole compiled graph
+ * type into the console's signature, so every change to what middleware is
+ * installed would ripple into repl.ts — which uses exactly one method. Naming the
+ * surface the caller actually uses is what keeps that seam a seam.
+ *
+ * The payload stays `unknown`: the tuple shape depends on streamMode, and repl.ts
+ * is the one place that asserts it.
  */
 export interface AgentGraph {
   stream(
@@ -112,60 +97,6 @@ function createModel(options: AgentOptions): ChatOpenAI {
     configuration: { baseURL: options.baseURL },
     ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
   });
-}
-
-/**
- * The core loop, as a graph — hand-drawn, and **not what the console runs**.
- *
- * `src/main.ts` builds `createUniversalAgent` instead. Nothing in the running
- * program calls this function; the tests do, and that is deliberate.
- *
- * ## What it is
- *
- * There is no `while` in this file. `.addEdge("tools", "llmCall")` is the loop —
- * a back edge — and `toolsCondition` is the exit: it reads the last message and
- * returns "tools" when it carries tool calls, END otherwise. Termination is a
- * pure function on the state, which is why it can be reasoned about separately
- * from the request that produced it.
- *
- * ## Why it is still here
- *
- * 1. It is the artifact this repository exists to produce. The goal was to build
- *    the loop on LangGraph and understand it, not to configure an agent. Deleting
- *    it deletes the thing that was learned.
- * 2. It is the control. `tests/agent.test.ts` runs both loops through the same
- *    assertions with `describe.each`, so "what does the middleware layer actually
- *    buy" has an answer that is measured rather than argued.
- * 3. It is small enough to read in one sitting. `createUniversalAgent` compiles a
- *    graph whose shape depends on which middleware you passed; this one is four
- *    lines of wiring that are always the same four lines.
- *
- * ## What it is not
- *
- * It is not a half-built version of `createUniversalAgent`. Do not grow middleware
- * slots on it — beforeAgent / beforeModel / afterModel / afterAgent, jumpTo
- * routing, wrapModelCall — all of that is already installed in `node_modules`,
- * and reimplementing it here would be rewriting ~760 lines to arrive where
- * `createUniversalAgent` already is. When a turn needs a capability this loop
- * does not have, that is the signal to use the other builder, not to extend this
- * one.
- */
-export function createAgentGraph(options: AgentOptions) {
-  const model = createModel(options).bindTools(TOOLS);
-
-  return (
-    new StateGraph(AgentState)
-      .addNode("llmCall", async (state) => ({
-        messages: [await model.invoke(state.messages)],
-      }))
-      // The name is load-bearing: toolsCondition returns the literal string
-      // "tools", so renaming this node silently breaks the routing.
-      .addNode("tools", new ToolNode(TOOLS))
-      .addEdge(START, "llmCall")
-      .addConditionalEdges("llmCall", toolsCondition, ["tools", END])
-      .addEdge("tools", "llmCall")
-      .compile()
-  );
 }
 
 /**
@@ -219,15 +150,15 @@ function confirmationGate(): AnyAgentMiddleware {
 }
 
 /**
- * The same loop, built by langchain instead of by us — and the one the console
- * actually runs.
+ * The loop.
  *
- * `createAgent` is `new ReactAgent(...)`, which builds a StateGraph over the
- * same two nodes and the same back edge — the loop is not what it adds. What it
- * adds is four middleware slots (beforeAgent / beforeModel / afterModel /
- * afterAgent) plus `wrapModelCall` and `wrapToolCall`, and the routing between
- * them. The confirmation gate below hangs off `afterModel`; there is no place in
- * `createAgentGraph` to put it.
+ * `createAgent` is `new ReactAgent(...)`, which builds a StateGraph over two
+ * nodes joined by a back edge — the loop itself is not what it adds. What it adds
+ * is four middleware slots (beforeAgent / beforeModel / afterModel / afterAgent)
+ * plus `wrapModelCall` and `wrapToolCall`, and the routing between them. All
+ * three middlewares below hang off one of those slots, which is why this
+ * repository once kept the same loop drawn by hand as a control and no longer
+ * does — see docs/the-hand-drawn-loop.md.
  *
  * The checkpointer is not optional and not a feature request. `interrupt()` —
  * which is how the gate asks — throws `GraphValueError: No checkpointer set`

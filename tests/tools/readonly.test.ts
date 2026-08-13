@@ -86,7 +86,7 @@ test("reports a malformed regular expression", async () => {
 });
 
 test("defaults the grep glob to the whole tree", async () => {
-  const hits = await grepTool.invoke({ pattern: "createAgentGraph" });
+  const hits = await grepTool.invoke({ pattern: "createUniversalAgent" });
 
   expect(hits).toContain("src/agent.ts:");
 });

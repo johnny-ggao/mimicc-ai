@@ -1,9 +1,7 @@
 // Public surface of the package. Keep this file side-effect free — the runnable
 // entry point lives in src/main.ts.
 export {
-  createAgentGraph,
   createUniversalAgent,
-  AgentState,
   RECURSION_LIMIT,
   type AgentGraph,
   type AgentOptions,

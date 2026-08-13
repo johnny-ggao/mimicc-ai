@@ -6,13 +6,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import {
-  CONFIRMATION_POLICY,
-  createAgentGraph,
-  createUniversalAgent,
-  RECURSION_LIMIT,
-  type AgentOptions,
-} from "@/agent";
+import { CONFIRMATION_POLICY, createUniversalAgent, RECURSION_LIMIT } from "@/agent";
 import { TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
 
@@ -94,26 +88,18 @@ const start: BaseMessage[] = [
 ];
 
 /**
- * Both loops, held to the same four assertions.
+ * The loop itself — the four properties that have to hold whatever middleware is
+ * installed.
  *
- * This is the control the comparison needs: whatever langchain's middleware
- * layer turns out to buy, it is not a different loop, and a regression on either
- * side shows up as a diff between two passing columns rather than as an argument.
+ * These used to run twice, against `createUniversalAgent` and against a
+ * hand-drawn `StateGraph` kept as a control. The control was deleted once it
+ * could no longer disagree — see docs/adr/0002. The assertions are the half of it
+ * worth keeping: they describe the loop, not the builder.
  */
-const IMPLEMENTATIONS: [string, (options: AgentOptions) => { invoke: InvokeFn }][] = [
-  ["StateGraph", createAgentGraph],
-  ["createAgent", createUniversalAgent],
-];
-
-type InvokeFn = (
-  input: { messages: BaseMessage[] },
-  config: typeof CONFIG,
-) => Promise<{ messages: BaseMessage[] }>;
-
-describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
+describe("createAgent", () => {
   function graph() {
     requests = [];
-    return build({
+    return createUniversalAgent({
       baseURL: `http://localhost:${String(server.port)}`,
       apiKey: "test-key",
       model: "stub",
@@ -177,18 +163,7 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   });
 });
 
-/* ---------- 以下不进 describe.each ---------- */
-
-/**
- * Everything above runs on both loops; everything below runs on
- * `createUniversalAgent` alone.
- *
- * That split is the convention, not an accident: `createAgentGraph` has no
- * middleware layer, so it ignores `onUsage` and `systemPrompt` alike. Asserting
- * a capability through `describe.each` would either fail on the hand-drawn loop
- * or have to be weakened until it proved nothing. Shared assertions are for the
- * loop; capability assertions name their builder.
- */
+/* ---------- 以下是能力，不是循环 ---------- */
 
 /**
  * The gate is fail-open: `humanInTheLoopMiddleware` auto-approves any tool that
