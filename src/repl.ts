@@ -1,10 +1,6 @@
 import { createInterface } from "node:readline/promises";
 
-import {
-  HumanMessage,
-  SystemMessage,
-  type BaseMessage,
-} from "@langchain/core/messages";
+import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
 import { RECURSION_LIMIT, type AgentGraph } from "./agent";
@@ -23,7 +19,6 @@ const BANNER = [
 
 export interface ReplOptions {
   graph: AgentGraph;
-  systemPrompt: string;
 }
 
 /** One tool call waiting on a human. Shape comes from `__interrupt__`. */
@@ -53,7 +48,7 @@ interface Pending {
   editing: boolean;
 }
 
-export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<void> {
+export async function runRepl({ graph }: ReplOptions): Promise<void> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -78,9 +73,6 @@ export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<voi
   // one rather than deleting anything: the old thread stays addressable, which
   // is what makes time travel possible at all.
   let thread = crypto.randomUUID();
-  // The system message is turn zero of a thread, so it is sent once per thread
-  // rather than once per request.
-  let seeded = false;
   // How many messages of this thread have already been rendered. The graph hands
   // back the whole thread on every values event, so without a watermark every
   // tool line would be reprinted each lap.
@@ -121,17 +113,16 @@ export async function runRepl({ graph, systemPrompt }: ReplOptions): Promise<voi
 
     if (input === "/clear") {
       thread = crypto.randomUUID();
-      seeded = false;
       rendered = 0;
       process.stdout.write("(new thread)\n\n");
       rl.prompt();
       continue;
     }
 
-    const messages: BaseMessage[] = seeded
-      ? [new HumanMessage(input)]
-      : [new SystemMessage(systemPrompt), new HumanMessage(input)];
-    seeded = true;
+    // No system message here. The prompt is handed to the agent at construction
+    // and prepended to every model call from outside the thread — see
+    // AgentOptions.systemPrompt for why it must not live in state.
+    const messages: BaseMessage[] = [new HumanMessage(input)];
 
     inFlight = new AbortController();
     const turn = await runTurn(graph, { messages }, thread, rendered, inFlight.signal);

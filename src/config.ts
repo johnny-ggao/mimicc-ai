@@ -10,7 +10,11 @@ const envSchema = z.object({
 
   LLM_BASE_URL: z.url().default("https://api.deepseek.com"),
   LLM_API_KEY: z.string().min(1),
-  LLM_MODEL: z.string().min(1).default("deepseek-chat"),
+  // DeepSeek's API reference lists exactly two models, `deepseek-v4-flash` and
+  // `deepseek-v4-pro`. `deepseek-chat` still answers but is no longer among them
+  // — an alias pointing somewhere undocumented, which is a poor thing to hold a
+  // token baseline against.
+  LLM_MODEL: z.string().min(1).default("deepseek-v4-flash"),
 });
 
 export type Config = z.infer<typeof envSchema>;

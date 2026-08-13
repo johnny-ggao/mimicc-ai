@@ -14,6 +14,7 @@ import {
   type AgentOptions,
 } from "@/agent";
 import { TOOLS } from "@/tools";
+import type { ModelUsage } from "@/usage";
 
 // A stubbed model endpoint, so the loop can be exercised without a network or a
 // key. The point is the graph's wiring — the back edge, the routing, the tool
@@ -176,6 +177,19 @@ describe.each(IMPLEMENTATIONS)("%s", (_name, build) => {
   });
 });
 
+/* ---------- 以下不进 describe.each ---------- */
+
+/**
+ * Everything above runs on both loops; everything below runs on
+ * `createUniversalAgent` alone.
+ *
+ * That split is the convention, not an accident: `createAgentGraph` has no
+ * middleware layer, so it ignores `onUsage` and `systemPrompt` alike. Asserting
+ * a capability through `describe.each` would either fail on the hand-drawn loop
+ * or have to be weakened until it proved nothing. Shared assertions are for the
+ * loop; capability assertions name their builder.
+ */
+
 /**
  * The gate is fail-open: `humanInTheLoopMiddleware` auto-approves any tool that
  * has no entry in `interruptOn`. That makes silence the dangerous answer — a
@@ -203,4 +217,127 @@ test("Bash is the only tool that stops to ask", () => {
 test("caps a turn at an even number of node executions", () => {
   expect(RECURSION_LIMIT % 2).toBe(0);
   expect(RECURSION_LIMIT).toBeGreaterThan(2);
+});
+
+/**
+ * The scale weighs one request, not one turn. A per-turn total cannot show what a
+ * context middleware did to lap two — which is the whole question the
+ * context-engineering work asks. One lap is two requests, so two records, and the
+ * second one is handed more messages than the first.
+ */
+test("meters every model request separately", async () => {
+  requests = [];
+  const seen: ModelUsage[] = [];
+
+  const graph = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}`,
+    apiKey: "test-key",
+    model: "stub",
+    maxTokens: 64,
+    onUsage: (usage) => seen.push(usage),
+  });
+
+  await graph.invoke({ messages: start }, CONFIG);
+
+  expect(seen).toHaveLength(2);
+  expect(seen.map((usage) => usage.inputTokens)).toEqual([1, 1]);
+  expect(seen[1]?.messages ?? 0).toBeGreaterThan(seen[0]?.messages ?? 0);
+  // The stub reports no prompt_tokens_details, so nothing was served from cache.
+  // The meter has to say 0 rather than leaving the field out — a missing number
+  // and a zero read the same way in a log line, and only one of them is true.
+  expect(seen[0]?.cacheRead).toBe(0);
+});
+
+/**
+ * The invariant this whole move exists to create: the system prompt is sent, but
+ * it is not in the thread.
+ *
+ * `summarizationMiddleware` rewrites `state.messages` — it returns
+ * `[RemoveMessage(REMOVE_ALL_MESSAGES), summary, ...preserved]` and its
+ * `preserved` never includes message zero. Anything living in state is therefore
+ * summarisable, and a summarised system prompt is a paraphrase of the rules
+ * rather than the rules. Keeping it out of state is what makes it unreachable.
+ */
+test("sends the system prompt without putting it in the thread", async () => {
+  requests = [];
+
+  const graph = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}`,
+    apiKey: "test-key",
+    model: "stub",
+    maxTokens: 64,
+    systemPrompt: "be terse",
+  });
+
+  const out = await graph.invoke(
+    { messages: [new HumanMessage("what is package.json?")] },
+    CONFIG,
+  );
+
+  // Every request to the provider carries it, once, in front.
+  for (const request of requests) {
+    const system = request.messages.filter((message) => message.role === "system");
+    expect(system).toHaveLength(1);
+    expect(request.messages[0]?.role).toBe("system");
+  }
+
+  // And the thread never sees it.
+  expect(out.messages.map((message) => message.getType())).toEqual([
+    "human",
+    "ai",
+    "tool",
+    "ai",
+  ]);
+});
+
+/**
+ * The failure mode the console used to be one line away from: seeding a
+ * SystemMessage *and* passing systemPrompt sends both. There is no dedup and no
+ * error — the prompt is silently doubled, and so is its share of the cache
+ * prefix. This test exists so that re-adding the seed to repl.ts fails here
+ * rather than in a bill.
+ */
+test("does not dedup a seeded system message against the parameter", async () => {
+  requests = [];
+
+  const graph = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}`,
+    apiKey: "test-key",
+    model: "stub",
+    maxTokens: 64,
+    systemPrompt: "be terse",
+  });
+
+  await graph.invoke({ messages: start }, CONFIG);
+
+  const system = (requests[0]?.messages ?? []).filter(
+    (message) => message.role === "system",
+  );
+  expect(system).toHaveLength(2);
+});
+
+/**
+ * Pins the serialisation, not just the presence.
+ *
+ * `normalizeSystemPrompt` passes a SystemMessage through untouched but turns a
+ * plain string into content blocks, and the two go on the wire differently:
+ * `content: "..."` versus `content: [{ type: "text", text: "..." }]`. The prompt
+ * in src/prompt.ts is built to be a byte-stable cache prefix, so which one we
+ * send is not cosmetic — and nothing else in the codebase would notice if it
+ * flipped.
+ */
+test("sends the system prompt as plain string content, not blocks", async () => {
+  requests = [];
+
+  const graph = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}`,
+    apiKey: "test-key",
+    model: "stub",
+    maxTokens: 64,
+    systemPrompt: "be terse",
+  });
+
+  await graph.invoke({ messages: [new HumanMessage("what is package.json?")] }, CONFIG);
+
+  expect(requests[0]?.messages[0]).toEqual({ role: "system", content: "be terse" });
 });

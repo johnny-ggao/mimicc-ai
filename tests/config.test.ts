@@ -13,7 +13,7 @@ describe("loadConfig", () => {
     expect(config.NODE_ENV).toBe("development");
     expect(config.LOG_LEVEL).toBe("info");
     expect(config.LLM_BASE_URL).toBe("https://api.deepseek.com");
-    expect(config.LLM_MODEL).toBe("deepseek-chat");
+    expect(config.LLM_MODEL).toBe("deepseek-v4-flash");
   });
 
   it("reads values from the provided environment", () => {

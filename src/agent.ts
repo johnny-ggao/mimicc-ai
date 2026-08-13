@@ -6,7 +6,7 @@ import {
   START,
 } from "@langchain/langgraph";
 import { ToolNode, toolsCondition } from "@langchain/langgraph/prebuilt";
-import type { BaseMessage } from "@langchain/core/messages";
+import { SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
 import type { Command } from "@langchain/langgraph";
@@ -18,6 +18,7 @@ import {
 } from "langchain";
 
 import { TOOLS } from "./tools";
+import { usageMeter, type ModelUsage } from "./usage";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -38,6 +39,32 @@ export interface AgentOptions {
   apiKey: string;
   model: string;
   maxTokens?: number;
+  /**
+   * The system prompt, handed to `createAgent` rather than seeded into state.
+   *
+   * That distinction is the whole point and it is not cosmetic. A system message
+   * living in state is message zero of the thread, and
+   * `summarizationMiddleware` treats message zero as summarisable input: it
+   * splits it off, unshifts it into the pile being condensed, and returns
+   * `[RemoveMessage(REMOVE_ALL_MESSAGES), summary, ...preserved]` — where
+   * `preserved` never contains it. The prompt would come back as a paraphrase of
+   * itself inside a HumanMessage.
+   *
+   * Passed here it never enters state at all. `AgentNode` keeps it and prepends
+   * it to the message list on every single model call, so nothing that rewrites
+   * history can reach it.
+   *
+   */
+  systemPrompt?: string;
+  /**
+   * Where per-request token and cache numbers go. Optional because the loop runs
+   * fine without a scale — but every context-engineering change is judged on
+   * these numbers, so main.ts always passes one.
+   *
+   * `createAgentGraph` ignores this. Measuring costs a middleware, and that loop
+   * deliberately has none; see its doc comment.
+   */
+  onUsage?: (usage: ModelUsage) => void;
 }
 
 /**
@@ -200,7 +227,25 @@ export function createUniversalAgent(options: AgentOptions) {
   return createAgent({
     model: createModel(options),
     tools: TOOLS,
+    // Wrapped, not handed over as a string, and the difference is on the wire.
+    // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
+    // string into `new SystemMessage({ content: [{ type: "text", text }] })` —
+    // which serialises as `content: [{...}]` instead of `content: "..."`
+    // (measured; @langchain/openai/dist/converters/completions.js:464).
+    //
+    // Both reach the model, but only one of them is the shape this prompt was
+    // designed against. src/prompt.ts splits static from per-session text so that
+    // DeepSeek's longest-common-prefix cache keeps hitting; changing the
+    // serialisation changes the prefix and resets that cache once for no gain.
+    // The block form buys multimodal and per-block cache markers, neither of
+    // which this agent uses.
+    ...(options.systemPrompt !== undefined
+      ? { systemPrompt: new SystemMessage(options.systemPrompt) }
+      : {}),
     checkpointer: new MemorySaver(),
-    middleware: [confirmationGate()],
+    // The meter is outermost so it times the gate rather than the gate timing
+    // it. Order matters for `wrapModelCall`, which nests: the first middleware
+    // in the array is the outer wrapper.
+    middleware: [usageMeter(options.onUsage ?? (() => {})), confirmationGate()],
   });
 }

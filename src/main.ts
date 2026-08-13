@@ -11,14 +11,20 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config.LOG_LEVEL);
 
+  const systemPrompt = buildSystemPrompt(describeEnvironment());
   const graph = createUniversalAgent({
     baseURL: config.LLM_BASE_URL,
     apiKey: config.LLM_API_KEY,
     model: config.LLM_MODEL,
     maxTokens: 4096,
+    systemPrompt,
+    // One line per request to the provider. This is the scale every
+    // context-engineering change is weighed on, so it is wired up before the
+    // first such change rather than after.
+    onUsage: (usage) => {
+      log.info("model_usage", { ...usage });
+    },
   });
-
-  const systemPrompt = buildSystemPrompt(describeEnvironment());
 
   log.info("repl_start", {
     model: config.LLM_MODEL,
@@ -27,7 +33,7 @@ async function main(): Promise<void> {
     systemPromptChars: systemPrompt.length,
   });
 
-  await runRepl({ graph, systemPrompt });
+  await runRepl({ graph });
 }
 
 function describeEnvironment(): PromptEnvironment {
