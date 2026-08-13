@@ -17,8 +17,16 @@ export const MAX_FILE_BYTES = 64_000;
  *
  * Two guards, and they live here rather than in either tool module because a
  * security check with two copies is a security check that will drift.
+ *
+ * `.mimicc` is the odd one out: it holds no credentials, it holds this agent's
+ * own conversation history. In development that directory sits inside the
+ * working directory, so without this entry the agent's `Read` could open its own
+ * past turns — a channel back into itself that nothing in the design calls for
+ * and that carries the full text of every earlier conversation. Blocked for the
+ * same reason as a private key, arrived at from the opposite direction.
  */
-const SECRET = /(^|\/)\.env(\.|$)|(^|\/)\.git\/|(^|\/)id_[a-z]+$|\.pem$|\.key$/;
+const SECRET =
+  /(^|\/)\.env(\.|$)|(^|\/)\.git\/|(^|\/)\.mimicc(\/|$)|(^|\/)id_[a-z]+$|\.pem$|\.key$/;
 
 /**
  * Resolves `path` against the working directory and refuses anything that leaves

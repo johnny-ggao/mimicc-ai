@@ -25,3 +25,7 @@ bench-work/
 
 # 规划工作区：wayfinder 地图与决策票，同 learn/ 一样只留本地
 .scratch/
+
+# 会话历史：开发时落在仓库内（NODE_ENV=production 时改落 ~/.mimicc/<repo>/）。
+# 工具层也挡着它——见 src/tools/workspace.ts 的 SECRET，理由是 agent 不该读自己的过往对话。
+.mimicc/

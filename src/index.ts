@@ -6,6 +6,13 @@ export {
   type AgentGraph,
   type AgentOptions,
 } from "./agent";
+export {
+  CorruptSessionFile,
+  JsonlSaver,
+  resolveStateDir,
+  STATE_DIR_NAME,
+  type StateLocation,
+} from "./checkpoint";
 export { loadConfig, type Config } from "./config";
 export { createLogger, type Logger, type LogLevel } from "./logger";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";

@@ -1,7 +1,7 @@
 import { SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
-import type { Command } from "@langchain/langgraph";
+import type { BaseCheckpointSaver, Command } from "@langchain/langgraph";
 import {
   createAgent,
   humanInTheLoopMiddleware,
@@ -58,6 +58,15 @@ export interface AgentOptions {
    * changing what main.ts passes, not this.
    */
   projectInstructions?: string;
+  /**
+   * Where threads are persisted.
+   *
+   * Optional, and the default is deliberately the in-process saver: most tests
+   * only care about the loop, and making them all name a directory would be
+   * noise. `main.ts` always passes a real one — a history that dies with the
+   * process is not a history.
+   */
+  checkpointer?: BaseCheckpointSaver;
   /**
    * Where per-request token and cache numbers go. Optional because the loop runs
    * fine without a scale — but every context-engineering change is judged on
@@ -165,9 +174,11 @@ function confirmationGate(): AnyAgentMiddleware {
  * without one, because pausing mid-run means the run has to be persisted to be
  * resumed. It also means every call needs `configurable.thread_id`.
  *
- * MemorySaver is in-process: history survives `/clear` and time travel within a
- * session, and dies with the process. Durable history is a different saver, not
- * a different design.
+ * Which saver is the caller's business — and that is the whole point of the
+ * seam. The in-process default dies with the process; `main.ts` hands in the
+ * JSONL one, so a thread outlives the terminal. Nothing else about the loop
+ * changes, which is what "durable history is a different saver, not a different
+ * design" was always claiming and now demonstrates.
  */
 export function createUniversalAgent(options: AgentOptions) {
   return createAgent({
@@ -188,7 +199,7 @@ export function createUniversalAgent(options: AgentOptions) {
     ...(options.systemPrompt !== undefined
       ? { systemPrompt: new SystemMessage(options.systemPrompt) }
       : {}),
-    checkpointer: new MemorySaver(),
+    checkpointer: options.checkpointer ?? new MemorySaver(),
     // The meter is outermost so it times the gate rather than the gate timing
     // it. Order matters for `wrapModelCall`, which nests: the first middleware
     // in the array is the outer wrapper.

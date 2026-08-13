@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { createUniversalAgent } from "./agent";
+import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
 import { readProjectInstructions } from "./instructions";
 import { createLogger } from "./logger";
@@ -19,6 +20,15 @@ async function main(): Promise<void> {
   // take effect until restart, and making it live is a change to this line.
   const instructions = readProjectInstructions(process.cwd(), log);
 
+  // Resolved here for the same reason the prompt environment and the project
+  // instructions are: the agent builder does not touch the filesystem, and
+  // "where does history live" is an environment question, not a graph question.
+  const stateDir = resolveStateDir({
+    nodeEnv: config.NODE_ENV,
+    override: process.env.MIMICC_STATE_DIR,
+    cwd: process.cwd(),
+  });
+
   const graph = createUniversalAgent({
     baseURL: config.LLM_BASE_URL,
     apiKey: config.LLM_API_KEY,
@@ -26,6 +36,7 @@ async function main(): Promise<void> {
     maxTokens: 4096,
     systemPrompt,
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
+    checkpointer: new JsonlSaver(stateDir),
     // One line per request to the provider. This is the scale every
     // context-engineering change is weighed on, so it is wired up before the
     // first such change rather than after.
@@ -40,6 +51,9 @@ async function main(): Promise<void> {
     // Worth watching: this is the cacheable prefix sent on every single turn.
     systemPromptChars: systemPrompt.length,
     projectInstructionsChars: instructions?.length ?? 0,
+    // Printed because "where did my history go" is otherwise a guess, and
+    // because the answer differs between development and a released build.
+    stateDir,
   });
 
   await runRepl({ graph });
