@@ -13,30 +13,53 @@ const MAX_COMMAND_MS = 120_000;
 /** Command output goes into the next prompt, same as any other tool result. */
 const MAX_OUTPUT_BYTES = 32_000;
 
+/**
+ * Creates files. It refuses to overwrite one, and that refusal is the whole
+ * point.
+ *
+ * A full-file write is the only way this agent can lose someone else's work.
+ * Measured, not assumed (.scratch/context-engineering/repro/05-stale-edit.ts):
+ * when a file changes between a Read and a later write, `Edit` catches it every
+ * way it can go wrong — the target no longer matches, or it now matches twice,
+ * and `locate` refuses both — while a change made elsewhere in the file survives
+ * untouched, because an Edit only rewrites the span it matched. `Write` has no
+ * such property: it replaces the file with the caller's copy, and anything
+ * written since that copy was taken is gone with no error and no trace.
+ *
+ * The alternative was a read registry — hash what was read, refuse a write when
+ * the file no longer hashes the same. That is the standard fix and it was
+ * dropped: it needs every write-path tool to take a ToolRuntime and return a
+ * Command carrying its own ToolMessage, and the failure it guards was never
+ * observed (0 of 3 samples, with a restructuring task chosen to tempt a full
+ * rewrite; the model reached for Edit every time). Refusing the overwrite closes
+ * the same hole with a narrower tool and no state at all.
+ *
+ * Nothing is lost that Edit cannot do: replacing a file entirely is an Edit whose
+ * oldString is its current contents.
+ */
 export const writeTool = tool(
   async ({ path, content }): Promise<string> => {
     const full = resolveInside(path);
 
     return withPathLock(full, async () => {
-      const existing = Bun.file(full);
-      const had = await existing.exists();
-      const previous = had ? existing.size : 0;
+      if (await Bun.file(full).exists()) {
+        throw new Error(
+          `${path} already exists and Write never overwrites. Use Edit to change it — ` +
+            `to replace it entirely, pass its current contents as oldString`,
+        );
+      }
 
       // Bun.write does not create intermediate directories.
       await mkdir(dirname(full), { recursive: true });
       await Bun.write(full, content);
 
-      // Reporting the overwrite rather than staying silent: this tool is the one
-      // that can destroy work, and the transcript is where that becomes visible.
-      return had
-        ? `overwrote ${path} (${String(previous)} bytes -> ${String(content.length)})`
-        : `created ${path} (${String(content.length)} bytes)`;
+      return `created ${path} (${String(content.length)} bytes)`;
     });
   },
   {
     name: "Write",
     description:
-      "Create a file, or replace one in full. Never use it to make a small change — use Edit. Creates parent directories as needed.",
+      "Create a new file. Refuses to overwrite an existing one — use Edit for anything that already exists, including replacing it in full. Creates parent directories as needed.",
     schema: z.object({
       path: z.string().describe("Path relative to the working directory"),
       content: z.string().describe("The complete file contents"),

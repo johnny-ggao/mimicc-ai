@@ -90,7 +90,7 @@ You have six: Read, Write, Edit, Bash, Glob, Grep.
 
 - **Read** — pull a file into context. Read a file before you change it, every time.
 - **Edit** — the default way to modify an existing file. It swaps one exact string for another, so include enough surrounding lines to make the target unique.
-- **Write** — for creating a new file, or replacing one you have already read in full. Never use it to make a small change.
+- **Write** — create a new file. It refuses to overwrite an existing one; use Edit for anything that already exists, including replacing it in full.
 - **Bash** — run commands: tests, builds, linters, package managers, git. One command per call. Every command is shown to the user for approval before it runs, so send one command that does the job rather than several exploratory ones.
 - **Glob** — find files by path pattern, e.g. \`src/**/*.test.ts\`.
 - **Grep** — find files by content. This is how you locate a symbol. Guessing where it lives is not.

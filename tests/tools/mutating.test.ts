@@ -58,14 +58,37 @@ test("Write creates intermediate directories", async () => {
   expect(await Bun.file(file("nested/deep/x.txt")).text()).toBe("hello");
 });
 
-// The one tool that can destroy work says so in the transcript. Silence here
-// would make an accidental clobber invisible to both the user and the model.
-test("Write reports an overwrite rather than performing it silently", async () => {
+// A full-file write is the only way this agent can silently lose work someone
+// else did between a Read and the write. Edit cannot: if the target moved or
+// became ambiguous it refuses, and a change elsewhere in the file survives,
+// because an Edit rewrites only the span it matched. Removing the capability is
+// what closes that, and it is cheaper than tracking what was read.
+test("Write refuses to overwrite an existing file", async () => {
   await writeTool.invoke({ path: file("clobber.txt"), content: "0123456789" });
-  const result = await writeTool.invoke({ path: file("clobber.txt"), content: "new" });
 
-  expect(result).toContain("overwrote");
-  expect(result).toContain("10 bytes -> 3");
+  const message = await rejection(
+    writeTool.invoke({ path: file("clobber.txt"), content: "new" }),
+  );
+
+  expect(message).toContain("already exists");
+  expect(message).toContain("Use Edit");
+  // And the original is untouched — a refusal that half-wrote would be worse
+  // than the overwrite it replaced.
+  expect(await Bun.file(file("clobber.txt")).text()).toBe("0123456789");
+});
+
+// The escape hatch the refusal points at has to actually work, or "use Edit to
+// replace it in full" is advice the model cannot follow.
+test("a full replacement is an Edit whose oldString is the whole file", async () => {
+  await writeTool.invoke({ path: file("replace.txt"), content: "old\nbody\n" });
+
+  await editTool.invoke({
+    path: file("replace.txt"),
+    oldString: "old\nbody\n",
+    newString: "new\nbody\n",
+  });
+
+  expect(await Bun.file(file("replace.txt")).text()).toBe("new\nbody\n");
 });
 
 /* ---------- Edit ---------- */
