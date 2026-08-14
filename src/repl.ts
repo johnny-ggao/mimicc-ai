@@ -4,6 +4,7 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
 import { RECURSION_LIMIT, type AgentGraph } from "./agent";
+import { markdownStream } from "./markdown";
 import { TASK_TOOL_NAME } from "./tools";
 
 const DIM = "\x1b[2m";
@@ -240,6 +241,11 @@ async function runTurn(
   let lastDot = 0;
   let error: unknown = null;
 
+  // One per turn, so a reply that ends inside an unclosed code fence — the model
+  // stopped early, or Ctrl+C landed mid-block — cannot leave the next reply
+  // rendering as code.
+  const markdown = markdownStream((text) => process.stdout.write(text));
+
   const openDim = (): void => {
     if (!dimmed) {
       process.stdout.write(DIM);
@@ -276,6 +282,11 @@ async function runTurn(
         const stopped = state.__interrupt__?.[0]?.value?.actionRequests;
         if (stopped !== undefined) requests = stopped;
         if (state.messages !== undefined) {
+          // Flushed first, and not as a precaution. A held partial line would
+          // otherwise be printed *after* the tool-call line below it, which
+          // arrives on a different event stream — the transcript would show the
+          // model's sentence appearing after the call it introduced.
+          markdown.flush();
           rendered = renderStructure(state.messages, rendered, closeDim);
         }
         continue;
@@ -318,12 +329,19 @@ async function runTurn(
           closeDim();
           process.stdout.write("\n\n");
         }
-        process.stdout.write(chunk.content);
+        // The reply is markdown and gets read as markdown. The reasoning above
+        // deliberately does not: it is dim by the paragraph and rendering it
+        // would compete with the answer for the eye.
+        markdown.push(chunk.content);
       }
     }
   } catch (caught) {
     error = caught;
   } finally {
+    // Flushed on every exit path for the same reason the dim escape is closed on
+    // every exit path: an interrupt or a failure mid-line must not swallow the
+    // text the model had already produced.
+    markdown.flush();
     // The dim escape has to be closed on every exit path, or an interrupt during
     // reasoning leaves the whole terminal dimmed.
     closeDim();

@@ -17,6 +17,12 @@ export {
 export { loadConfig, type Config } from "./config";
 export { createLogger, type Logger, type LogLevel } from "./logger";
 export {
+  markdownStream,
+  renderLine,
+  stylingEnabled,
+  type MarkdownStream,
+} from "./markdown";
+export {
   contextWindow,
   KEEP_FRACTION,
   TRIGGER_FRACTION,
