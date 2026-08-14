@@ -2,6 +2,7 @@
 // entry point lives in src/main.ts.
 export {
   createUniversalAgent,
+  MAIN_AGENT,
   RECURSION_LIMIT,
   type AgentGraph,
   type AgentOptions,
@@ -22,9 +23,17 @@ export {
   WINDOW_LIMIT,
   type ContextWindowOptions,
   type WindowEvent,
+  type WindowTuning,
 } from "./window";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
-export { EXPLORE_PROMPT, EXPLORE_TOOLS, subagentSpecs } from "./subagents";
+export {
+  agentStack,
+  assertMeterInsideWindow,
+  EXPLORE_PROMPT,
+  EXPLORE_TOOLS,
+  subagentSpecs,
+  type AgentEnvironment,
+} from "./kinds";
 export {
   bashTool,
   createTaskTool,

@@ -13,12 +13,18 @@ import { createMiddleware, type AnyAgentMiddleware } from "langchain";
  */
 export interface ModelUsage {
   /**
-   * Who made this request: `"main"` for the agent, a subagent's kind for a
-   * dispatch, `"summary"` for the call that compacts the window.
+   * Who made this request: a kind's identity — `"main"` for the agent,
+   * `"explore"` for a dispatch — or `` `${identity} summary` `` for the call
+   * that compacts that kind's window.
    *
-   * Without it the log is a single column of numbers from three different
-   * spenders, and the one question worth asking of it — what did dispatching
-   * three explore agents actually cost — cannot be asked at all.
+   * Every one of those is derived from the kind's single identity in
+   * `src/kinds.ts`, which is why there is no bare `"summary"` in this column any
+   * more: an unattributed label is exactly where a second kind's spending would
+   * have gone to hide.
+   *
+   * Without this field the log is a single column of numbers from several
+   * different spenders, and the one question worth asking of it — what did
+   * dispatching three explore agents actually cost — cannot be asked at all.
    */
   agent: string;
   /** Messages handed to the model on this call. Identifies the lap. */

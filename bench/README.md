@@ -44,6 +44,7 @@ bun bench/measure.ts
 | `raw-usage.ts` | provider 归一化之前到底报了哪些字段 | 是（小） |
 | `window-budget.ts` | 要多少次 Read 才填满 1M 窗口 | 否（纯算术） |
 | `wire-check.ts` | 两种系统提示词形状上线到底长什么样 | 否（本地 stub server） |
+| `kind-labels.ts` | 一个种类派生的四个标签在真 provider 上是不是真的都对（`main` / `main summary` / `explore` / `explore summary` ＋ 两条带身份的 `context_window`） | 是（小） |
 
 `fixture/`（`measure.ts` 用）、`fixture-agents-md/`、`fixture-edit/` 三份都是**冻结**的。
 `measure-reread.ts` 会把 `fixture-edit/` 拷进仓库根的 `bench-work/`（gitignore）再改，

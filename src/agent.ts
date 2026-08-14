@@ -11,11 +11,10 @@ import {
   type InterruptOnConfig,
 } from "langchain";
 
-import { projectInstructions } from "./instructions";
-import { subagentSpecs } from "./subagents";
+import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "./tools";
-import { usageMeter, type ModelUsage } from "./usage";
-import { contextWindow, type ContextWindowOptions, type WindowEvent } from "./window";
+import type { ModelUsage } from "./usage";
+import type { WindowEvent, WindowTuning } from "./window";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -27,6 +26,19 @@ import { contextWindow, type ContextWindowOptions, type WindowEvent } from "./wi
  * a separate job nobody has done yet.
  */
 export const RECURSION_LIMIT = 24;
+
+/**
+ * The main agent's identity: what its requests are billed under, what its window
+ * events are attributed to, and — via `${identity} summary` — what its
+ * summarising calls are called.
+ *
+ * A constant rather than a literal at the call site for the same reason the
+ * Explore kind names itself once: one agent, one name. Note that its summary is
+ * now `"main summary"` and not the bare `"summary"` it used to be, which is the
+ * cost of the labels being derived instead of written — and the point, because
+ * the exception was where a second kind's summary would have gone to hide.
+ */
+export const MAIN_AGENT = "main";
 
 export interface AgentOptions {
   baseURL: string;
@@ -86,8 +98,13 @@ export interface AgentOptions {
    * They are reachable only so a test can trigger a summary without first
    * producing eight hundred thousand tokens — which is the difference between
    * this behaviour being tested and being asserted about.
+   *
+   * `WindowTuning` is the same type the subagent kinds take. It used to be a
+   * wider Omit here, leaving the summary's billing label reachable from the
+   * caller — a second way to name an agent, which is a second way to name it
+   * wrong.
    */
-  window?: Omit<ContextWindowOptions, "model" | "onEvent">;
+  window?: WindowTuning;
   /**
    * Where per-request token and cache numbers go. Optional because the loop runs
    * fine without a scale — but every context-engineering change is judged on
@@ -218,18 +235,32 @@ function confirmationGate(): AnyAgentMiddleware {
 function assembleTools(model: ChatOpenAI, options: AgentOptions): ClientTool[] {
   return [
     ...TOOLS,
-    createTaskTool({
-      model,
-      subagents: subagentSpecs({
-        model,
-        ...(options.projectInstructions !== undefined
-          ? { instructions: options.projectInstructions }
-          : {}),
-        ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
-        ...(options.window !== undefined ? { window: options.window } : {}),
-      }),
-    }),
+    createTaskTool({ model, subagents: subagentSpecs(environment(model, options)) }),
   ];
+}
+
+/**
+ * The options this program was started with, in the shape a kind is built from.
+ *
+ * Every kind is fitted from the same environment — the main agent and every
+ * subagent read the same instructions, spend into the same log, and report
+ * events to the same listener. What differs between them is the identity they
+ * are given, and nothing else, which is what makes a per-kind column in the log
+ * meaningful.
+ *
+ * The conditional spreads are the `exactOptionalPropertyTypes` tax: `onUsage:
+ * undefined` is not the same as an absent `onUsage` under that flag.
+ */
+function environment(model: ChatOpenAI, options: AgentOptions): AgentEnvironment {
+  return {
+    model,
+    ...(options.projectInstructions !== undefined
+      ? { instructions: options.projectInstructions }
+      : {}),
+    ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
+    ...(options.onWindow !== undefined ? { onWindow: options.onWindow } : {}),
+    ...(options.window !== undefined ? { window: options.window } : {}),
+  };
 }
 
 /**
@@ -260,6 +291,27 @@ export function createUniversalAgent(options: AgentOptions) {
   // economise, and this is a single-model program besides.
   const model = createModel(options);
 
+  // The main agent is a kind like any other, so its window, its meter and its
+  // instructions come from the same assembler every subagent uses — including
+  // the order between the first two, which `agentStack` asserts rather than
+  // leaving to whoever edits this next.
+  //
+  // The gate is appended here rather than being part of that stack because it is
+  // the one thing a subagent must not have: a subagent cannot `interrupt()` to
+  // ask, and a kind that cannot ask must not be able to do anything worth asking
+  // about (docs/adr/0003). Outside the stack that stays a fact about who is being
+  // built; inside it, behind a flag, it would be a switch.
+  //
+  // Annotated rather than inferred, and for the same reason `assembleTools` is:
+  // handed to `createAgent` as a bare spread expression, its inference falls
+  // through to the last overload and demands `responseFormat` (measured — the
+  // identical error, from the middleware side this time). Naming the element type
+  // sidesteps the inference; a cast would only silence it.
+  const middleware: AnyAgentMiddleware[] = [
+    ...agentStack(MAIN_AGENT, environment(model, options)),
+    confirmationGate(),
+  ];
+
   return createAgent({
     model,
     tools: assembleTools(model, options),
@@ -279,31 +331,6 @@ export function createUniversalAgent(options: AgentOptions) {
       ? { systemPrompt: new SystemMessage(options.systemPrompt) }
       : {}),
     checkpointer: options.checkpointer ?? new MemorySaver(),
-    // `wrapModelCall` nests, and the first entry is the outermost wrapper. Two
-    // middlewares below use that hook, and their order decides what the scale
-    // weighs.
-    middleware: [
-      // Outside the meter, because it decides which messages are sent — and the
-      // meter has to count the messages that were actually sent.
-      contextWindow({
-        model,
-        ...options.window,
-        ...(options.onWindow !== undefined ? { onEvent: options.onWindow } : {}),
-        ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
-      }),
-      // Innermost, so `request.messages` here is exactly what goes on the wire
-      // and `elapsedMs` is the provider's latency alone. It used to sit
-      // outermost — which made both of those quietly wrong the moment the window
-      // started cutting: the count was the whole history rather than the view,
-      // and the timing swallowed the summarising call. That call is now metered
-      // by the window itself, under its own name.
-      usageMeter("main", options.onUsage ?? (() => {})),
-      // Only a beforeAgent hook, so its position among the others is not
-      // load-bearing the way the two above are.
-      ...(options.projectInstructions !== undefined
-        ? [projectInstructions(options.projectInstructions)]
-        : []),
-      confirmationGate(),
-    ],
+    middleware,
   });
 }

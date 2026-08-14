@@ -76,9 +76,17 @@ _Avoid_: 会话、轮次（指一次模型调用时）
 checkpointer 里的一条历史，由 `thread_id` 寻址。`/clear` 换一个新的，旧的仍然可寻址。
 _Avoid_: 会话、session
 
+**种类（kind）**：
+这程序能跑起来的一类 agent，**主 agent 也是一种**——不只是子 agent 的分类。一种由三样东西
+定义：一个**身份（identity）**（一个字符串）、一份工具清单、一段提示词。身份不是标签，是**唯一
+的名字**：账目、摘要账目（`${身份} summary`）、窗口事件、模型键入的 `subagent_type`、嵌套
+graph 的名字，**全部从它派生**。每一种配的中间件由 `src/kinds.ts` 的 `agentStack` 统一装配，
+**顺序在那里被断言，不靠注释**。
+_Avoid_: 角色、role、agent 类型（指这个概念时）
+
 **秤（the scale）**：
-`src/usage.ts` 的 `usageMeter`，一次 provider 请求记一条。**每一项上下文工程改造都要用它称，
-判据挂在 `input` 与 `cached` 上**——`output` 抖，只作参考。
+`src/usage.ts` 的 `usageMeter`，一次 provider 请求记一条，**按种类的身份分栏**。
+**每一项上下文工程改造都要用它称，判据挂在 `input` 与 `cached` 上**——`output` 抖，只作参考。
 
 ### 委派
 
@@ -89,8 +97,9 @@ _Avoid_: 会话、session
 _Avoid_: 子图、subgraph（那是 langgraph 的另一个东西）、协程
 
 **Explore**：
-我们注册的那一种子 agent：**只读、单次、把结论交回**。名字取自 Claude Code 内置的同形态
-agent 类型，不自造。**「只读」是它的工具清单决定的，不是一条检查**——它拿不到会改动东西的工具。
+我们注册的那一**种**（见「种类」）子 agent：**只读、单次、把结论交回**。名字取自 Claude Code
+内置的同形态 agent 类型，不自造。**「只读」是它的工具清单决定的，不是一条检查**——它拿不到会
+改动东西的工具。
 _Avoid_: 探子、scout（2026-08-14 之前的内部叫法）、研究员、worker
 
 **派遣（dispatch）**：

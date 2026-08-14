@@ -440,7 +440,10 @@ describe("what the scale sees when the window cuts", () => {
     await turn(graph, "usage-summary", bulky("second"));
     await turn(graph, "usage-summary", bulky("third"));
 
-    const summaries = usage.filter((record) => record.agent === "summary");
+    // `"main summary"`, not a bare `"summary"`: the label is derived from the
+    // agent's identity, so every kind's summarising call is billed under a name
+    // that says whose it was. There is no unlabelled default left to fall into.
+    const summaries = usage.filter((record) => record.agent === "main summary");
     expect(usage.some((record) => record.agent === "main")).toBe(true);
     // One record per summarising call, not one per turn that happened to
     // summarise: a request is a record, which is the whole contract of the scale.

@@ -11,8 +11,9 @@ import { z } from "zod";
 
 import { createUniversalAgent } from "@/agent";
 import { JsonlSaver } from "@/checkpoint";
-import { EXPLORE_TOOLS, subagentSpecs } from "@/subagents";
+import { EXPLORE_TOOLS, subagentSpecs } from "@/kinds";
 import { createTaskTool, TASK_TOOL_NAME, type SubagentSpec } from "@/tools";
+import type { WindowEvent } from "@/window";
 import type { ModelUsage } from "@/usage";
 
 /**
@@ -281,7 +282,7 @@ describe("the tool defines no subagents of its own", () => {
     const source = await Bun.file("src/tools/task.ts").text();
 
     expect(source).not.toContain('from "../agent"');
-    expect(source).not.toContain('from "../subagents"');
+    expect(source).not.toContain('from "../kinds"');
   });
 });
 
@@ -544,11 +545,14 @@ describe("a subagent's own window", () => {
       configuration: { baseURL: `http://localhost:${String(server.port)}/v1` },
     });
 
+    const events: WindowEvent[] = [];
+
     const report = await createTaskTool({
       model,
       subagents: subagentSpecs({
         model,
         onUsage: (record) => usage.push(record),
+        onWindow: (event) => events.push(event),
         // trigger at 1,600, keep 100 — the same shape as the agent's own tests.
         window: { limit: 2_000, keepFraction: 0.05 },
       }),
@@ -559,6 +563,16 @@ describe("a subagent's own window", () => {
     // column is the problem the label exists to prevent.
     expect(usage.some((record) => record.agent === "explore summary")).toBe(true);
     expect(usage.some((record) => record.agent === "explore")).toBe(true);
+
+    // And the event says so too. A subagent silently compacting its own window
+    // used to be invisible — this middleware was installed without a listener,
+    // so the one agent here most likely to fill a window in a single lap was the
+    // one nobody was told about. Isolation is of context, not of accounting: the
+    // subagent's run never touches the parent's thread, while what it spent and
+    // what it compacted both reach the operator's log, attributable because they
+    // carry a name.
+    expect(events.some((event) => event.type === "summarized")).toBe(true);
+    expect(events.every((event) => event.agent === "explore")).toBe(true);
   });
 
   test("the explore agent's view shrinks while its dispatch still succeeds", async () => {

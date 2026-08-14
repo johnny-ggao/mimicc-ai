@@ -16,7 +16,7 @@ import { z } from "zod";
  * It knows how to run an agent inside a tool call and hand its final message
  * back. It does **not** know what kinds of subagent exist, what they may do, or
  * what they are told — those arrive as {@link SubagentSpec}s. Registering a kind
- * is a data change in `src/subagents.ts`; nothing here changes for it, and
+ * is a data change in `src/kinds.ts`; nothing here changes for it, and
  * `tests/task.test.ts` dispatches a made-up kind to keep that honest.
  *
  * The split matters because "read-only explore agent" is one policy, not the mechanism.

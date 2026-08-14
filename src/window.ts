@@ -101,6 +101,22 @@ export interface ContextWindowOptions {
    * which is a poor place to economise.
    */
   model: BaseChatModel;
+  /**
+   * Whose window this is — the same identity its meter is labelled with.
+   *
+   * Required, and that is the point. Every kind of agent installs this
+   * middleware and each one summarises on its own account, so two things have
+   * to carry a name: the summarising call, billed as `` `${agent} summary` ``,
+   * and every event reported below. It used to be an optional `usageAgent`
+   * defaulting to `"summary"`, and that default was the bug waiting to happen —
+   * a second kind that forgot to pass it would have spent under the first one's
+   * name, silently, with the log still looking well-formed.
+   *
+   * One field rather than two because an agent has one identity. Letting a
+   * caller label its billing and its events differently is a way to lie that
+   * nobody needs.
+   */
+  agent: string;
   /** Overridable so a test can trigger a summary without producing 800k tokens. */
   limit?: number;
   triggerFraction?: number;
@@ -108,14 +124,6 @@ export interface ContextWindowOptions {
   summaryInputTokens?: number;
   /** Told about every summary, and every failure to produce one. */
   onEvent?: (event: WindowEvent) => void;
-  /**
-   * The name the summarising call is billed under.
-   *
-   * A subagent installs this middleware too, and its summary is its own
-   * spending — `"summary"` from two different agents in one log is the column
-   * problem the `agent` field exists to solve.
-   */
-  usageAgent?: string;
   /**
    * Told what the summarising call itself cost.
    *
@@ -126,14 +134,39 @@ export interface ContextWindowOptions {
   onUsage?: (usage: ModelUsage) => void;
 }
 
+/**
+ * The part of the options a caller is allowed to tune.
+ *
+ * Everything else — which model, whose window, where the events and the numbers
+ * go — is decided by whoever assembles the stack, not by whoever configures it.
+ * Named here rather than spelled out at each call site so the two kinds cannot
+ * drift into permitting different things, which they had: the agent's version
+ * of this Omit left `usageAgent` reachable and the subagents' did not.
+ */
+export type WindowTuning = Omit<
+  ContextWindowOptions,
+  "model" | "agent" | "onEvent" | "onUsage"
+>;
+
+/**
+ * Every event carries `agent` for the same reason every usage record does
+ * (`ModelUsage.agent`): more than one kind of agent reports into one log, and an
+ * event you cannot attribute is an event you cannot act on.
+ */
 export type WindowEvent =
   | {
       type: "summarized";
+      agent: string;
       reason: "threshold" | "overflow";
       before: number;
       kept: number;
     }
-  | { type: "summary_failed"; reason: "threshold" | "overflow"; error: string };
+  | {
+      type: "summary_failed";
+      agent: string;
+      reason: "threshold" | "overflow";
+      error: string;
+    };
 
 /** Private state. The leading underscore keeps it out of the agent's input and output. */
 const stateSchema = z.object({
@@ -154,7 +187,11 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
   const summaryInput = options.summaryInputTokens ?? SUMMARY_INPUT_TOKENS;
   const report = options.onEvent ?? (() => {});
   const meter = options.onUsage ?? (() => {});
-  const meterAs = options.usageAgent ?? "summary";
+  // Derived here rather than handed in, because the summarising call happens in
+  // this file (`options.model.invoke` below) and "my summary is billed under my
+  // own name plus a word" is this middleware's own business. The stack passes
+  // one identity down; nobody downstream gets to pick a second name.
+  const meterAs = `${options.agent} summary`;
 
   async function summarize(
     history: BaseMessage[],
@@ -188,7 +225,12 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
       // spare, so this request still fits and the next lap tries again. The
       // alternative — dropping the oldest messages without summarising — would
       // lose context silently, which this program does not do anywhere.
-      report({ type: "summary_failed", reason, error: String(error) });
+      report({
+        type: "summary_failed",
+        agent: options.agent,
+        reason,
+        error: String(error),
+      });
       return undefined;
     }
   }
@@ -210,6 +252,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
           if (fresh !== undefined) {
             report({
               type: "summarized",
+              agent: options.agent,
               reason: "threshold",
               before: history.length,
               kept: history.length - next,
@@ -250,6 +293,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
 
         report({
           type: "summarized",
+          agent: options.agent,
           reason: "overflow",
           before: history.length,
           kept: history.length - next,
