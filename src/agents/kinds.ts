@@ -4,7 +4,12 @@ import type { AnyAgentMiddleware } from "langchain";
 import { projectInstructions } from "../context";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { usageMeter, type ModelUsage } from "../usage";
-import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
+import {
+  contextWindow,
+  PROJECT_INSTRUCTIONS_ID,
+  type WindowEvent,
+  type WindowTuning,
+} from "../context";
 
 /**
  * Which kinds of agent this program runs, and what each one is fitted with.
@@ -131,6 +136,13 @@ export function agentStack(
     contextWindow({
       model,
       agent: identity,
+      // The same place that injects the resident message names it as pinned.
+      // Those two facts used to live apart — the injection here, the id hard
+      // coded inside the projection — which is how the projection came to know
+      // that a thing called "project instructions" exists. An empty list when
+      // there are none is not a special case: nothing to pin is the ordinary
+      // state of a repository with no AGENTS.md.
+      pins: instructions !== undefined ? [PROJECT_INSTRUCTIONS_ID] : [],
       ...window,
       ...(onWindow !== undefined ? { onEvent: onWindow } : {}),
       ...(onUsage !== undefined ? { onUsage } : {}),

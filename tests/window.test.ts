@@ -262,6 +262,58 @@ test("below the threshold the model sees the history unchanged", async () => {
   expect(shown.length).toBe(kept.length - 1);
 });
 
+/**
+ * Over the line, and nothing worth cutting — the branch that had no name.
+ *
+ * `planCut` returning `null` is a state the program reaches in production, not a
+ * defensive case: measured against the real provider on a small window, where
+ * the resident segment counted by `requestTokens` pushed the total past the
+ * trigger while the messages alone still fitted the retention budget. Until the
+ * projection was extracted this was an anonymous `if (next > cutoff)` at two
+ * call sites, and no test had ever taken the false branch.
+ *
+ * The correct behaviour is to do nothing and carry on: the turn is not failed,
+ * no summarising call is billed, and — this is the part worth pinning — no
+ * `summarized` event is reported, because none happened. An event here would
+ * make the log claim a compaction that never took place.
+ */
+test("over the threshold with nothing to cut, the turn proceeds and says nothing", async () => {
+  // Two turns, and that is load-bearing. `requestTokens` anchors on an
+  // `input_tokens` the provider has actually reported, so on turn one there is
+  // no anchor and the total is a small estimate — the threshold is not crossed
+  // and this test would pass without ever reaching the branch it is about.
+  //
+  // The keep budget is larger than the whole history, so every candidate cut
+  // leaves a tail that already fits and the cutter declines.
+  const graph = agent({ limit: 2_000, keepFraction: 5 });
+  promptTokens = 1_900;
+  await turn(graph, "uncuttable", bulky("first"));
+  const state = await turn(graph, "uncuttable", bulky("second"));
+
+  expect(events).toEqual([]);
+  const shown = lastRequest().messages;
+  const kept = (state as { messages: BaseMessage[] }).messages;
+  expect(shown.length).toBe(kept.length - 1);
+  expect(
+    shown.some(
+      (message) =>
+        typeof message.content === "string" && message.content.includes("Summary of"),
+    ),
+  ).toBe(false);
+});
+
+test("the same two turns DO summarise once the keep budget is realistic", async () => {
+  // The positive control for the test above. Without it, "no events" proves
+  // nothing: a threshold that was never crossed looks exactly like a cut that
+  // was declined, and the assertion would hold for the wrong reason.
+  const graph = agent({ limit: 2_000, keepFraction: 0.05 });
+  promptTokens = 1_900;
+  await turn(graph, "cuttable", bulky("first"));
+  await turn(graph, "cuttable", bulky("second"));
+
+  expect(events.some((event) => event.type === "summarized")).toBe(true);
+});
+
 test("a second summary builds on the first rather than restarting", async () => {
   const graph = agent();
   promptTokens = 1_900;

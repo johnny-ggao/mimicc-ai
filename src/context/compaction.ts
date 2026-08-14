@@ -1,8 +1,6 @@
 import { ContextOverflowError } from "@langchain/core/errors";
 import {
-  AIMessage,
   HumanMessage,
-  ToolMessage,
   getBufferString,
   type BaseMessage,
 } from "@langchain/core/messages";
@@ -11,49 +9,49 @@ import { Command } from "@langchain/langgraph";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
-import { PROJECT_INSTRUCTIONS_ID } from "./instructions";
+import { planCut, project, requestTokens, tailWithin, type Cut } from "./projection";
 import { usageOf, type ModelUsage } from "../usage";
 
 /**
- * The context window, computed rather than carved out of the history.
+ * Keeping the context window under the limit, and everything that requires
+ * touching the outside world.
  *
- * ## The distinction this file exists to hold
+ * ## What this file is, now that it is not the projection
  *
- * **Conversation history** is the original: every message of this thread, kept
- * whole, in the checkpointer. **The context window** is what the model sees on
- * one request — a view derived from that history. They are two things, and both
- * stock mechanisms for staying under a token limit confuse them: one edits the
- * message array in place, the other returns "delete everything, here is a
- * summary". Both destroy the original to shrink the view.
- *
- * This one stores two private facts — where the cut is, and the summary that
- * stands in for what precedes it — and rebuilds the view on every model call.
- * `state.messages` is never shortened. Once the original is safe, summarising
- * stops being a lossy operation on the record and becomes what it should have
- * been: a projection.
+ * `projection.ts` answers "what does the model see", as arithmetic over a list.
+ * This file is the adapter around it: it watches the size, decides when to act,
+ * calls the model to write a summary, reports what happened, writes the two
+ * facts back to graph state, and catches the overflow the estimate failed to
+ * predict. Everything here either performs I/O, touches langchain, or is a
+ * decision about *when* — and none of it is a decision about *what*.
  *
  * ## Why it hangs off wrapModelCall, and what actually makes it reversible
  *
  * Being on `wrapModelCall` is not what makes this safe — `contextEditingMiddleware`
  * is on the same hook and is permanent. The difference is one line: it does
  * `messages[i] = …`, and `request.messages` *is* `state.messages`, the same array
- * (nodes/AgentNode.js:331). This one builds a new array and passes that along, so
- * state is untouched. **In-place versus a new array is the whole of it; the hook
- * is not.**
+ * (nodes/AgentNode.js:331). This one hands `project()`'s new array to the handler,
+ * so state is untouched. **In-place versus a new array is the whole of it; the
+ * hook is not.**
  *
  * ## The numbers, and why they are what they are
  *
  * The window is 1,048,576 tokens — measured, from the provider's own refusal,
  * not the "1M" the pricing table rounds to. Summarising starts at 80% of it. The
  * missing 20% is not waste: it is margin against our own arithmetic, and the
- * margin has to be generous because characters-per-token is not a constant.
- * Measured across two kinds of filler it ranged from 5.84 to 1.64 — a factor of
- * 3.6 — while the estimator everything uses assumes a flat 4.
+ * margin has to be generous because characters-per-token is not a constant
+ * (measured between 5.84 and 1.64 while the estimator assumes a flat 4).
  *
- * Which is also why the token count here is a hybrid: the last real
- * `input_tokens` the provider reported, plus an estimate of only what has been
- * added since. Anchoring on a true number shrinks the error from "3.6x on
- * everything" to "3.6x on the last message or two".
+ * ## The tests here stay slow on purpose
+ *
+ * Extracting the projection made half of this feature's tests cheap, and the
+ * temptation that follows is to make the other half cheap too. Do not. Both bugs
+ * this feature has actually shipped were in an adapter, not in arithmetic — a
+ * subagent inheriting its parent's checkpointer, and the scale installed on the
+ * wrong side of this middleware — and neither would have been caught by a pure
+ * test, because in both cases the pure functions were correct. The tests below
+ * go through a stub server because that is where the failures are.
+ * `docs/adr/0004` records this as a consequence, not a preference.
  */
 
 /** Measured, from the provider's refusal string. Not the rounded figure. */
@@ -117,6 +115,18 @@ export interface ContextWindowOptions {
    * nobody needs.
    */
   agent: string;
+  /**
+   * Message ids that must survive a cut, supplied by whoever installs this.
+   *
+   * The projection used to name one id itself — the only edge in the module
+   * graph that reached from this feature into another. It is here now because
+   * the place that *injects* a resident message is the place that knows it has
+   * to be pinned, and that place is `agentStack`: it installs
+   * `projectInstructions` and passes that message's id in the same breath. A
+   * second kind of resident content costs an entry in a list rather than an edit
+   * to the arithmetic.
+   */
+  pins?: readonly string[];
   /** Overridable so a test can trigger a summary without producing 800k tokens. */
   limit?: number;
   triggerFraction?: number;
@@ -145,7 +155,7 @@ export interface ContextWindowOptions {
  */
 export type WindowTuning = Omit<
   ContextWindowOptions,
-  "model" | "agent" | "onEvent" | "onUsage"
+  "model" | "agent" | "pins" | "onEvent" | "onUsage"
 >;
 
 /**
@@ -187,6 +197,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
   const summaryInput = options.summaryInputTokens ?? SUMMARY_INPUT_TOKENS;
   const report = options.onEvent ?? (() => {});
   const meter = options.onUsage ?? (() => {});
+  const pins = options.pins ?? [];
   // Derived here rather than handed in, because the summarising call happens in
   // this file (`options.model.invoke` below) and "my summary is billed under my
   // own name plus a word" is this middleware's own business. The stack passes
@@ -235,41 +246,64 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     }
   }
 
+  /**
+   * One attempt to move the cut forward, or nothing.
+   *
+   * `planCut` returning `null` is a real state and not an error: over the
+   * trigger, yet no cut would make progress. It happens — measured against the
+   * provider on a small window, where the resident segment counted by
+   * `requestTokens` pushed the total past the line while the messages alone
+   * still fitted the retention budget. The turn simply proceeds at its current
+   * size, and no `summarized` event is reported, because none happened.
+   */
+  async function advance(
+    history: BaseMessage[],
+    cut: Cut,
+    budget: number,
+    reason: "threshold" | "overflow",
+  ): Promise<Cut | undefined> {
+    const at = planCut(history, cut, budget);
+    if (at === null) return undefined;
+
+    const summary = await summarize(history.slice(0, at), reason);
+    if (summary === undefined) return undefined;
+
+    report({
+      type: "summarized",
+      agent: options.agent,
+      reason,
+      before: history.length,
+      kept: history.length - at,
+    });
+    return { at, summary };
+  }
+
   return createMiddleware({
     name: "ContextWindow",
     stateSchema,
     wrapModelCall: async (request, handler) => {
       const state = request.state as WindowState;
       const history = request.messages ?? [];
-      let cutoff = state._windowCutoff ?? 0;
-      let summary = state._windowSummary;
+      // The persisted shape is two keys and has to stay that way — thread files
+      // written before the projection existed contain them. `Cut` is built at
+      // this boundary and never leaves it.
+      let cut: Cut = { at: state._windowCutoff ?? 0, summary: state._windowSummary };
       let changed = false;
 
-      if (used(history, cutoff, summary) >= trigger) {
-        const next = chooseCutoff(history, cutoff, keep);
-        if (next > cutoff) {
-          const fresh = await summarize(history.slice(0, next), "threshold");
-          if (fresh !== undefined) {
-            report({
-              type: "summarized",
-              agent: options.agent,
-              reason: "threshold",
-              before: history.length,
-              kept: history.length - next,
-            });
-            cutoff = next;
-            summary = fresh;
-            changed = true;
-          }
+      if (requestTokens(history, cut, pins) >= trigger) {
+        const next = await advance(history, cut, keep, "threshold");
+        if (next !== undefined) {
+          cut = next;
+          changed = true;
         }
       }
 
       try {
         const response = await handler({
           ...request,
-          messages: view(history, cutoff, summary),
+          messages: project(history, cut, pins),
         });
-        return changed ? update(response, cutoff, summary) : response;
+        return changed ? update(response, cut) : response;
       } catch (error) {
         // The threshold is defended by an estimate, and the estimate can be
         // several times wrong — so the line does get crossed. Catching it turns
@@ -284,178 +318,37 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
         // that already summarised it computes the identical cut and makes no
         // progress at all. When even a quarter of the budget cannot move the
         // cut, there is nothing left to summarise and the failure is honest.
-        const next = chooseCutoff(history, cutoff, Math.max(1, Math.floor(keep / 4)));
-        const fresh =
-          next > cutoff
-            ? await summarize(history.slice(0, next), "overflow")
-            : undefined;
-        if (fresh === undefined) throw error;
+        const next = await advance(
+          history,
+          cut,
+          Math.max(1, Math.floor(keep / 4)),
+          "overflow",
+        );
+        if (next === undefined) throw error;
 
-        report({
-          type: "summarized",
-          agent: options.agent,
-          reason: "overflow",
-          before: history.length,
-          kept: history.length - next,
-        });
         const response = await handler({
           ...request,
-          messages: view(history, next, fresh),
+          messages: project(history, next, pins),
         });
-        return update(response, next, fresh);
+        return update(response, next);
       }
     },
   }) as AnyAgentMiddleware;
 }
 
 /**
- * What the model is sent: the repository's instructions, the summary, then
- * everything after the cut.
+ * The state write, and why it is a Command.
  *
- * The instructions have to be pinned here, and the reason is easy to get wrong.
- * They are injected under a fixed id, and `messagesStateReducer` merges by id —
- * replacing **in place**, keeping position. So the message never moves from its
- * original index near the front, which means it sits before every cut that will
- * ever be made and would silently drop out of the view. Re-injecting each turn
- * does not help; only rebuilding the view can.
+ * The reply is not lost: AgentNode keeps the model's message separately and
+ * appends it whatever this hook returns (nodes/AgentNode.js:94-105). The two
+ * keys are written separately rather than as one `Cut`, because thread files
+ * predating the projection contain them under these names.
  */
-function view(
-  history: BaseMessage[],
-  cutoff: number,
-  summary: BaseMessage | undefined,
-): BaseMessage[] {
-  if (cutoff <= 0 || summary === undefined) return history;
-
-  const pinned = history.find(
-    (message, index) => index < cutoff && message.id === PROJECT_INSTRUCTIONS_ID,
-  );
-  return [...(pinned ? [pinned] : []), summary, ...history.slice(cutoff)];
-}
-
-function update(
-  response: unknown,
-  cutoff: number,
-  summary: BaseMessage | undefined,
-): Command {
-  // A Command rather than the response itself, because the state update is the
-  // point. The reply is not lost: AgentNode keeps the model's message separately
-  // and appends it whatever this hook returns (nodes/AgentNode.js:94-105).
+function update(response: unknown, cut: Cut): Command {
   void response;
-  return new Command({ update: { _windowCutoff: cutoff, _windowSummary: summary } });
-}
-
-/**
- * Tokens in the request we are about to make.
- *
- * The anchor is the last `input_tokens` the provider actually reported, which is
- * sitting on the most recent AI message — it is the only number here that is not
- * a guess. Everything after that message is estimated. When there is no anchor
- * yet (the first call of a thread) the whole view is estimated.
- */
-function used(
-  history: BaseMessage[],
-  cutoff: number,
-  summary: BaseMessage | undefined,
-): number {
-  const visible = view(history, cutoff, summary);
-  for (let index = visible.length - 1; index >= 0; index -= 1) {
-    const message = visible[index];
-    if (!AIMessage.isInstance(message)) continue;
-    // The third quarantined cast of the same defect: `usage_metadata` is
-    // declared through the generic message-structure machinery and collapses to
-    // `undefined` when the structure parameter is left at its default, so the
-    // compiler believes the field can never hold a value. It does. See the same
-    // note in usage.ts and agent.ts, and retry all three on the next
-    // @langchain/core bump; verified needed against 1.2.5.
-    const usage = message.usage_metadata as { input_tokens?: number } | undefined;
-    if (typeof usage?.input_tokens === "number") {
-      return usage.input_tokens + estimate(visible.slice(index));
-    }
-  }
-  return estimate(visible);
-}
-
-/**
- * Four characters to the token, the same rule the framework's own estimator
- * uses — and wrong by up to 3.6x either way depending on what the text is. It is
- * only ever applied to the newest messages, and the 20% margin exists because of
- * it.
- */
-function estimate(messages: BaseMessage[]): number {
-  let characters = 0;
-  for (const message of messages) {
-    characters +=
-      typeof message.content === "string"
-        ? message.content.length
-        : JSON.stringify(message.content).length;
-    if (AIMessage.isInstance(message) && message.tool_calls?.length) {
-      characters += JSON.stringify(message.tool_calls).length;
-    }
-  }
-  return Math.ceil(characters / 4);
-}
-
-/** The longest tail of `messages` that fits in `budget` estimated tokens. */
-function tailWithin(messages: BaseMessage[], budget: number): BaseMessage[] {
-  let total = 0;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message === undefined) continue;
-    total += estimate([message]);
-    if (total > budget) return messages.slice(index + 1);
-  }
-  return messages;
-}
-
-/**
- * Where to cut so that the tail is about `keep` tokens — moved, if necessary, so
- * it does not land between a tool call and its result.
- *
- * That constraint is the provider's, not a preference: an assistant message with
- * `tool_calls` must be followed by a result for each one, and a result with no
- * call ahead of it is rejected outright. Cutting inside a batch of results
- * strands them, so the cut moves back to the message that issued them and the
- * whole exchange goes into the summarised side.
- */
-function chooseCutoff(history: BaseMessage[], current: number, keep: number): number {
-  let total = 0;
-  let raw = history.length;
-  for (let index = history.length - 1; index >= current; index -= 1) {
-    const message = history[index];
-    if (message === undefined) continue;
-    total += estimate([message]);
-    if (total > keep) break;
-    raw = index;
-  }
-  return safeCutoff(history, raw, current);
-}
-
-function safeCutoff(history: BaseMessage[], raw: number, floor: number): number {
-  const at = history[raw];
-  if (at === undefined || !ToolMessage.isInstance(at)) return raw;
-
-  const orphaned = new Set<string>();
-  for (let index = raw; index < history.length; index += 1) {
-    const message = history[index];
-    if (message === undefined || !ToolMessage.isInstance(message)) break;
-    orphaned.add(message.tool_call_id);
-  }
-
-  for (let index = raw - 1; index >= floor; index -= 1) {
-    const message = history[index];
-    if (!AIMessage.isInstance(message)) continue;
-    if (
-      message.tool_calls?.some((call) => call.id !== undefined && orphaned.has(call.id))
-    ) {
-      return index;
-    }
-  }
-
-  // No issuing message in range — the results are already orphans, so keeping
-  // them changes nothing. Move past them instead of cutting into the batch.
-  let index = raw;
-  while (index < history.length && ToolMessage.isInstance(history[index])) index += 1;
-  return index;
+  return new Command({
+    update: { _windowCutoff: cut.at, _windowSummary: cut.summary },
+  });
 }
 
 /**

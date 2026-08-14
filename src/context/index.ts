@@ -8,11 +8,22 @@
  * defines it — the **context window** is a computed view over the conversation
  * history, not a shortened copy of it.
  *
- * `window.ts` computes that view and compacts it when it grows too large;
- * `instructions.ts` injects the repository's own instructions into it. The scale
- * (`usage.ts`) is deliberately *not* here: it measures the request, and a
- * request is the resident segment plus the view.
+ * `projection.ts` computes that view — pure arithmetic over a list, no framework
+ * and no I/O. `compaction.ts` is the adapter that decides when the view has to
+ * shrink, calls the model to write a summary, and writes the result back to
+ * state. `instructions.ts` injects the repository's own instructions into it.
+ *
+ * The scale (`usage.ts`) is deliberately *not* here: it measures the request,
+ * and a request is the resident segment plus the view.
  */
+export {
+  estimate,
+  planCut,
+  project,
+  requestTokens,
+  tailWithin,
+  type Cut,
+} from "./projection";
 export {
   contextWindow,
   KEEP_FRACTION,
@@ -23,7 +34,7 @@ export {
   type ContextWindowOptions,
   type WindowEvent,
   type WindowTuning,
-} from "./window";
+} from "./compaction";
 export {
   projectInstructions,
   readProjectInstructions,
