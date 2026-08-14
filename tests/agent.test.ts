@@ -6,7 +6,14 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import { CONFIRMATION_POLICY, createUniversalAgent, RECURSION_LIMIT } from "@/agents";
+import { FakeListChatModel } from "@langchain/core/utils/testing";
+
+import {
+  CONFIRMATION_POLICY,
+  createUniversalAgent,
+  RECURSION_LIMIT,
+  registeredTools,
+} from "@/agents";
 
 import { TASK_TOOL_NAME, TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
@@ -177,12 +184,30 @@ describe("createAgent", () => {
  * the thing that says so.
  */
 test("every registered tool has an explicit confirmation decision", () => {
-  // Task is not in TOOLS — it is assembled by the agent because it needs the
-  // model — so the registered set is the six plus it. Spelling that out here is
-  // what keeps the check honest for a tool that lives outside the array.
-  expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(
-    [...TOOLS.map((tool) => tool.name), TASK_TOOL_NAME].sort(),
-  );
+  // Asked of the same function the program calls, not of a list copied beside
+  // it. The copy was `[...TOOLS.map(n), TASK_TOOL_NAME]` — correct on the day it
+  // was written and unable to notice a second tool assembled the way `Task` is,
+  // which is exactly the kind this gate must not miss.
+  //
+  // A fake model because `registeredTools` builds the dispatch tool and that
+  // needs one; nothing here calls it.
+  const registered = registeredTools({
+    model: new FakeListChatModel({ responses: ["unused"] }),
+  }).map((tool) => tool.name);
+
+  expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(registered.sort());
+});
+
+// The other half of the same claim, and it needs saying separately: the test
+// above passes if both sides are wrong together. This one pins what the set
+// actually contains, so dropping a tool from `TOOLS` and from the policy in one
+// commit still fails.
+test("the registered set is the six plus the dispatch tool", () => {
+  const registered = registeredTools({
+    model: new FakeListChatModel({ responses: ["unused"] }),
+  }).map((tool) => tool.name);
+
+  expect(registered).toEqual([...TOOLS.map((tool) => tool.name), TASK_TOOL_NAME]);
 });
 
 // Bash is the one that cannot be contained by path guards, so it is the one that

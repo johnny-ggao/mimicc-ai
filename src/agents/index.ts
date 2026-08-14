@@ -20,6 +20,7 @@ export {
   CONFIRMATION_POLICY,
   MAIN_AGENT,
   RECURSION_LIMIT,
+  registeredTools,
   type AgentGraph,
   type AgentOptions,
 } from "./loop";

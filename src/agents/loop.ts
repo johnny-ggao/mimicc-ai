@@ -214,7 +214,18 @@ function confirmationGate(): AnyAgentMiddleware {
 }
 
 /**
- * The six tools plus the one that dispatches an explore agent.
+ * Every tool this program registers: the six plus the one that dispatches an
+ * explore agent.
+ *
+ * **Exported so the test that guards the confirmation gate can cross the same
+ * seam the program does.** That test asserts every registered tool has an
+ * explicit decision in {@link CONFIRMATION_POLICY}, and it used to compare
+ * against a list copied by hand — `[...TOOLS.map(n), TASK_TOOL_NAME]`. Two
+ * expressions computing what should be one set, and the gate is fail-open, so a
+ * tool the copy forgot would run unconfirmed with nothing to say so. The `Task`
+ * tool is the proof the case is not hypothetical: it is assembled here rather
+ * than living in `TOOLS` because it needs a model, and a second tool built that
+ * way would slip through the same gap.
  *
  * The task tool is built here rather than living in `src/tools/` alongside the
  * others because it needs the model, and a tool module that imported the agent
@@ -232,10 +243,10 @@ function confirmationGate(): AnyAgentMiddleware {
  * its last overload, which demands `responseFormat` — measured, both ways round.
  * Naming the element type sidesteps the inference instead of casting past it.
  */
-function assembleTools(model: ChatOpenAI, options: AgentOptions): ClientTool[] {
+export function registeredTools(environment: AgentEnvironment): ClientTool[] {
   return [
     ...TOOLS,
-    createTaskTool({ model, subagents: subagentSpecs(environment(model, options)) }),
+    createTaskTool({ model: environment.model, subagents: subagentSpecs(environment) }),
   ];
 }
 
@@ -302,19 +313,23 @@ export function createUniversalAgent(options: AgentOptions) {
   // about (docs/adr/0003). Outside the stack that stays a fact about who is being
   // built; inside it, behind a flag, it would be a switch.
   //
-  // Annotated rather than inferred, and for the same reason `assembleTools` is:
+  // Annotated rather than inferred, and for the same reason `registeredTools` is:
   // handed to `createAgent` as a bare spread expression, its inference falls
   // through to the last overload and demands `responseFormat` (measured — the
   // identical error, from the middleware side this time). Naming the element type
   // sidesteps the inference; a cast would only silence it.
+  // Built once and handed to both. It used to be computed twice — once for the
+  // tools, once for the middleware — which was harmless only because it is pure.
+  const env = environment(model, options);
+
   const middleware: AnyAgentMiddleware[] = [
-    ...agentStack(MAIN_AGENT, environment(model, options)),
+    ...agentStack(MAIN_AGENT, env),
     confirmationGate(),
   ];
 
   return createAgent({
     model,
-    tools: assembleTools(model, options),
+    tools: registeredTools(env),
     // Wrapped, not handed over as a string, and the difference is on the wire.
     // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
     // string into `new SystemMessage({ content: [{ type: "text", text }] })` —
