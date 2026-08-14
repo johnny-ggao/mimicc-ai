@@ -3,10 +3,16 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  // learn/, .scratch/ and bench-work/ live inside the repo but are not product
-  // code — teaching material, planning artifacts, and the writable copy a bench
-  // edits. None is in tsconfig's project, so the type-checked rules cannot parse
-  // them and `bun run check` fails on files it was never meant to judge.
+  // These live inside the repo but are not product code: teaching material,
+  // planning artifacts, the writable copy a bench edits, and the probes.
+  //
+  // The probes are the odd ones out — they *are* tracked, because they are the
+  // evidence behind the conclusions in docs/adr and CONTEXT.md and evidence that
+  // only exists on one machine is not evidence. They still sit outside the
+  // toolchain: none of this is in tsconfig's project, so the type-checked rules
+  // cannot parse them and `bun run check` fails on files it was never meant to
+  // judge. bench/fixture/ has a second reason — reformatting it invalidates
+  // every baseline ever recorded (bench/README.md).
   {
     ignores: [
       "dist/**",
@@ -15,6 +21,8 @@ export default tseslint.config(
       "learn/**",
       ".scratch/**",
       "bench-work/**",
+      "bench/**",
+      "repro/**",
     ],
   },
   js.configs.recommended,

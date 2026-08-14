@@ -18,7 +18,7 @@ const MAX_OUTPUT_BYTES = 32_000;
  * point.
  *
  * A full-file write is the only way this agent can lose someone else's work.
- * Measured, not assumed (.scratch/context-engineering/repro/05-stale-edit.ts):
+ * Measured, not assumed (repro/05-stale-edit.ts):
  * when a file changes between a Read and a later write, `Edit` catches it every
  * way it can go wrong — the target no longer matches, or it now matches twice,
  * and `locate` refuses both — while a change made elsewhere in the file survives

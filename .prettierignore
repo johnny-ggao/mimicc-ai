@@ -11,3 +11,8 @@ learn
 
 # 量测用的可写工作副本（bench/measure-reread.ts 每趟重建），同上
 bench-work
+
+# 探针：进 git 是因为它们是 docs/adr 与 CONTEXT.md 那些结论的证据，但不是产品代码。
+# fixture/ 尤其不能被重排——改一个字节就作废全部历史基线（见 bench/README.md）。
+bench
+repro
