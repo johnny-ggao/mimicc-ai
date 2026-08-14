@@ -79,3 +79,26 @@ _Avoid_: 会话、session
 **秤（the scale）**：
 `src/usage.ts` 的 `usageMeter`，一次 provider 请求记一条。**每一项上下文工程改造都要用它称，
 判据挂在 `input` 与 `cached` 上**——`output` 抖，只作参考。
+
+### 委派
+
+**子 agent（subagent）**：
+在一次工具调用内部跑起来的、嵌套的另一个 agent run。**它是机制层的词**——langchain 里没有这个
+一等公民，只有「在工具体里再起一个 `createAgent`」这一种做法。它有自己的消息、自己的窗口、
+自己的账。
+_Avoid_: 子图、subgraph（那是 langgraph 的另一个东西）、协程
+
+**Explore**：
+我们注册的那一种子 agent：**只读、单次、把结论交回**。名字取自 Claude Code 内置的同形态
+agent 类型，不自造。**「只读」是它的工具清单决定的，不是一条检查**——它拿不到会改动东西的工具。
+_Avoid_: 探子、scout（2026-08-14 之前的内部叫法）、研究员、worker
+
+**派遣（dispatch）**：
+主 agent 通过 `Task` 工具起一个子 agent 的那一次动作。**一次派遣是无状态的**：子 agent 只看见
+派遣时写下的目标，看不见这场对话。
+_Avoid_: 调用、spawn、fork
+
+**报告（report）**：
+子 agent 交回来的那一条消息，**也是它唯一进入主 agent 上下文窗口的东西**。它的中间过程被丢弃，
+所以**没写进报告的等于没有**。
+_Avoid_: 返回值、结果、output
