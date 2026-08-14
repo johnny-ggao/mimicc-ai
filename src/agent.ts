@@ -1,4 +1,5 @@
 import { ContextOverflowError } from "@langchain/core/errors";
+import type { ClientTool } from "@langchain/core/tools";
 import { SystemMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
@@ -11,7 +12,8 @@ import {
 } from "langchain";
 
 import { projectInstructions } from "./instructions";
-import { TOOLS } from "./tools";
+import { subagentSpecs } from "./subagents";
+import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "./tools";
 import { usageMeter, type ModelUsage } from "./usage";
 import { contextWindow, type ContextWindowOptions, type WindowEvent } from "./window";
 
@@ -163,6 +165,9 @@ export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
   Grep: false,
   Write: false,
   Edit: false,
+  // An explore agent carries only the three read-only tools, so dispatching one can do
+  // nothing a Read could not — the decision is already made by EXPLORE_TOOLS.
+  [TASK_TOOL_NAME]: false,
   Bash: {
     allowedDecisions: ["approve", "edit", "reject"],
     description: "Bash runs with your shell. Approve, edit the command, or reject.",
@@ -189,6 +194,42 @@ function confirmationGate(): AnyAgentMiddleware {
   return humanInTheLoopMiddleware(
     options as unknown as Parameters<typeof humanInTheLoopMiddleware>[0],
   ) as AnyAgentMiddleware;
+}
+
+/**
+ * The six tools plus the one that dispatches an explore agent.
+ *
+ * The task tool is built here rather than living in `src/tools/` alongside the
+ * others because it needs the model, and a tool module that imported the agent
+ * to get one would close the cycle `agent -> tools -> explore agent -> agent`. It goes
+ * last so the six the prompt describes keep their pinned order, and with them
+ * the cached prefix.
+ *
+ * The return type is annotated rather than inferred, and that is not cosmetic.
+ * `tool()` has two overload families — one for a plain function, one for a
+ * function taking a `runtime` — and they return different type arguments for the
+ * tool's event type: inferred from the function in the first
+ * (`InferToolOutputFromFunc`), fixed to `ToolEventType` in the second
+ * (@langchain/core/dist/tools/index.d.ts:219-228). Each family alone infers
+ * fine; **mixed in one array**, `createAgent`'s tool inference falls through to
+ * its last overload, which demands `responseFormat` — measured, both ways round.
+ * Naming the element type sidesteps the inference instead of casting past it.
+ */
+function assembleTools(model: ChatOpenAI, options: AgentOptions): ClientTool[] {
+  return [
+    ...TOOLS,
+    createTaskTool({
+      model,
+      subagents: subagentSpecs({
+        model,
+        ...(options.projectInstructions !== undefined
+          ? { instructions: options.projectInstructions }
+          : {}),
+        ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
+        ...(options.window !== undefined ? { window: options.window } : {}),
+      }),
+    }),
+  ];
 }
 
 /**
@@ -221,7 +262,7 @@ export function createUniversalAgent(options: AgentOptions) {
 
   return createAgent({
     model,
-    tools: TOOLS,
+    tools: assembleTools(model, options),
     // Wrapped, not handed over as a string, and the difference is on the wire.
     // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
     // string into `new SystemMessage({ content: [{ type: "text", text }] })` —
@@ -238,22 +279,27 @@ export function createUniversalAgent(options: AgentOptions) {
       ? { systemPrompt: new SystemMessage(options.systemPrompt) }
       : {}),
     checkpointer: options.checkpointer ?? new MemorySaver(),
-    // The meter is outermost so it times the gate rather than the gate timing
-    // it. Order matters for `wrapModelCall`, which nests: the first middleware
-    // in the array is the outer wrapper.
+    // `wrapModelCall` nests, and the first entry is the outermost wrapper. Two
+    // middlewares below use that hook, and their order decides what the scale
+    // weighs.
     middleware: [
-      usageMeter(options.onUsage ?? (() => {})),
-      // Inside the meter, so a summarising turn is measured with the extra
-      // model call it costs — and outside the gate, which has nothing to say
-      // about how much of the history the model is shown. Both matter: this
-      // middleware nests, and the first entry is the outermost wrapper.
+      // Outside the meter, because it decides which messages are sent — and the
+      // meter has to count the messages that were actually sent.
       contextWindow({
         model,
         ...options.window,
         ...(options.onWindow !== undefined ? { onEvent: options.onWindow } : {}),
+        ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
       }),
+      // Innermost, so `request.messages` here is exactly what goes on the wire
+      // and `elapsedMs` is the provider's latency alone. It used to sit
+      // outermost — which made both of those quietly wrong the moment the window
+      // started cutting: the count was the whole history rather than the view,
+      // and the timing swallowed the summarising call. That call is now metered
+      // by the window itself, under its own name.
+      usageMeter("main", options.onUsage ?? (() => {})),
       // Only a beforeAgent hook, so its position among the others is not
-      // load-bearing the way the meter's is.
+      // load-bearing the way the two above are.
       ...(options.projectInstructions !== undefined
         ? [projectInstructions(options.projectInstructions)]
         : []),

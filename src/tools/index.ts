@@ -22,3 +22,16 @@ export { bashTool, editTool, writeTool } from "./mutating";
  * model can read.
  */
 export const TOOLS = [readTool, writeTool, editTool, bashTool, globTool, grepTool];
+
+/**
+ * `Task` is not in TOOLS, and cannot be: it needs a model, which the agent
+ * builds. It is exported as a factory the assembling caller wires up — see the
+ * note in task.ts about the cycle that the alternative would close.
+ */
+export {
+  createTaskTool,
+  SUBAGENT_RECURSION_LIMIT,
+  TASK_TOOL_NAME,
+  type SubagentSpec,
+  type TaskToolOptions,
+} from "./task";

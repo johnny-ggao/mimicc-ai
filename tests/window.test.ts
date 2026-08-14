@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 
 import { createUniversalAgent, RECURSION_LIMIT } from "@/agent";
+import type { ModelUsage } from "@/usage";
 import { JsonlSaver } from "@/checkpoint";
 import { PROJECT_INSTRUCTIONS_ID } from "@/instructions";
 import { SUMMARY_SOURCE, type WindowEvent } from "@/window";
@@ -136,9 +137,13 @@ function bulky(label: string): string {
   return `${label} ${"padding ".repeat(40)}`;
 }
 
-function agent(window?: { limit?: number; keepFraction?: number }) {
+function agent(
+  window?: { limit?: number; keepFraction?: number },
+  onUsage?: (usage: ModelUsage) => void,
+) {
   events.length = 0;
   return createUniversalAgent({
+    ...(onUsage !== undefined ? { onUsage } : {}),
     baseURL: `http://localhost:${String(server.port)}`,
     apiKey: "sk-stub",
     model: "stub",
@@ -403,4 +408,66 @@ test("a summarised thread still reads back whole from disk", async () => {
   // The record on disk keeps both turns, whatever the model was shown.
   expect(file).toContain("first");
   expect(file).toContain("second");
+});
+
+/**
+ * The scale and the window, which are easy to get wrong together.
+ *
+ * Both facts here were blind spots found by reading the code rather than by a
+ * failing test, and both made the log lie in the one place it is relied on: a
+ * turn that summarises. The meter used to sit outside the window middleware, so
+ * it counted the whole history rather than the messages actually sent, and the
+ * summarising call — the largest single request this program can make — went
+ * through `model.invoke` directly and was never metered at all.
+ */
+/**
+ * The scale and the window, which are easy to get wrong together.
+ *
+ * Both facts here were blind spots found by reading the code rather than by a
+ * failing test, and both made the log lie in the one place it is relied on: a
+ * turn that summarises. The meter used to sit outside the window middleware, so
+ * it counted the whole history rather than the messages actually sent; and the
+ * summarising call — the largest single request this program can make — goes
+ * through `model.invoke` directly, where no middleware can see it.
+ */
+describe("what the scale sees when the window cuts", () => {
+  test("meters the summarising call under its own name", async () => {
+    const usage: ModelUsage[] = [];
+    const graph = agent(undefined, (record) => usage.push(record));
+
+    promptTokens = 1_900;
+    await turn(graph, "usage-summary", bulky("first"));
+    await turn(graph, "usage-summary", bulky("second"));
+    await turn(graph, "usage-summary", bulky("third"));
+
+    const summaries = usage.filter((record) => record.agent === "summary");
+    expect(usage.some((record) => record.agent === "main")).toBe(true);
+    // One record per summarising call, not one per turn that happened to
+    // summarise: a request is a record, which is the whole contract of the scale.
+    expect(summaries).toHaveLength(
+      events.filter((event) => event.type === "summarized").length,
+    );
+    expect(summaries.length).toBeGreaterThan(0);
+    expect(summaries[0]?.messages).toBe(1);
+  });
+
+  test("counts the messages that were sent, not the ones that were kept", async () => {
+    const usage: ModelUsage[] = [];
+    const graph = agent(undefined, (record) => usage.push(record));
+
+    promptTokens = 1_900;
+    await turn(graph, "usage-view", bulky("first"));
+    await turn(graph, "usage-view", bulky("second"));
+    const state = (await turn(graph, "usage-view", bulky("third"))) as {
+      messages: BaseMessage[];
+    };
+
+    const sent = usage.filter((record) => record.agent === "main").at(-1);
+
+    // The history keeps growing; the view does not. With the meter outside the
+    // window middleware these two were equal, and the log reported a request
+    // larger than the one that was actually made.
+    expect(events.some((event) => event.type === "summarized")).toBe(true);
+    expect(sent?.messages ?? 0).toBeLessThan(state.messages.length);
+  });
 });

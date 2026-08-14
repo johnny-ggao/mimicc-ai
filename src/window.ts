@@ -12,6 +12,7 @@ import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
 import { PROJECT_INSTRUCTIONS_ID } from "./instructions";
+import { usageOf, type ModelUsage } from "./usage";
 
 /**
  * The context window, computed rather than carved out of the history.
@@ -107,6 +108,22 @@ export interface ContextWindowOptions {
   summaryInputTokens?: number;
   /** Told about every summary, and every failure to produce one. */
   onEvent?: (event: WindowEvent) => void;
+  /**
+   * The name the summarising call is billed under.
+   *
+   * A subagent installs this middleware too, and its summary is its own
+   * spending — `"summary"` from two different agents in one log is the column
+   * problem the `agent` field exists to solve.
+   */
+  usageAgent?: string;
+  /**
+   * Told what the summarising call itself cost.
+   *
+   * Optional in the same way `onEvent` is, and wired up for the same reason: the
+   * one request in this program that no middleware can see should not also be
+   * the one nobody is told about.
+   */
+  onUsage?: (usage: ModelUsage) => void;
 }
 
 export type WindowEvent =
@@ -136,6 +153,8 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
   const keep = Math.floor(limit * (options.keepFraction ?? KEEP_FRACTION));
   const summaryInput = options.summaryInputTokens ?? SUMMARY_INPUT_TOKENS;
   const report = options.onEvent ?? (() => {});
+  const meter = options.onUsage ?? (() => {});
+  const meterAs = options.usageAgent ?? "summary";
 
   async function summarize(
     history: BaseMessage[],
@@ -143,8 +162,23 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
   ): Promise<BaseMessage | undefined> {
     const trimmed = tailWithin(history, summaryInput);
     const prompt = SUMMARY_PROMPT.replace("{conversation}", getBufferString(trimmed));
+    const startedAt = Date.now();
     try {
       const reply = await options.model.invoke([new HumanMessage(prompt)]);
+      // Reported by hand because this call does not go through the agent: it is
+      // `model.invoke` on the raw instance, so no middleware wraps it and the
+      // meter never sees it. Left unreported it was the largest single request
+      // the program can make — up to SUMMARY_INPUT_TOKENS — and the only one
+      // absent from the log.
+      meter({
+        agent: meterAs,
+        messages: 1,
+        inputTokens: usageOf(reply)?.input_tokens ?? 0,
+        outputTokens: usageOf(reply)?.output_tokens ?? 0,
+        cacheRead: usageOf(reply)?.input_token_details?.cache_read ?? 0,
+        reasoningTokens: usageOf(reply)?.output_token_details?.reasoning,
+        elapsedMs: Date.now() - startedAt,
+      });
       return new HumanMessage({
         content: `Summary of the earlier part of this conversation:\n\n${reply.text}`,
         additional_kwargs: { lc_source: SUMMARY_SOURCE },

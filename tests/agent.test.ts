@@ -7,7 +7,8 @@ import {
 } from "@langchain/core/messages";
 
 import { CONFIRMATION_POLICY, createUniversalAgent, RECURSION_LIMIT } from "@/agent";
-import { TOOLS } from "@/tools";
+
+import { TASK_TOOL_NAME, TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
 
 // A stubbed model endpoint, so the loop can be exercised without a network or a
@@ -137,6 +138,9 @@ describe("createAgent", () => {
     for (const request of requests) {
       const tools = (request as unknown as { tools?: { function: { name: string } }[] })
         .tools;
+      // Order is pinned because tools are serialised ahead of messages, so a
+      // reshuffle breaks the cached prefix for every request that follows. Task
+      // is last for that reason: it was added after the other six existed.
       expect(tools?.map((tool) => tool.function.name)).toEqual([
         "Read",
         "Write",
@@ -144,6 +148,7 @@ describe("createAgent", () => {
         "Bash",
         "Glob",
         "Grep",
+        TASK_TOOL_NAME,
       ]);
     }
   });
@@ -172,8 +177,11 @@ describe("createAgent", () => {
  * the thing that says so.
  */
 test("every registered tool has an explicit confirmation decision", () => {
+  // Task is not in TOOLS — it is assembled by the agent because it needs the
+  // model — so the registered set is the six plus it. Spelling that out here is
+  // what keeps the check honest for a tool that lives outside the array.
   expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(
-    TOOLS.map((tool) => tool.name).sort(),
+    [...TOOLS.map((tool) => tool.name), TASK_TOOL_NAME].sort(),
   );
 });
 

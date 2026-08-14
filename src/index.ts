@@ -24,12 +24,18 @@ export {
   type WindowEvent,
 } from "./window";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
+export { EXPLORE_PROMPT, EXPLORE_TOOLS, subagentSpecs } from "./subagents";
 export {
   bashTool,
+  createTaskTool,
   editTool,
   globTool,
   grepTool,
   readTool,
   writeTool,
+  SUBAGENT_RECURSION_LIMIT,
+  TASK_TOOL_NAME,
   TOOLS,
+  type SubagentSpec,
+  type TaskToolOptions,
 } from "./tools";

@@ -12,6 +12,15 @@ import { createMiddleware, type AnyAgentMiddleware } from "langchain";
  * invisible without this field.
  */
 export interface ModelUsage {
+  /**
+   * Who made this request: `"main"` for the agent, a subagent's kind for a
+   * dispatch, `"summary"` for the call that compacts the window.
+   *
+   * Without it the log is a single column of numbers from three different
+   * spenders, and the one question worth asking of it — what did dispatching
+   * three explore agents actually cost — cannot be asked at all.
+   */
+  agent: string;
   /** Messages handed to the model on this call. Identifies the lap. */
   messages: number;
   inputTokens: number;
@@ -65,7 +74,10 @@ export interface ModelUsage {
  * chunk's `response_metadata.usage`, and only on the streaming path: the
  * non-streaming branch of that file never attaches it.
  */
-export function usageMeter(report: (usage: ModelUsage) => void): AnyAgentMiddleware {
+export function usageMeter(
+  agent: string,
+  report: (usage: ModelUsage) => void,
+): AnyAgentMiddleware {
   return createMiddleware({
     name: "UsageMeter",
     wrapModelCall: async (request, handler) => {
@@ -73,20 +85,12 @@ export function usageMeter(report: (usage: ModelUsage) => void): AnyAgentMiddlew
       const response = await handler(request);
       const elapsedMs = Date.now() - startedAt;
 
-      // Quarantined cast, and the second of its kind in this codebase.
-      // `usage_metadata` is declared through the generic message-structure
-      // machinery — `$InferMessageProperty<TStructure, "ai", "usage_metadata">`,
-      // @langchain/core/dist/messages/ai.d.ts:15 — and with that structure
-      // parameter left at its default the property collapses to `undefined`, so
-      // the compiler believes the field can never hold a value. The runtime
-      // object is correct; the declaration is not. Same defect class as the
-      // humanInTheLoopMiddleware cast in agent.ts. Try deleting it on the next
-      // @langchain/core bump; verified needed against 1.2.5.
-      const usage = response.usage_metadata as UsageMetadata | undefined;
+      const usage = usageOf(response);
       // A provider that returns no usage is a broken scale, not a free call —
       // report zeroes rather than staying silent, so the gap is visible in the
       // log instead of looking like the model was never called.
       report({
+        agent,
         messages: request.messages.length,
         inputTokens: usage?.input_tokens ?? 0,
         outputTokens: usage?.output_tokens ?? 0,
@@ -98,4 +102,22 @@ export function usageMeter(report: (usage: ModelUsage) => void): AnyAgentMiddlew
       return response;
     },
   }) as AnyAgentMiddleware;
+}
+
+/**
+ * The usage a provider reported on one reply, or undefined when it reported none.
+ *
+ * A quarantined cast, in one place rather than three. `usage_metadata` is
+ * declared through the generic message-structure machinery —
+ * `$InferMessageProperty<TStructure, "ai", "usage_metadata">`,
+ * @langchain/core/dist/messages/ai.d.ts:15 — and with that structure parameter
+ * left at its default the property collapses to `undefined`, so the compiler
+ * believes the field can never hold a value. The runtime object is correct; the
+ * declaration is not. Same defect class as the humanInTheLoopMiddleware cast in
+ * agent.ts. Try deleting it on the next @langchain/core bump; verified needed
+ * against 1.2.5.
+ */
+export function usageOf(message: unknown): UsageMetadata | undefined {
+  return (message as { usage_metadata?: unknown }).usage_metadata as
+    UsageMetadata | undefined;
 }
