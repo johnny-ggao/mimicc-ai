@@ -3,9 +3,9 @@ import { createInterface } from "node:readline/promises";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { RECURSION_LIMIT, type AgentGraph } from "./agent";
+import { RECURSION_LIMIT, type AgentGraph } from "../agents";
 import { markdownStream } from "./markdown";
-import { TASK_TOOL_NAME } from "./tools";
+import { TASK_TOOL_NAME } from "../tools";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";

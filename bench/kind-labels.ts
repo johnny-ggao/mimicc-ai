@@ -3,7 +3,7 @@
  *
  * Run: `bun bench/kind-labels.ts`
  *
- * The identity of a kind (`src/kinds.ts`) is supposed to derive four strings:
+ * The identity of a kind (`src/agents/kinds.ts`) is supposed to derive four strings:
  * the meter's label, the summarising call's label, the `agent` on every window
  * event, and — for a subagent — the type the model dispatches. Unit tests assert
  * each of those, but every one of them is a string arriving from a middleware
@@ -30,13 +30,13 @@
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "../src/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
 import { loadConfig } from "../src/config";
-import { subagentSpecs } from "../src/kinds";
-import { buildSystemPrompt } from "../src/prompt";
+import { subagentSpecs } from "../src/agents";
+import { buildSystemPrompt } from "../src/agents";
 import { createTaskTool } from "../src/tools";
 import type { ModelUsage } from "../src/usage";
-import type { WindowEvent } from "../src/window";
+import type { WindowEvent } from "../src/context";
 
 const FIXTURE = "bench/fixture";
 

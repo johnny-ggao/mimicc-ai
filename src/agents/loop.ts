@@ -12,9 +12,9 @@ import {
 } from "langchain";
 
 import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
-import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "./tools";
-import type { ModelUsage } from "./usage";
-import type { WindowEvent, WindowTuning } from "./window";
+import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
+import type { ModelUsage } from "../usage";
+import type { WindowEvent, WindowTuning } from "../context";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -322,7 +322,7 @@ export function createUniversalAgent(options: AgentOptions) {
     // (measured; @langchain/openai/dist/converters/completions.js:464).
     //
     // Both reach the model, but only one of them is the shape this prompt was
-    // designed against. src/prompt.ts splits static from per-session text so that
+    // designed against. src/agents/prompt.ts splits static from per-session text so that
     // DeepSeek's longest-common-prefix cache keeps hitting; changing the
     // serialisation changes the prefix and resets that cache once for no gain.
     // The block form buys multimodal and per-block cache markers, neither of

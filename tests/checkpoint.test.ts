@@ -17,7 +17,7 @@ import {
 } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "@/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
 import { JsonlSaver, resolveStateDir } from "@/checkpoint";
 import { readTool } from "@/tools";
 

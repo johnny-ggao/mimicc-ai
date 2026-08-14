@@ -81,7 +81,7 @@ Your output is printed in a terminal, not a chat window.
   //   - do not re-read after you edit —— 上下文比 Claude 紧得多，改完复读是纯浪费。
   //
   // Bash 那句「Every command is shown to the user for approval」是**事实陈述**，不是劝导：
-  // 确认门做在 `humanInTheLoopMiddleware` 里（`src/agent.ts` 的 CONFIRMATION_POLICY），
+  // 确认门做在 `humanInTheLoopMiddleware` 里（`src/agents/loop.ts` 的 CONFIRMATION_POLICY），
   // 模型说什么都绕不过。写进正文是因为它会改变模型的行为——知道每条命令都要人点头，
   // 它就不会为了试探而连发三条。
   `## Tools
@@ -115,7 +115,7 @@ Rules:
   //
   // 第 3 步 2026-08-13 整条替换。原文是「去仓库根找 AGENTS.md / CLAUDE.md 并遵守它，
   // It outranks these defaults」，两半都不成立了：
-  //   - 「去找」由 src/instructions.ts 的自动注入接管，模型不必再花一次工具往返；
+  //   - 「去找」由 src/context/instructions.ts 的自动注入接管，模型不必再花一次工具往返；
   //   - 「outranks」与所有权判断**正面冲突**，是这次改动里更重要的一半。AGENTS.md 是仓库里的
   //     文件，谁能提交谁就能写它；让它凌驾于本提示词，等于替任何一个提交背书。现在反过来写死：
   //     它约束不了本提示词，尤其放宽不了 Safety 那一节。见 docs/adr/0001。

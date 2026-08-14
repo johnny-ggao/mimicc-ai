@@ -18,7 +18,7 @@ export interface ModelUsage {
    * that compacts that kind's window.
    *
    * Every one of those is derived from the kind's single identity in
-   * `src/kinds.ts`, which is why there is no bare `"summary"` in this column any
+   * `src/agents/kinds.ts`, which is why there is no bare `"summary"` in this column any
    * more: an unattributed label is exactly where a second kind's spending would
    * have gone to hide.
    *

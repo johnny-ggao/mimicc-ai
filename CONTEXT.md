@@ -80,7 +80,7 @@ _Avoid_: 会话、session
 这程序能跑起来的一类 agent，**主 agent 也是一种**——不只是子 agent 的分类。一种由三样东西
 定义：一个**身份（identity）**（一个字符串）、一份工具清单、一段提示词。身份不是标签，是**唯一
 的名字**：账目、摘要账目（`${身份} summary`）、窗口事件、模型键入的 `subagent_type`、嵌套
-graph 的名字，**全部从它派生**。每一种配的中间件由 `src/kinds.ts` 的 `agentStack` 统一装配，
+graph 的名字，**全部从它派生**。每一种配的中间件由 `src/agents/kinds.ts` 的 `agentStack` 统一装配，
 **顺序在那里被断言，不靠注释**。
 _Avoid_: 角色、role、agent 类型（指这个概念时）
 

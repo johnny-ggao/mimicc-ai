@@ -3,7 +3,7 @@
  *
  * Run: `bun bench/measure-reread.ts`
  *
- * `src/prompt.ts` says "Read before you edit; do not re-read after you edit",
+ * `src/agents/prompt.ts` says "Read before you edit; do not re-read after you edit",
  * and issue 05 proposes turning that from advice into a constraint by recording
  * what has been read into state. The whole ticket is worth doing only if the
  * advice is actually being ignored — and the comment on that rule says outright
@@ -59,9 +59,9 @@ import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { HumanMessage, type BaseMessage, type AIMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "../src/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
 import { loadConfig } from "../src/config";
-import { buildSystemPrompt } from "../src/prompt";
+import { buildSystemPrompt } from "../src/agents";
 import type { ModelUsage } from "../src/usage";
 
 const BENCH = "bench";

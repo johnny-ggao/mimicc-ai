@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 
-import { agentStack, assertMeterInsideWindow, subagentSpecs } from "@/kinds";
+import { agentStack, assertMeterInsideWindow, subagentSpecs } from "@/agents";
 import { usageMeter } from "@/usage";
-import { contextWindow } from "@/window";
+import { contextWindow } from "@/context";
 
 /**
  * The assembler, tested directly — which is the point of it existing.

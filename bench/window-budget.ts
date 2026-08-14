@@ -14,7 +14,7 @@
  */
 import { convertToOpenAITool } from "@langchain/core/utils/function_calling";
 
-import { buildSystemPrompt } from "../src/prompt";
+import { buildSystemPrompt } from "../src/agents";
 import { TOOLS } from "../src/tools";
 import { MAX_FILE_BYTES } from "../src/tools/workspace";
 

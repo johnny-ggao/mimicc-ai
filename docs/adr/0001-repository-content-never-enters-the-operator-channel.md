@@ -25,5 +25,5 @@
 （`name` 字段在 user 分支不上线），所以包裹标签 `<project-instructions path="…">` 是 provenance
 的唯一载体。
 
-权限关系必须由**系统提示词**明说，标签名不承担这个职责。原先 `src/prompt.ts` 里那句
+权限关系必须由**系统提示词**明说，标签名不承担这个职责。原先 `src/agents/prompt.ts` 里那句
 `It outranks these defaults` 是这条决定的反面，已随本决定改写。

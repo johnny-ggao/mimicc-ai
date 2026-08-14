@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 
-import { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "@/prompt";
+import { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "@/agents";
 
 const ENV: PromptEnvironment = {
   cwd: "/tmp/example",

@@ -9,11 +9,10 @@ import { tool } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
 import { z } from "zod";
 
-import { createUniversalAgent } from "@/agent";
+import { createUniversalAgent, EXPLORE_TOOLS, subagentSpecs } from "@/agents";
 import { JsonlSaver } from "@/checkpoint";
-import { EXPLORE_TOOLS, subagentSpecs } from "@/kinds";
 import { createTaskTool, TASK_TOOL_NAME, type SubagentSpec } from "@/tools";
-import type { WindowEvent } from "@/window";
+import type { WindowEvent } from "@/context";
 import type { ModelUsage } from "@/usage";
 
 /**

@@ -88,7 +88,10 @@ test("reports a malformed regular expression", async () => {
 test("defaults the grep glob to the whole tree", async () => {
   const hits = await grepTool.invoke({ pattern: "createUniversalAgent" });
 
-  expect(hits).toContain("src/agent.ts:");
+  // A real path in a subdirectory, because the claim is that the default glob
+  // recurses — an assertion against a file in `src/` alone would still pass if
+  // the default were `src/*`.
+  expect(hits).toContain("src/agents/loop.ts:");
 });
 
 /* ---------- 与 ToolNode 的接缝 ---------- */
@@ -114,7 +117,7 @@ test("a guard rejection comes back as a tool message, not an exception", async (
 });
 
 // The system prompt names all six by name and describes what each one does, so
-// the registry and `src/prompt.ts` are one specification in two places. A tool
+// the registry and `src/agents/prompt.ts` are one specification in two places. A tool
 // the prompt promises but the registry lacks costs a whole lap of the loop:
 // ToolNode turns "not found" into a tool message and the model tries again.
 test("registers the six tools the prompt advertises, in order", () => {

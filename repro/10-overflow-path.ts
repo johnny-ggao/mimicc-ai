@@ -1,7 +1,7 @@
 /** 票 10 兜底路径的诊断：溢出被接住了吗，接住之后切点动了吗。stub，不花钱。 */
 import { HumanMessage } from "@langchain/core/messages";
-import { createUniversalAgent, RECURSION_LIMIT } from "../src/agent";
-import type { WindowEvent } from "../src/window";
+import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
+import type { WindowEvent } from "../src/context";
 
 let promptTokens = 1;
 let overflowNext = false;

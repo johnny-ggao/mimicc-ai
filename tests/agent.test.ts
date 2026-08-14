@@ -6,7 +6,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import { CONFIRMATION_POLICY, createUniversalAgent, RECURSION_LIMIT } from "@/agent";
+import { CONFIRMATION_POLICY, createUniversalAgent, RECURSION_LIMIT } from "@/agents";
 
 import { TASK_TOOL_NAME, TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
@@ -305,7 +305,7 @@ test("does not dedup a seeded system message against the parameter", async () =>
  * `normalizeSystemPrompt` passes a SystemMessage through untouched but turns a
  * plain string into content blocks, and the two go on the wire differently:
  * `content: "..."` versus `content: [{ type: "text", text: "..." }]`. The prompt
- * in src/prompt.ts is built to be a byte-stable cache prefix, so which one we
+ * in src/agents/prompt.ts is built to be a byte-stable cache prefix, so which one we
  * send is not cosmetic — and nothing else in the codebase would notice if it
  * flipped.
  */

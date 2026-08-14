@@ -4,12 +4,12 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { HumanMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { createUniversalAgent } from "@/agent";
+import { createUniversalAgent } from "@/agents";
 import {
   MAX_INSTRUCTION_BYTES,
   PROJECT_INSTRUCTIONS_ID,
   readProjectInstructions,
-} from "@/instructions";
+} from "@/context";
 import type { Logger } from "@/logger";
 
 /**

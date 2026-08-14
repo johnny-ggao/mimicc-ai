@@ -9,7 +9,7 @@
  * the target moved or became ambiguous — and that the one real hole is `Write`,
  * which replaces the whole file and silently discards anything written since the
  * read. That is a data-loss bug, but its severity depends on something not yet
- * observed: whether the model ever takes that path. `src/prompt.ts` tells it
+ * observed: whether the model ever takes that path. `src/agents/prompt.ts` tells it
  * Write is for "creating a new file, or replacing one you have already read in
  * full" and "never ... to make a small change", so it may never happen.
  *
@@ -29,9 +29,9 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { HumanMessage, type AIMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "../src/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
 import { loadConfig } from "../src/config";
-import { buildSystemPrompt } from "../src/prompt";
+import { buildSystemPrompt } from "../src/agents";
 
 const SOURCE = "bench/fixture-edit";
 const WORK = "bench-work";

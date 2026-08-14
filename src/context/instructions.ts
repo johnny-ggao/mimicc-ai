@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
-import type { Logger } from "./logger";
+import type { Logger } from "../logger";
 
 /**
  * The files a repository uses to tell an agent how to work in it, in the order

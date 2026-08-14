@@ -1,10 +1,10 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { AnyAgentMiddleware } from "langchain";
 
-import { projectInstructions } from "./instructions";
-import { globTool, grepTool, readTool, type SubagentSpec } from "./tools";
-import { usageMeter, type ModelUsage } from "./usage";
-import { contextWindow, type WindowEvent, type WindowTuning } from "./window";
+import { projectInstructions } from "../context";
+import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
+import { usageMeter, type ModelUsage } from "../usage";
+import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
 
 /**
  * Which kinds of agent this program runs, and what each one is fitted with.
@@ -21,7 +21,7 @@ import { contextWindow, type WindowEvent, type WindowTuning } from "./window";
  * Because a **kind** turned out to be the wider word. The main agent is also a
  * kind: it has an identity, it is metered, it manages its own window, it gets
  * the repository's instructions. Everything a kind needs comes from
- * {@link agentStack} here, and `src/agent.ts` calls it exactly as
+ * {@link agentStack} here, and `src/agents/loop.ts` calls it exactly as
  * {@link subagentSpecs} does — the only difference between the two is what
  * `agent.ts` adds afterwards, which is the confirmation gate, and that gate is
  * the one thing a subagent may not have (docs/adr/0003).
@@ -40,7 +40,7 @@ export const EXPLORE_TOOLS = [readTool, globTool, grepTool];
 /**
  * The Explore agent's system prompt.
  *
- * Separate from `src/prompt.ts` because the contract is different, not because
+ * Separate from `src/agents/prompt.ts` because the contract is different, not because
  * the wording is. An Explore agent is single-shot: nobody will ask it a follow-up, and
  * its working notes are discarded, so anything it does not put in the report is
  * lost. That is why the output rules read as hard constraints — they are the

@@ -5,11 +5,10 @@ import { join } from "node:path";
 
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "@/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
 import type { ModelUsage } from "@/usage";
 import { JsonlSaver } from "@/checkpoint";
-import { PROJECT_INSTRUCTIONS_ID } from "@/instructions";
-import { SUMMARY_SOURCE, type WindowEvent } from "@/window";
+import { PROJECT_INSTRUCTIONS_ID, SUMMARY_SOURCE, type WindowEvent } from "@/context";
 
 /**
  * One seam, two observation points — which is the whole reason this ticket can

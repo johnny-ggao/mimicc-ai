@@ -196,7 +196,7 @@ values 事件。不加判断地读 `state.messages` 会直接崩，这不是缺�
 
 ## 核心循环
 
-循环建在 **LangGraph** 上（`src/agent.ts`）。整个文件里**没有 `while`**：
+循环建在 **LangGraph** 上（`src/agents/loop.ts`）。整个文件里**没有 `while`**：
 
 ```mermaid
 flowchart LR
@@ -346,7 +346,7 @@ tab、四个空格、行尾空格显示成同一种「什么都没有」。所�
 - `Bash` 框不住。它能 curl 外传、能 rm、能改 git 历史，而「这条命令安不安全」是个解析军备
   竞赛（`foo && rm -rf` 怎么算）。**所以一律问**，不写命令分类器。
 
-实现是 `humanInTheLoopMiddleware`（`langchain`），策略表在 `src/agent.ts` 的
+实现是 `humanInTheLoopMiddleware`（`langchain`），策略表在 `src/agents/loop.ts` 的
 `CONFIRMATION_POLICY`。**中间件对没列进表的工具是自动放行**（fail-open），所以六个工具全部
 显式列出，并且有测试断言「注册表和策略表逐项对应」——新加一个工具而不表态，测试会挂。
 
@@ -382,7 +382,7 @@ afterModel / afterAgent）外加 `wrapModelCall` / `wrapToolCall`，以及它们
 ### 那上面那张图还留着干嘛
 
 `createAgentGraph` **不再被任何运行代码调用**，但它没被删，理由写在
-`src/agent.ts` 的注释里，一句话版本：**它是这个仓库要产出的东西本身**（把核心循环建在
+`src/agents/loop.ts` 的注释里，一句话版本：**它是这个仓库要产出的东西本身**（把核心循环建在
 LangGraph 上并弄懂它），同时是对照组。
 
 `tests/agent.test.ts` 用 `describe.each` 把两条循环跑同一组断言：同样的消息序列、同样的工具
@@ -420,7 +420,7 @@ LangGraph 上并弄懂它），同时是对照组。
   想强制调工具得靠提示词，或先关 thinking。
 - **v4 两个模型都支持 `tools`**（实测）。`temperature` / `top_p` 在 v4 上未实测；旧的
   `deepseek-reasoner` 三者都不支持，适配器只在字段存在时才发送，这个防御保留着。
-- 余额不足是 **402**，OpenAI 用 429——这是唯一的状态码语义差异。`src/repl.ts` 的
+- 余额不足是 **402**，OpenAI 用 429——这是唯一的状态码语义差异。`src/console/repl.ts` 的
   `describe()` 按 `status` 给提示，因为跨包的 `instanceof` 判别不可靠（见「已知约束」）。
 - `usage` 里除 OpenAI 标准字段（`prompt_tokens_details.cached_tokens`、
   `completion_tokens_details.reasoning_tokens`）外，还叠加了私有的

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { fromSubagent, summarizeCall } from "@/repl";
+import { fromSubagent, summarizeCall } from "@/console";
 
 /**
  * The console is a debugging shell and mostly out of scope for tests — but this

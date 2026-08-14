@@ -1,13 +1,13 @@
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { createUniversalAgent } from "./agent";
+import { createUniversalAgent } from "./agents";
 import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
-import { readProjectInstructions } from "./instructions";
+import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
-import { buildSystemPrompt, type PromptEnvironment } from "./prompt";
-import { runRepl } from "./repl";
+import { buildSystemPrompt, type PromptEnvironment } from "./agents";
+import { runRepl } from "./console";
 
 async function main(): Promise<void> {
   const config = loadConfig();

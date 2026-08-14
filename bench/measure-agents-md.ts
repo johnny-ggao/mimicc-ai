@@ -36,11 +36,11 @@
  */
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "../src/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
 import { loadConfig } from "../src/config";
-import { readProjectInstructions } from "../src/instructions";
+import { readProjectInstructions } from "../src/context";
 import { createLogger } from "../src/logger";
-import { buildSystemPrompt } from "../src/prompt";
+import { buildSystemPrompt } from "../src/agents";
 import type { ModelUsage } from "../src/usage";
 
 const BENCH = "bench";

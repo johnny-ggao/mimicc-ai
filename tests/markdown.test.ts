@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { markdownStream, renderLine, STYLES, stylingEnabled } from "@/markdown";
+import { markdownStream, renderLine, STYLES, stylingEnabled } from "@/console";
 
 /**
  * Two ways to read this file, and both are needed.

@@ -1,12 +1,25 @@
 // Public surface of the package. Keep this file side-effect free — the runnable
 // entry point lives in src/main.ts.
+//
+// Everything comes through a directory's barrel rather than a file inside it, so
+// this list says what the package offers by area — agents, context, console,
+// tools, persistence — and moving a file within an area does not touch it.
 export {
+  agentStack,
+  assertMeterInsideWindow,
+  buildSystemPrompt,
   createUniversalAgent,
+  EXPLORE_PROMPT,
+  EXPLORE_TOOLS,
   MAIN_AGENT,
   RECURSION_LIMIT,
+  STATIC_PROMPT,
+  subagentSpecs,
+  type AgentEnvironment,
   type AgentGraph,
   type AgentOptions,
-} from "./agent";
+  type PromptEnvironment,
+} from "./agents";
 export {
   CorruptSessionFile,
   JsonlSaver,
@@ -15,31 +28,27 @@ export {
   type StateLocation,
 } from "./checkpoint";
 export { loadConfig, type Config } from "./config";
-export { createLogger, type Logger, type LogLevel } from "./logger";
 export {
   markdownStream,
   renderLine,
+  runRepl,
   stylingEnabled,
   type MarkdownStream,
-} from "./markdown";
+  type ReplOptions,
+} from "./console";
 export {
   contextWindow,
   KEEP_FRACTION,
+  projectInstructions,
+  PROJECT_INSTRUCTIONS_ID,
+  readProjectInstructions,
   TRIGGER_FRACTION,
   WINDOW_LIMIT,
   type ContextWindowOptions,
   type WindowEvent,
   type WindowTuning,
-} from "./window";
-export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
-export {
-  agentStack,
-  assertMeterInsideWindow,
-  EXPLORE_PROMPT,
-  EXPLORE_TOOLS,
-  subagentSpecs,
-  type AgentEnvironment,
-} from "./kinds";
+} from "./context";
+export { createLogger, type Logger, type LogLevel } from "./logger";
 export {
   bashTool,
   createTaskTool,
@@ -54,3 +63,4 @@ export {
   type SubagentSpec,
   type TaskToolOptions,
 } from "./tools";
+export { usageMeter, usageOf, type ModelUsage } from "./usage";

@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HumanMessage } from "@langchain/core/messages";
-import { createUniversalAgent, RECURSION_LIMIT } from "../src/agent";
+import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
 import { JsonlSaver } from "../src/checkpoint";
 
 let calls = 0;

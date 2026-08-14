@@ -12,7 +12,7 @@ import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
 import { PROJECT_INSTRUCTIONS_ID } from "./instructions";
-import { usageOf, type ModelUsage } from "./usage";
+import { usageOf, type ModelUsage } from "../usage";
 
 /**
  * The context window, computed rather than carved out of the history.
