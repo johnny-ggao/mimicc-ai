@@ -4,13 +4,15 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
 import { RECURSION_LIMIT, type AgentGraph } from "./agent";
+import { TASK_TOOL_NAME } from "./tools";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 const BANNER = [
   "mimicc-ai — type a message and press enter",
-  "  tools    Read · Write · Edit · Bash · Glob · Grep",
+  "  tools    Read · Write · Edit · Bash · Glob · Grep · Task",
+  "  Task     sends a read-only explore agent; its searching stays out of the conversation",
   "  Bash     stops and asks before it runs; the others do not",
   "  /clear   start a new thread; the old one stays in the checkpointer",
   "  /exit    quit (same as Ctrl+D)",
@@ -234,6 +236,8 @@ async function runTurn(
 ): Promise<TurnResult> {
   let requests: ActionRequest[] | null = null;
   let dimmed = false;
+  // When the last activity dot was printed; see the subagent branch below.
+  let lastDot = 0;
   let error: unknown = null;
 
   const openDim = (): void => {
@@ -277,8 +281,31 @@ async function runTurn(
         continue;
       }
 
-      const [chunk] = payload as [BaseMessage];
+      const [chunk, metadata] = payload as [BaseMessage, unknown];
       if (chunk.getType() === "tool") continue; // Rendered from state instead.
+
+      if (fromSubagent(metadata)) {
+        // Throttled to one a second, not one per chunk: an explore agent writing five
+        // hundred tokens produced five hundred dots, which is a different kind
+        // of noise. At this rate the row of dots is roughly how long the explore agents
+        // have been running, which is the only thing it should be saying.
+        const now = Date.now();
+        if (now - lastDot < 1000) continue;
+        lastDot = now;
+
+        // A subagent's tokens are dropped rather than rendered. They arrive on
+        // this same stream — inherited through AsyncLocalStorage, so there is
+        // nothing to switch off at the call site — and with two explore agents running
+        // they interleave character by character into something nobody can read
+        // (measured; see the transcript in the T5 notes). Nothing is lost: the
+        // report comes back as a tool result, and the agent relays it.
+        //
+        // One dim dot per chunk, because the alternative is a silent minute. It
+        // says the run is alive without printing anything that has to be read.
+        openDim();
+        process.stdout.write("·");
+        continue;
+      }
 
       const reasoning = chunk.additional_kwargs["reasoning_content"];
       if (typeof reasoning === "string" && reasoning.length > 0) {
@@ -306,6 +333,55 @@ async function runTurn(
   return { requests, rendered, error };
 }
 
+/** How much of a tool call's arguments fits on one line of the transcript. */
+const CALL_WIDTH = 76;
+
+/**
+ * One line naming a tool call, short enough to read at a glance.
+ *
+ * `Task` is singled out, and it earns it: dispatches are the one call that comes
+ * in threes, and the serialised arguments of three of them are identical for the
+ * first sixty characters — `{"description":"Read /Users/…/src` — so the default
+ * rendering printed three indistinguishable lines. Leading with the kind and
+ * then the objective is what makes concurrent explore agents tellable apart, which is
+ * the whole point of showing them.
+ */
+export function summarizeCall(name: string, args: unknown): string {
+  const fields = (args ?? {}) as { description?: unknown; subagent_type?: unknown };
+
+  if (name === TASK_TOOL_NAME && typeof fields.description === "string") {
+    const kind = typeof fields.subagent_type === "string" ? fields.subagent_type : "?";
+    return `${name}[${kind}] ${clip(fields.description, CALL_WIDTH)}`;
+  }
+
+  return `${name} ${clip(JSON.stringify(args), CALL_WIDTH)}`;
+}
+
+function clip(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 3)}...` : text;
+}
+
+/**
+ * Whether a streamed chunk came from a subagent rather than from the agent.
+ *
+ * The obvious discriminator is the message's `name` — the agent's own messages
+ * carry `"model"`, a subagent's carry its kind — and it is the wrong one:
+ * measured, `name` is absent on *streamed* chunks and only appears on the
+ * finished message (`repro/12-subagent-stream.ts`).
+ *
+ * What does distinguish them is nesting depth, in the metadata that rides
+ * alongside every chunk. The agent's own model chunks carry a single-segment
+ * `checkpoint_ns` (`model_request:<id>`); a subagent's carry a nested one
+ * (`tools:<id>|model_request:<id>`), and `|` is langgraph's namespace separator.
+ * Depth, not identity — which is also why this keeps working if a second kind of
+ * subagent is registered.
+ */
+export function fromSubagent(metadata: unknown): boolean {
+  const namespace = (metadata as { checkpoint_ns?: unknown } | undefined)
+    ?.checkpoint_ns;
+  return typeof namespace === "string" && namespace.includes("|");
+}
+
 /**
  * Prints one dim line per tool call and per result, for the messages that have
  * appeared since the last time we looked. Returns the new watermark.
@@ -323,9 +399,8 @@ function renderStructure(
         .tool_calls;
       for (const call of calls ?? []) {
         closeDim();
-        const args = JSON.stringify(call.args);
         process.stdout.write(
-          `\n${DIM}· ${call.name} ${args.length > 64 ? `${args.slice(0, 61)}...` : args}${RESET}`,
+          `\n${DIM}· ${summarizeCall(call.name, call.args)}${RESET}`,
         );
       }
     }
