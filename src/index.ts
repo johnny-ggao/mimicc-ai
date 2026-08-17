@@ -9,6 +9,7 @@ export {
   assertMeterInsideWindow,
   buildSystemPrompt,
   createUniversalAgent,
+  DURABILITY,
   EXPLORE_PROMPT,
   EXPLORE_TOOLS,
   MAIN_AGENT,

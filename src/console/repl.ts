@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { RECURSION_LIMIT, type AgentGraph } from "../agents";
+import { DURABILITY, RECURSION_LIMIT, type AgentGraph } from "../agents";
 import { markdownStream } from "./markdown";
 import { TASK_TOOL_NAME } from "../tools";
 
@@ -265,6 +265,7 @@ async function runTurn(
     const stream = (await graph.stream(input, {
       streamMode: ["messages", "values"],
       recursionLimit: RECURSION_LIMIT,
+      durability: DURABILITY,
       signal,
       configurable: { thread_id: thread },
     })) as AsyncIterable<[string, unknown]>;

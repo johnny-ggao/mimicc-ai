@@ -18,6 +18,7 @@
 export {
   createUniversalAgent,
   CONFIRMATION_POLICY,
+  DURABILITY,
   MAIN_AGENT,
   RECURSION_LIMIT,
   registeredTools,

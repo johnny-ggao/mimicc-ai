@@ -17,7 +17,7 @@ import {
 } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
+import { createUniversalAgent, DURABILITY, RECURSION_LIMIT } from "@/agents";
 import { JsonlSaver, resolveStateDir } from "@/checkpoint";
 import { readTool } from "@/tools";
 
@@ -397,4 +397,136 @@ test("a turn paused at the confirmation gate resumes after a restart", async () 
   const kinds = resumed.messages.map((message: BaseMessage) => message.getType());
   expect(kinds).toContain("tool");
   expect(resumed.messages.at(-1)?.getType()).toBe("ai");
+});
+
+/**
+ * `durability: "sync"` — what it buys, and why the test has to slow the disk down
+ * to see it.
+ *
+ * The difference between `"sync"` and the default `"async"` is *when* a checkpoint
+ * reaches the disk, and in a process that runs to completion everything reaches
+ * the disk eventually. So the honest in-process observation is not "did it land"
+ * but **"did the run wait for it"** — and that is only visible if landing takes
+ * long enough to notice. Hence `SlowSaver`: every `put` sleeps before it appends,
+ * and the stub records how many writes were still in flight when the model was
+ * next called.
+ *
+ * Under `"sync"` the barrier at `pregel/loop.js:475` sits between the checkpoint
+ * and the next superstep's tasks, so no model request can arrive with a write
+ * outstanding. Under the default it can, and the second half of this test asserts
+ * exactly that — a guarantee that cannot fail is not being tested.
+ *
+ * The behaviour this protects against a real crash is pinned in
+ * `repro/13-crash-mid-tool.ts`, which does the SIGKILL that a unit test cannot.
+ */
+class SlowSaver extends JsonlSaver {
+  inFlight = 0;
+  readonly seenInFlight: number[] = [];
+
+  override async put(
+    ...args: Parameters<JsonlSaver["put"]>
+  ): ReturnType<JsonlSaver["put"]> {
+    this.inFlight += 1;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return await super.put(...args);
+    } finally {
+      this.inFlight -= 1;
+    }
+  }
+}
+
+async function writesOutstandingDuringRun(
+  durability: "sync" | undefined,
+): Promise<number[]> {
+  const saver = new SlowSaver(stateDir());
+  const observed: number[] = [];
+  const local = Bun.serve({
+    port: 0,
+    fetch() {
+      observed.push(saver.inFlight);
+      const lap = observed.length;
+      return Response.json(
+        completion(
+          `chatcmpl-slow-${String(lap)}`,
+          lap === 1
+            ? {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call_slow_read",
+                    type: "function",
+                    function: { name: "Read", arguments: '{"path":"package.json"}' },
+                  },
+                ],
+              }
+            : { role: "assistant", content: "done" },
+          lap === 1 ? "tool_calls" : "stop",
+        ),
+      );
+    },
+  });
+
+  try {
+    const graph = createUniversalAgent({
+      baseURL: `http://localhost:${String(local.port)}`,
+      apiKey: "sk-stub",
+      model: "stub",
+      checkpointer: saver,
+    });
+    await graph.invoke(
+      { messages: [new HumanMessage("read it")] },
+      {
+        recursionLimit: RECURSION_LIMIT,
+        configurable: { thread_id: "durability" },
+        ...(durability === undefined ? {} : { durability }),
+      },
+    );
+  } finally {
+    void local.stop(true);
+  }
+  // The first request happens before anything has been written, so it is never
+  // evidence either way.
+  return observed.slice(1);
+}
+
+test("durability sync makes the run wait for each checkpoint to land", async () => {
+  expect(DURABILITY).toBe("sync");
+  const outstanding = await writesOutstandingDuringRun(DURABILITY);
+
+  expect(outstanding.length).toBeGreaterThan(0);
+  expect(outstanding.every((count) => count === 0)).toBe(true);
+});
+
+test("without it a model call can happen while a checkpoint is still in flight", async () => {
+  // The control. If this ever goes green the test above proves nothing, because
+  // it would be passing on a guarantee the default already gives.
+  const outstanding = await writesOutstandingDuringRun(undefined);
+
+  expect(outstanding.some((count) => count > 0)).toBe(true);
+});
+
+/**
+ * `checkpointDuring: false` maps silently to `durability: "exit"`
+ * (`pregel/index.js:886-889`), which writes nothing until the run ends — a kill
+ * mid-turn then loses everything. Nobody passes it today; this is the tripwire for
+ * the day somebody adds it as a "write less to disk" optimisation.
+ */
+test("nothing in src reaches for checkpointDuring", async () => {
+  const hits = await Array.fromAsync(
+    new Bun.Glob("src/**/*.ts").scan({ cwd: join(import.meta.dir, "..") }),
+  );
+  // Comment lines are skipped, because the constant's own doc block names the
+  // thing it is warning about. Crude — a `//` trailing a statement would slip
+  // through — but the failure this guards is somebody *passing* the option, and
+  // that lands at the start of a line in a config object.
+  const offenders = hits.filter((file) =>
+    readFileSync(join(import.meta.dir, "..", file), "utf8")
+      .split("\n")
+      .filter((line) => !/^\s*(\*|\/\/|\/\*)/.test(line))
+      .some((line) => line.includes("checkpointDuring")),
+  );
+
+  expect(offenders).toEqual([]);
 });

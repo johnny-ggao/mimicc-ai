@@ -28,6 +28,43 @@ import type { WindowEvent, WindowTuning } from "../context";
 export const RECURSION_LIMIT = 24;
 
 /**
+ * When a checkpoint has to be **on disk** rather than merely handed to the saver.
+ *
+ * LangGraph queues its checkpoint writes and does not await them: `_putCheckpoint`
+ * calls `_checkpointerPutAfterPrevious(...)` and drops the promise into a Set
+ * (`pregel/loop.js:814`, `:164-172`). The `await` you see on `_putCheckpoint`
+ * awaits the *function*, not the write. The only barrier during a run is
+ * `pregel/loop.js:475` — `if (this.durability === "sync") await
+ * this._awaitCheckpointerPromises()` — and it sits between `_putCheckpoint`
+ * (`:474`) and `_prepareNextTasks` (`:487`).
+ *
+ * That position is the whole point. The model node's writes include one `Send`
+ * per tool call, each carrying `lg_tool_call` — the tool name and its arguments —
+ * into the `__pregel_tasks` channel, which is checkpointed like any other
+ * (`pregel/index.js:291`, `channels/topic.js:78-81`). So the sentence "I am about
+ * to run these N tools with these arguments" is already in the checkpoint; `sync`
+ * is what makes it *durable before the tools start*.
+ *
+ * Measured, not assumed (`repro/13-crash-mid-tool.ts`): SIGKILL on the tool's
+ * first line, then reopen the same thread. Under the default `"async"` the
+ * pending calls are gone and the restart is not a resume at all — it replays the
+ * whole batch from an earlier checkpoint, which shows up as *different task ids*
+ * (they are uuid5, so a real resume reproduces them exactly). Under `"sync"` the
+ * calls are on disk and the ids match.
+ *
+ * The cost is one disk wait per superstep boundary. Measured on this saver it is
+ * inside the noise — 2.5ms vs 2.3ms for a six-lap turn, unchanged when the state
+ * is padded to 200KB — because the write is a local append and any real model
+ * call is three orders of magnitude slower.
+ *
+ * ⚠️ Never express this as `checkpointDuring: false`. That is the old spelling and
+ * it maps silently to `durability: "exit"` (`pregel/index.js:886-889`), which
+ * writes *nothing* during the run and flushes at the end — a kill then loses the
+ * entire turn. Passing both throws.
+ */
+export const DURABILITY = "sync" as const;
+
+/**
  * The main agent's identity: what its requests are billed under, what its window
  * events are attributed to, and — via `${identity} summary` — what its
  * summarising calls are called.
@@ -131,6 +168,14 @@ export interface AgentGraph {
     options: {
       streamMode: ["messages", "values"];
       recursionLimit: number;
+      /**
+       * Required, not optional, and that is the point: it is a per-call option
+       * with a default (`"async"`) that silently gives up crash durability, so a
+       * new call site that forgets it would be wrong in a way nothing observes
+       * until a process actually dies. Making the type demand it moves that from
+       * "a test might catch it" to "it does not compile". See {@link DURABILITY}.
+       */
+      durability: typeof DURABILITY;
       signal: AbortSignal;
       configurable: { thread_id: string };
     },
