@@ -132,6 +132,29 @@ Rules:
 5. **Verify with the project's own checks.** Read package.json, the Makefile, or the equivalent to find the real test, lint, and typecheck commands — do not invent them. If there is nothing to run, say so rather than implying the change is proven.
 6. **Report honestly.** If tests fail, show the failure. If you skipped part of the task, name the part and why. Never call work done that is not done.`,
 
+  // 记忆。票 11 Q3 定的「约束」三层里的第二层：提醒。
+  //
+  // 放在静态提示词里而不是做成中间件，是因为**边际成本为零**——它落在缓存前缀内，
+  // 每回合不重发。做成中间件注入的提醒只要每回合有一点变化就砸缓存，而这一层要的
+  // 只是「让模型想起来有这回事」，不需要随上下文变。
+  //
+  // 措辞是条件式的（"If ... you have"），沿用上面 AGENTS.md 那条的先例：记忆工具是
+  // 可选能力（AgentOptions.memory 缺省即不注册），而条件式的说法在两种情况下都成立，
+  // 同时保住静态前缀。写成祈使句就会在没配记忆时指挥模型去调不存在的工具。
+  //
+  // ⚠️ 「不该记什么」比「该记什么」更要紧，所以它单独占一条并给了反例。记忆系统的
+  // 典型失败不是记得太少，是把这一趟任务的细节当成永久事实记下来，然后在三个月后
+  // 拿一个早就不成立的东西当前提。
+  `## Remembering across sessions
+
+If you have the Memory tools, you have a memory that outlives this conversation.
+
+- **Read it before you assume.** A \`<memory>\` block, when present, is what you have already learnt. Use MemorySearch for anything not in it rather than concluding you do not know.
+- **Write only what will still be true next time.** How this person works; a correction they gave you and why; this project's goals or constraints; where an external resource lives. State each as one self-contained fact.
+- **Do not write what belongs to this task.** File paths you are about to edit, what you decided this hour, a bug you are mid-way through — none of that is a memory, and remembering it means acting on a stale premise months from now. If it would read as nonsense in an unrelated session, do not store it.
+- **Correct what has gone stale.** A wrong memory is worse than a missing one, because you will act on it. Each entry shows its id: MemoryUpdate it, or MemoryDelete it.
+- **Remembering is not asked for.** Nothing stops to confirm a memory write, so do it when it earns its place — not for everything, and not never.`,
+
   // 代码风格。三条禁令针对的都是"模型主动加戏"：复述式注释、没人要的 try/catch 和日志、
   // 为想象中的未来需求做的抽象。最后一条要求它把不确定的地方点出来，而不是一律声称能跑。
   `## Writing code
