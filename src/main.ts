@@ -37,6 +37,8 @@ async function main(): Promise<void> {
     systemPrompt,
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
     checkpointer: new JsonlSaver(stateDir),
+    // The same path, so a tool call's journal lands beside its thread's file.
+    stateDir,
     // One line per request to the provider. This is the scale every
     // context-engineering change is weighed on, so it is wired up before the
     // first such change rather than after.

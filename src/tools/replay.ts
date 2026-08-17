@@ -1,5 +1,3 @@
-import type { ClientTool } from "@langchain/core/tools";
-
 /**
  * What a tool promises about being run twice.
  *
@@ -46,7 +44,7 @@ export const NEVER_REPLAY = { [REPLAY_KEY]: "never" } as const;
  * defaulting to `safe` is running a deletion twice. pi settles it the same way —
  * *omission means "never"* (`packages/agent/docs/harness.md:2611`).
  */
-export function replayOf(tool: ClientTool): Replay {
+export function replayOf(tool: object): Replay {
   return declaredReplay(tool) ?? "never";
 }
 
@@ -59,7 +57,15 @@ export function replayOf(tool: ClientTool): Replay {
  * `safe` and forgot to say so does not fail — it just quietly costs a re-read
  * that could have been free**, and that is the kind of thing nobody notices.
  */
-export function declaredReplay(tool: ClientTool): Replay | undefined {
+export function declaredReplay(tool: object): Replay | undefined {
+  // A quarantined cast, and the fifth appearance of one declaration defect in
+  // this repository — see the same note in usage.ts, agents/loop.ts and
+  // context/projection.ts. `metadata` is a field of the object `tool()` takes
+  // (@langchain/core/dist/tools/types.d.ts:70) and it is there at runtime
+  // (measured), but `StructuredToolInterface` does not declare it, so the
+  // compiler believes no tool can have one. Taking `object` rather than a tool
+  // type is the other half: `wrapToolCall` hands over `ClientTool | ServerTool`,
+  // and those two share almost nothing. Retry on the next @langchain/core bump.
   const value = (tool as { metadata?: Record<string, unknown> }).metadata?.[REPLAY_KEY];
   return value === "safe" || value === "never" ? value : undefined;
 }

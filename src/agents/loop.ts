@@ -12,6 +12,7 @@ import {
 } from "langchain";
 
 import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
+import { toolRecovery } from "./recovery";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
@@ -120,6 +121,15 @@ export interface AgentOptions {
    * process is not a history.
    */
   checkpointer?: BaseCheckpointSaver;
+  /**
+   * Where thread files live, so tool calls can be journalled beside them.
+   *
+   * Absent means no journalling, and that is the honest default rather than a
+   * missing feature: without a directory there is no durable thread either, so
+   * there would be nothing for a recovered call to be recovered *into*. `main.ts`
+   * passes the same path it hands the saver.
+   */
+  stateDir?: string;
   /**
    * Told whenever the context window is recomputed.
    *
@@ -418,6 +428,12 @@ export function createUniversalAgent(options: AgentOptions) {
   const middleware: AnyAgentMiddleware[] = [
     ...agentStack(MAIN_AGENT, env),
     confirmationGate(),
+    // Appended here for the same reason the gate is: it is the main agent's
+    // alone. A subagent has `checkpointer: false`, so there is no thread for a
+    // journal to sit beside — see the note in tools/task.ts.
+    ...(options.stateDir !== undefined
+      ? [toolRecovery({ directory: options.stateDir })]
+      : []),
   ];
 
   return createAgent({

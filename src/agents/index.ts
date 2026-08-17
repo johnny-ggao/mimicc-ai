@@ -34,3 +34,4 @@ export {
   type AgentEnvironment,
 } from "./kinds";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
+export { interruptedText, toolRecovery, type ToolRecoveryOptions } from "./recovery";
