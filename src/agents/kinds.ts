@@ -2,7 +2,7 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { AnyAgentMiddleware } from "langchain";
 
 import { pinTurnTask, projectInstructions } from "../context";
-import type { MemoryStore } from "../memory";
+import { injectMemory, type MemoryStore } from "../memory";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { usageMeter, type ModelUsage } from "../usage";
 import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
@@ -135,7 +135,7 @@ export function agentStack(
   identity: string,
   environment: AgentEnvironment,
 ): AnyAgentMiddleware[] {
-  const { model, instructions, onUsage, onWindow, window } = environment;
+  const { model, instructions, memory, onUsage, onWindow, window } = environment;
 
   const stack = [
     // Outside the meter, because it decides which messages are sent — and the
@@ -158,6 +158,14 @@ export function agentStack(
     // matter either: the instructions arrive pinned, so PinTurnTask skips them
     // whichever order they run in.
     ...(instructions !== undefined ? [projectInstructions(instructions)] : []),
+    // A third beforeAgent hook, and it joins them for the same reason: it runs
+    // once per turn, outside the loop, so five tool laps still inject once. It
+    // arrives pinned, so PinTurnTask skips it whichever order they run in.
+    //
+    // ⚠️ Only the main agent has a store — see the note on `AgentEnvironment.memory`.
+    // An Explore is stateless by design, so there is nothing to inject and this
+    // slot is empty for it. That is decided, not incidental.
+    ...(memory !== undefined ? [injectMemory(memory)] : []),
     pinTurnTask(),
   ];
 

@@ -16,3 +16,4 @@ export {
   type WriteContext,
 } from "./store";
 export { createMemoryTools, type MemoryToolOptions } from "./tools";
+export { injectMemory, MAX_INJECTED_BYTES, MEMORY_ID, render, select } from "./inject";
