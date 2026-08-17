@@ -49,8 +49,12 @@ export function resolveStateDir(location: StateLocation): string {
  * the moment somebody has two checkouts of the same project. Both together let a
  * person find their own history in `~/.mimicc` by eye, which is the same reason
  * the file format is JSONL.
+ *
+ * Exported because memory partitions by project too (`memory/location.ts`) and
+ * must land on the *same* name: two directories keyed by the same repository
+ * that spell it differently would be a small, permanent papercut.
  */
-function repoSlug(cwd: string): string {
+export function repoSlug(cwd: string): string {
   const absolute = resolve(cwd);
   const digest = createHash("sha256").update(absolute).digest("hex").slice(0, 12);
   const name = basename(absolute).replace(/[^\w.-]/g, "-") || "repo";
