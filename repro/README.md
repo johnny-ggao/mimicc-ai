@@ -21,6 +21,7 @@
 | `10-overflow-path.ts` | 兜底路径：溢出接住了吗、接住之后切点动了吗 | 否（stub） |
 | `10-summary-fail.ts` | 摘要一直失败时一个回合还能不能走完 | 否（stub） |
 | `13-crash-mid-tool.ts` | 崩溃打断一批工具调用后盘上剩什么：**默认档 `"async"` 会丢掉 intent 且整批重跑，`"sync"` 不会** | 否（stub） |
+| `14-recovery-end-to-end.ts` | 崩溃打断**我们自己的 agent** 之后重启：跑完的调用会不会再跑一次（**不会**） | 否（stub） |
 
 **只有 `08-overflow.ts` 花钱**（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）。其余要么打本地 stub server，要么纯算术，要么小请求。
