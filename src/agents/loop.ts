@@ -1,6 +1,6 @@
 import { ContextOverflowError } from "@langchain/core/errors";
 import type { ClientTool } from "@langchain/core/tools";
-import { SystemMessage, type BaseMessage } from "@langchain/core/messages";
+import { SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
 import type { BaseCheckpointSaver, Command } from "@langchain/langgraph";
@@ -14,7 +14,7 @@ import {
 import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
-import type { WindowEvent, WindowTuning } from "../context";
+import { markPinned, type WindowEvent, type WindowTuning } from "../context";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -253,9 +253,57 @@ export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
  */
 function confirmationGate(): AnyAgentMiddleware {
   const options = { interruptOn: CONFIRMATION_POLICY };
-  return humanInTheLoopMiddleware(
+  const gate = humanInTheLoopMiddleware(
     options as unknown as Parameters<typeof humanInTheLoopMiddleware>[0],
   ) as AnyAgentMiddleware;
+
+  return pinRejections(gate);
+}
+
+/**
+ * Pins the tool results the gate makes out of a rejection.
+ *
+ * When you reject a command, what you typed comes back to the model as a
+ * `ToolMessage` — langchain builds it at `agents/middleware/hitl.js:399` and
+ * returns it in the `afterModel` state update (`:501`). That message is an
+ * operator-level instruction wearing a tool result's clothes: "don't delete
+ * things on this machine" is binding, and if a summary eats it the model will
+ * retry the command you just refused.
+ *
+ * ⚠️ **This is the one exception to "whoever produces a message pins it"**
+ * (see `markPinned`). We do not build that message and there is no constructor
+ * to reach, so it is pinned here, on the way past. Wrapping this middleware
+ * rather than installing another one after it is what makes that deterministic:
+ * whether a later `afterModel` hook can see an earlier one's update is a
+ * question about langchain's chaining, and this does not need to ask it.
+ *
+ * Every `ToolMessage` in that update is a rejection — `hitl.js:492-493` only
+ * pushes one when the decision was `reject` — so there is nothing to filter.
+ */
+function pinRejections(gate: AnyAgentMiddleware): AnyAgentMiddleware {
+  const slot = (gate as { afterModel?: unknown }).afterModel;
+  const hook = typeof slot === "function" ? slot : (slot as { hook?: unknown })?.hook;
+  if (typeof hook !== "function") return gate;
+
+  const wrapped = async (...args: unknown[]): Promise<unknown> => {
+    const update = (await (hook as (...a: unknown[]) => Promise<unknown>)(...args)) as
+      { messages?: unknown } | undefined;
+    const messages = update?.messages;
+    if (Array.isArray(messages)) {
+      for (const message of messages) {
+        if (ToolMessage.isInstance(message)) markPinned(message);
+      }
+    }
+    return update;
+  };
+
+  if (typeof slot === "function") {
+    return { ...gate, afterModel: wrapped } as AnyAgentMiddleware;
+  }
+  return {
+    ...gate,
+    afterModel: { ...(slot as object), hook: wrapped },
+  } as AnyAgentMiddleware;
 }
 
 /**

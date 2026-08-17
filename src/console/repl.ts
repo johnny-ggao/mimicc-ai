@@ -125,6 +125,10 @@ export async function runRepl({ graph }: ReplOptions): Promise<void> {
     // No system message here. The prompt is handed to the agent at construction
     // and prepended to every model call from outside the thread — see
     // AgentOptions.systemPrompt for why it must not live in state.
+    //
+    // Not pinned here, deliberately: pinning what the user typed is the graph's
+    // job, not the console's — see `pinTurnTask`. A guarantee that depends on
+    // which caller invoked the graph is not a guarantee.
     const messages: BaseMessage[] = [new HumanMessage(input)];
 
     inFlight = new AbortController();

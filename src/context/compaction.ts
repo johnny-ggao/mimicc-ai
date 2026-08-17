@@ -9,6 +9,7 @@ import { Command } from "@langchain/langgraph";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
+import { downgrade } from "./downgrade";
 import { planCut, project, requestTokens, tailWithin, type Cut } from "./projection";
 import { usageOf, type ModelUsage } from "../usage";
 
@@ -126,7 +127,6 @@ export interface ContextWindowOptions {
    * second kind of resident content costs an entry in a list rather than an edit
    * to the arithmetic.
    */
-  pins?: readonly string[];
   /** Overridable so a test can trigger a summary without producing 800k tokens. */
   limit?: number;
   triggerFraction?: number;
@@ -134,6 +134,13 @@ export interface ContextWindowOptions {
   summaryInputTokens?: number;
   /** Told about every summary, and every failure to produce one. */
   onEvent?: (event: WindowEvent) => void;
+  /**
+   * The working directory a downgraded result's pointer must be readable from.
+   *
+   * Defaults to the process's, which is what `tools/workspace.ts` resolves reads
+   * against. Reachable only so a test can point it at a temp directory.
+   */
+  root?: string;
   /**
    * Told what the summarising call itself cost.
    *
@@ -155,7 +162,7 @@ export interface ContextWindowOptions {
  */
 export type WindowTuning = Omit<
   ContextWindowOptions,
-  "model" | "agent" | "pins" | "onEvent" | "onUsage"
+  "model" | "agent" | "onEvent" | "onUsage"
 >;
 
 /**
@@ -170,6 +177,16 @@ export type WindowEvent =
       reason: "threshold" | "overflow";
       before: number;
       kept: number;
+    }
+  | {
+      type: "downgraded";
+      agent: string;
+      reason: "threshold" | "overflow";
+      /** How many tool results were replaced. */
+      results: number;
+      /** Characters before and after, across those results alone. */
+      before: number;
+      after: number;
     }
   | {
       type: "summary_failed";
@@ -197,12 +214,12 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
   const summaryInput = options.summaryInputTokens ?? SUMMARY_INPUT_TOKENS;
   const report = options.onEvent ?? (() => {});
   const meter = options.onUsage ?? (() => {});
-  const pins = options.pins ?? [];
   // Derived here rather than handed in, because the summarising call happens in
   // this file (`options.model.invoke` below) and "my summary is billed under my
   // own name plus a word" is this middleware's own business. The stack passes
   // one identity down; nobody downstream gets to pick a second name.
   const meterAs = `${options.agent} summary`;
+  const root = options.root ?? process.cwd();
 
   async function summarize(
     history: BaseMessage[],
@@ -278,30 +295,62 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     return { at, summary };
   }
 
+  /**
+   * One pass of downgrading, reported if it did anything.
+   *
+   * Returns the same array when nothing was over the limit, so the common case
+   * costs a walk and no allocation.
+   */
+  function shrink(
+    history: BaseMessage[],
+    reason: "threshold" | "overflow",
+  ): BaseMessage[] {
+    const { messages, downgraded } = downgrade(history, { root });
+    if (downgraded.length === 0) return history;
+
+    report({
+      type: "downgraded",
+      agent: options.agent,
+      reason,
+      results: downgraded.length,
+      before: downgraded.reduce((sum, one) => sum + one.from, 0),
+      after: downgraded.reduce((sum, one) => sum + one.to, 0),
+    });
+    return messages;
+  }
+
   return createMiddleware({
     name: "ContextWindow",
     stateSchema,
     wrapModelCall: async (request, handler) => {
       const state = request.state as WindowState;
-      const history = request.messages ?? [];
+      let history = request.messages ?? [];
       // The persisted shape is two keys and has to stay that way — thread files
       // written before the projection existed contain them. `Cut` is built at
       // this boundary and never leaves it.
       let cut: Cut = { at: state._windowCutoff ?? 0, summary: state._windowSummary };
       let changed = false;
 
-      if (requestTokens(history, cut, pins) >= trigger) {
-        const next = await advance(history, cut, keep, "threshold");
-        if (next !== undefined) {
-          cut = next;
-          changed = true;
+      if (requestTokens(history, cut) >= trigger) {
+        // Cheapest thing that shrinks a request, so it goes first: replacing a
+        // 60KB file listing with a synopsis and a path costs one hash and no
+        // model call. Only if that is still not enough is a summary worth
+        // paying for.
+        history = shrink(history, "threshold");
+
+        if (requestTokens(history, cut) >= trigger) {
+          const next = await advance(history, cut, keep, "threshold");
+          if (next !== undefined) {
+            cut = next;
+            changed = true;
+          }
         }
       }
 
       try {
         const response = await handler({
           ...request,
-          messages: project(history, cut, pins),
+          messages: project(history, cut),
         });
         return changed ? update(response, cut) : response;
       } catch (error) {
@@ -311,6 +360,11 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
         // summarising did not help, and pretending otherwise burns money on a
         // request that cannot succeed.
         if (!isOverflow(error)) throw error;
+
+        // Maximum pressure, so take the free reduction here too — the estimate
+        // that let this request out was wrong, and a synopsis is the one lever
+        // that does not depend on it being right the second time.
+        history = shrink(history, "overflow");
 
         // Cut harder than the threshold would. Reaching here means the estimate
         // was wrong, possibly by several times — so re-applying the same
@@ -328,7 +382,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
 
         const response = await handler({
           ...request,
-          messages: project(history, next, pins),
+          messages: project(history, next),
         });
         return update(response, next);
       }

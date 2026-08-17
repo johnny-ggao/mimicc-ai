@@ -3,7 +3,14 @@ import { describe, expect, test } from "bun:test";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 
-import { estimate, planCut, project, requestTokens, tailWithin } from "@/context";
+import {
+  estimate,
+  PINNED,
+  planCut,
+  project,
+  requestTokens,
+  tailWithin,
+} from "@/context";
 
 /**
  * The projection, asked questions directly.
@@ -22,6 +29,10 @@ import { estimate, planCut, project, requestTokens, tailWithin } from "@/context
 
 const human = (text: string, id?: string): BaseMessage =>
   new HumanMessage(id === undefined ? { content: text } : { content: text, id });
+
+/** A message its producer marked as one that must survive a cut. */
+const stuck = (text: string): BaseMessage =>
+  new HumanMessage({ content: text, additional_kwargs: { ...PINNED } });
 
 /**
  * An assistant reply carrying the provider's own token count, as one arrives.
@@ -64,13 +75,13 @@ describe("project — what the model is sent", () => {
     // Both halves matter: no cut and no summary each mean "nothing to project",
     // and returning a rebuilt array in either case would be a needless copy that
     // a reducer could mistake for a change.
-    expect(project(history, { at: 0 }, [])).toBe(history);
-    expect(project(history, { at: 2 }, [])).toBe(history);
+    expect(project(history, { at: 0 })).toBe(history);
+    expect(project(history, { at: 2 })).toBe(history);
   });
 
   test("the summary stands in for everything before the cut", () => {
     const history = [human("one"), human("two"), human("three"), human("four")];
-    const view = project(history, { at: 2, summary: human("condensed") }, []);
+    const view = project(history, { at: 2, summary: human("condensed") });
 
     expect(view.map((message) => message.text)).toEqual(["condensed", "three", "four"]);
   });
@@ -84,8 +95,8 @@ describe("project — what the model is sent", () => {
    * does not help; only rebuilding the view does.
    */
   test("a pinned message survives a cut that passed over it", () => {
-    const history = [human("resident", "pin-1"), human("old"), human("new")];
-    const view = project(history, { at: 2, summary: human("condensed") }, ["pin-1"]);
+    const history = [stuck("resident"), human("old"), human("new")];
+    const view = project(history, { at: 2, summary: human("condensed") });
 
     expect(view.map((message) => message.text)).toEqual([
       "resident",
@@ -94,27 +105,19 @@ describe("project — what the model is sent", () => {
     ]);
   });
 
-  test("more than one id can be pinned, and an unknown id is simply absent", () => {
-    // Candidate 4's whole point: a second kind of resident content is an entry
-    // in this list, not an edit to the arithmetic.
-    const history = [
-      human("a", "pin-1"),
-      human("b", "pin-2"),
-      human("old"),
-      human("new"),
-    ];
-    const view = project(history, { at: 3, summary: human("condensed") }, [
-      "pin-1",
-      "pin-2",
-      "pin-missing",
-    ]);
+  test("several can be pinned, and the unpinned one beside them is not", () => {
+    // The control lives inside this case on purpose: an assertion that pinned
+    // messages come back is also satisfied by a projection that cuts nothing, so
+    // "old" being absent is what makes the other half mean anything.
+    const history = [stuck("a"), stuck("b"), human("old"), human("new")];
+    const view = project(history, { at: 3, summary: human("condensed") });
 
     expect(view.map((message) => message.text)).toEqual(["a", "b", "condensed", "new"]);
   });
 
   test("a pinned message after the cut is not duplicated", () => {
-    const history = [human("old"), human("resident", "pin-1"), human("new")];
-    const view = project(history, { at: 1, summary: human("condensed") }, ["pin-1"]);
+    const history = [human("old"), stuck("resident"), human("new")];
+    const view = project(history, { at: 1, summary: human("condensed") });
 
     expect(view.filter((message) => message.text === "resident")).toHaveLength(1);
   });
@@ -165,7 +168,7 @@ describe("planCut — where to cut, or nothing", () => {
     const at = planCut(history, { at: 0 }, 100);
     expect(at).not.toBeNull();
     // Whatever it chose, the view it produces must not open with an orphan.
-    const view = project(history, { at: at ?? 0, summary: human("s") }, []);
+    const view = project(history, { at: at ?? 0, summary: human("s") });
     const firstAfterSummary = view[1];
     expect(ToolMessage.isInstance(firstAfterSummary)).toBe(false);
   });
@@ -183,15 +186,13 @@ describe("requestTokens — how big the next request is", () => {
     // double-counting and is not: `input_tokens` is what that call was given,
     // and the reply it produced was not part of it. The reply becomes input to
     // the next call, so it belongs in the estimate on top.
-    expect(requestTokens(history, { at: 0 }, [])).toBe(
-      5_000 + estimate(history.slice(1)),
-    );
+    expect(requestTokens(history, { at: 0 })).toBe(5_000 + estimate(history.slice(1)));
   });
 
   test("falls back to a pure estimate before the provider has said anything", () => {
     const history = [human("x".repeat(400))];
 
-    expect(requestTokens(history, { at: 0 }, [])).toBe(estimate(history));
+    expect(requestTokens(history, { at: 0 })).toBe(estimate(history));
   });
 
   /**
@@ -219,7 +220,7 @@ describe("requestTokens — how big the next request is", () => {
     const cut = { at: 0 };
 
     // Over a trigger that the messages alone come nowhere near…
-    expect(requestTokens(history, cut, [])).toBeGreaterThan(2_000);
+    expect(requestTokens(history, cut)).toBeGreaterThan(2_000);
     expect(estimate(history)).toBeLessThan(2_000);
     // …and so the cutter, asked for a budget larger than the messages, declines.
     expect(planCut(history, cut, 2_000)).toBeNull();

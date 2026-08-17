@@ -234,6 +234,14 @@ test("what the model sees carries a summary in place of the cut messages", async
  * The pin. Injected instructions sit near the front under a fixed id, and the
  * reducer replaces by id *in place* — so they never move, and every cut made
  * from here on is behind them. Re-injecting does not help; only the view can.
+ *
+ * They used to be asserted to lead the view, and that stopped being true when
+ * what the user typed started being pinned too: pinned messages come back in
+ * history order, and the turn's own message reaches state before `beforeAgent`
+ * injects these. What that assertion was protecting is the *prefix*, not the
+ * index — and the prefix is still stable, because the pinned block only ever
+ * grows by appending. So the position is no longer asserted; being ahead of the
+ * summary is, which is the part the cache and the reader both depend on.
  */
 test("the repository's instructions stay visible after a summary", async () => {
   const graph = agent();
@@ -245,9 +253,15 @@ test("the repository's instructions stay visible after a summary", async () => {
   const contents = lastRequest().messages.map((message) =>
     typeof message.content === "string" ? message.content : "",
   );
-  expect(contents.some((text) => text.includes("<project-instructions"))).toBe(true);
-  // And it leads, so the stable part of the prefix stays stable.
-  expect(contents.findIndex((text) => text.includes("<project-instructions"))).toBe(0);
+  const instructions = contents.findIndex((text) =>
+    text.includes("<project-instructions"),
+  );
+  const summary = contents.findIndex((text) =>
+    text.startsWith("Summary of the earlier part"),
+  );
+
+  expect(instructions).toBeGreaterThanOrEqual(0);
+  expect(summary).toBeGreaterThan(instructions);
 });
 
 test("below the threshold the model sees the history unchanged", async () => {

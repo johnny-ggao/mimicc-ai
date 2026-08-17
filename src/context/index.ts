@@ -18,12 +18,24 @@
  */
 export {
   estimate,
+  isPinned,
+  markPinned,
+  PINNED,
+  PINNED_KEY,
   planCut,
   project,
   requestTokens,
   tailWithin,
   type Cut,
 } from "./projection";
+export {
+  downgrade,
+  DOWNGRADE_DIR,
+  DOWNGRADE_LIMIT,
+  synopsis,
+  type Downgraded,
+  type DowngradeOptions,
+} from "./downgrade";
 export {
   contextWindow,
   KEEP_FRACTION,
@@ -36,6 +48,7 @@ export {
   type WindowTuning,
 } from "./compaction";
 export {
+  pinTurnTask,
   projectInstructions,
   readProjectInstructions,
   INSTRUCTION_FILES,

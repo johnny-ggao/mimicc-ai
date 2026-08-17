@@ -1,15 +1,10 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import type { AnyAgentMiddleware } from "langchain";
 
-import { projectInstructions } from "../context";
+import { pinTurnTask, projectInstructions } from "../context";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { usageMeter, type ModelUsage } from "../usage";
-import {
-  contextWindow,
-  PROJECT_INSTRUCTIONS_ID,
-  type WindowEvent,
-  type WindowTuning,
-} from "../context";
+import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
 
 /**
  * Which kinds of agent this program runs, and what each one is fitted with.
@@ -136,13 +131,9 @@ export function agentStack(
     contextWindow({
       model,
       agent: identity,
-      // The same place that injects the resident message names it as pinned.
-      // Those two facts used to live apart — the injection here, the id hard
-      // coded inside the projection — which is how the projection came to know
-      // that a thing called "project instructions" exists. An empty list when
-      // there are none is not a special case: nothing to pin is the ordinary
-      // state of a repository with no AGENTS.md.
-      pins: instructions !== undefined ? [PROJECT_INSTRUCTIONS_ID] : [],
+      // Nothing to wire for pinning any more: a message that must survive a cut
+      // now carries the mark itself, so the injector pins it at construction and
+      // this assembler never hears about it. See `PINNED` in context/projection.
       ...window,
       ...(onWindow !== undefined ? { onEvent: onWindow } : {}),
       ...(onUsage !== undefined ? { onUsage } : {}),
@@ -150,9 +141,12 @@ export function agentStack(
     // Innermost, so `request.messages` here is exactly what goes on the wire and
     // `elapsedMs` is the provider's latency alone.
     usageMeter(identity, onUsage ?? (() => {})),
-    // Only a beforeAgent hook, so its position among the others is not
-    // load-bearing the way the two above are.
+    // Both are beforeAgent hooks, so their position among the others is not
+    // load-bearing the way the two above are. Between themselves it does not
+    // matter either: the instructions arrive pinned, so PinTurnTask skips them
+    // whichever order they run in.
     ...(instructions !== undefined ? [projectInstructions(instructions)] : []),
+    pinTurnTask(),
   ];
 
   assertMeterInsideWindow(stack);

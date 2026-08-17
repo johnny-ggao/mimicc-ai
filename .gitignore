@@ -33,3 +33,7 @@ bench-work/
 # JetBrains 的 IDE 配置。单人仓库，没有第二个人要对齐；格式与 lint 的真值在
 # .prettierrc.json 与 eslint.config.js 里，.idea/prettier.xml 只是 IDE 侧的镜像。
 .idea/
+
+# 降级下来的工具全文。内容寻址、可重建，且模型的 Read 要能打开它——
+# 所以不能放 .mimicc/（被 SECRET 拉黑）也不能放 /tmp（resolveInside 出不去）。
+.mimicc-outputs/

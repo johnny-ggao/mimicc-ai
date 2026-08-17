@@ -7,11 +7,12 @@ import { AIMessage, ToolMessage, type BaseMessage } from "@langchain/core/messag
  *
  * **The view** (`CONTEXT.md`: 上下文窗口) is the noun — the `BaseMessage[]` the
  * model actually receives on one request. **The projection** is the verb: the
- * function that computes it. Four inputs, one output, no side effects and no
- * framework:
+ * function that computes it. Two inputs, one output, no side effects and no
+ * framework — a third, which messages must survive, now rides on the messages
+ * themselves rather than being handed in:
  *
  * ```
- * (history, cut, pins) ──project──▶ view
+ * (history, cut) ──project──▶ view
  *    ↑ the original, never discarded      ↑ recomputed every call, never stored
  * ```
  *
@@ -65,16 +66,62 @@ export interface Cut {
   summary?: BaseMessage | undefined;
 }
 
+/** The `additional_kwargs` key that marks a message as pinned. */
+export const PINNED_KEY = "mimicc_pinned";
+
+/**
+ * Spread into a message's `additional_kwargs` to pin it at construction.
+ *
+ * ```ts
+ * new HumanMessage({ content, additional_kwargs: { ...PINNED } })
+ * ```
+ */
+export const PINNED: Readonly<Record<string, true>> = { [PINNED_KEY]: true };
+
+/** Whether this message must survive a cut that has passed it. */
+export function isPinned(message: BaseMessage): boolean {
+  return message.additional_kwargs[PINNED_KEY] === true;
+}
+
+/**
+ * Pins a message that somebody else built.
+ *
+ * ⚠️ **The exception, and it is meant to stay one.** The rule is that whoever
+ * produces a message pins it, because they are the one who knows it has to be —
+ * see {@link project}. This exists for the messages we do not produce: the
+ * confirmation gate's rejection carries the user's own words back as a tool
+ * result, and that `ToolMessage` is built inside langchain's
+ * `humanInTheLoopMiddleware` (`agents/middleware/hitl.js:399`), where we have no
+ * constructor to reach.
+ *
+ * Mutating rather than rebuilding: the message has not been committed to state
+ * yet, and rebuilding a `ToolMessage` means knowing every field langchain chose
+ * to put on it. **Do not reach for this to avoid pinning at the source.** Every
+ * use is a place where the rule does not apply, and there should be one.
+ */
+export function markPinned<T extends BaseMessage>(message: T): T {
+  message.additional_kwargs[PINNED_KEY] = true;
+  return message;
+}
+
 /**
  * What the model is sent: the pinned messages, the summary, then everything
  * after the cut.
  *
- * `pins` is a list of message ids and comes from the caller — it used to be one
- * hard-coded id in here, which was the only edge in the module graph that
- * crossed from this feature into another. The projection has no business knowing
- * that a thing called "project instructions" exists; it only needs to know which
- * ids must survive a cut. Whoever injects a resident message is the one who
- * knows it has to be pinned, and now says so.
+ * **Pinning is a mark the message carries, not a list this function is handed.**
+ * It used to be the latter — `pins: readonly string[]`, supplied by whoever
+ * assembled the middleware — and the reasoning was sound as far as it went: the
+ * projection has no business knowing that a thing called "project instructions"
+ * exists. What that shape could not express is anything decided *at runtime*.
+ * The list was built once, at construction, from ids known then; a message the
+ * user types, or one the confirmation gate produces when they reject a command,
+ * has an id that did not exist yet and could never join it.
+ *
+ * So the coupling moved down rather than away. This function still does not know
+ * about any particular feature — it knows that a message can be marked, which is
+ * a domain concept in its own right (`CONTEXT.md`: 钉住). Whoever produces a
+ * message that must survive is still the one who says so; they now say it on the
+ * message instead of in a list.
  *
  * Why pinning is needed at all, which is easy to get wrong: a resident message
  * is injected under a fixed id, and `messagesStateReducer` merges by id —
@@ -83,16 +130,11 @@ export interface Cut {
  * made and would silently drop out of the view. Re-injecting each turn does not
  * help; only rebuilding the view can.
  */
-export function project(
-  history: BaseMessage[],
-  cut: Cut,
-  pins: readonly string[],
-): BaseMessage[] {
+export function project(history: BaseMessage[], cut: Cut): BaseMessage[] {
   if (cut.at <= 0 || cut.summary === undefined) return history;
 
   const pinned = history.filter(
-    (message, index) =>
-      index < cut.at && message.id !== undefined && pins.includes(message.id),
+    (message, index) => index < cut.at && isPinned(message),
   );
   return [...pinned, cut.summary, ...history.slice(cut.at)];
 }
@@ -127,12 +169,8 @@ export function project(
  * estimator assumes a flat 4), so counting from the last true figure shrinks the
  * error from "wrong about everything" to "wrong about the last message or two".
  */
-export function requestTokens(
-  history: BaseMessage[],
-  cut: Cut,
-  pins: readonly string[],
-): number {
-  const visible = project(history, cut, pins);
+export function requestTokens(history: BaseMessage[], cut: Cut): number {
+  const visible = project(history, cut);
   for (let index = visible.length - 1; index >= 0; index -= 1) {
     const message = visible[index];
     if (!AIMessage.isInstance(message)) continue;

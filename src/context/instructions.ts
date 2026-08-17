@@ -1,8 +1,10 @@
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { HumanMessage } from "@langchain/core/messages";
+import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
+
+import { isPinned, PINNED } from "./projection";
 
 import type { Logger } from "../logger";
 
@@ -179,10 +181,74 @@ function wrap(path: string, body: string, status?: string): string {
 export function projectInstructions(text: string): AnyAgentMiddleware {
   // Built once. The bytes must be identical on every turn or the reducer would
   // see a changed message and the cache prefix would break from here on.
-  const message = new HumanMessage({ id: PROJECT_INSTRUCTIONS_ID, content: text });
+  // Pinned at construction, by the one who knows it has to be: it is injected
+  // under a fixed id and merged in place, so it sits before every cut that will
+  // ever be made and would otherwise drop out of the view.
+  const message = new HumanMessage({
+    id: PROJECT_INSTRUCTIONS_ID,
+    content: text,
+    additional_kwargs: { ...PINNED },
+  });
 
   return createMiddleware({
     name: "ProjectInstructions",
     beforeAgent: () => ({ messages: [message] }),
   });
+}
+
+/**
+ * Pins what the user typed, so a cut cannot walk past this turn's objective.
+ *
+ * ## Why the graph and not the console
+ *
+ * The rule elsewhere is that whoever produces a message pins it, and the obvious
+ * reading of that puts this in `repl.ts`, at the `new HumanMessage(input)` that
+ * starts a turn. It was written there first, and a test caught what is wrong with
+ * it: `tests/pinned.test.ts` drives `graph.invoke` directly, exactly as a second
+ * entry point would, and the guarantee simply was not there. **A property that
+ * holds only for one caller is not a property of the agent.**
+ *
+ * So the producer here is the *invocation*, and `beforeAgent` is where the graph
+ * learns of one: it runs once per user turn, outside the loop, so five tool laps
+ * still pin once (`ReactAgent.js:184,187,267-269`).
+ *
+ * ## Why every unpinned human message rather than "this turn's"
+ *
+ * Because "this turn's" needs to be identified, and the obvious ways to do it are
+ * wrong. The last human message is not it — `ProjectInstructions` injects one too,
+ * and which of them lands last depends on middleware order. Counting from the
+ * previous turn means carrying a watermark in state for something a predicate can
+ * answer.
+ *
+ * Pinning every unpinned one is idempotent by construction: the instructions
+ * arrive pinned already, and a turn whose message was pinned on a previous pass
+ * is skipped. The reducer merges by id, so returning a copy replaces in place.
+ *
+ * The cost is that the pinned set grows by one short message per turn. That is
+ * accepted rather than overlooked: what the user typed is the cheapest thing in
+ * the history per token and the only thing in it that cannot be reconstructed
+ * from anything else. If it ever stops being cheap, the fix is a rule about
+ * *which* turns stay pinned, and this is the seam for it.
+ */
+export function pinTurnTask(): AnyAgentMiddleware {
+  return createMiddleware({
+    name: "PinTurnTask",
+    beforeAgent: (state: { messages?: BaseMessage[] }) => {
+      const fresh = (state.messages ?? []).filter(
+        (message) => HumanMessage.isInstance(message) && !isPinned(message),
+      );
+      if (fresh.length === 0) return;
+
+      return {
+        messages: fresh.map(
+          (message) =>
+            new HumanMessage({
+              ...(message.id !== undefined ? { id: message.id } : {}),
+              content: message.content,
+              additional_kwargs: { ...message.additional_kwargs, ...PINNED },
+            }),
+        ),
+      };
+    },
+  }) as AnyAgentMiddleware;
 }

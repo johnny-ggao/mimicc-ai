@@ -104,6 +104,7 @@ describe("what a kind is called", () => {
     expect(explore?.middleware?.map((middleware) => middleware.name)).toEqual([
       "ContextWindow",
       "UsageMeter",
+      "PinTurnTask",
     ]);
   });
 });
