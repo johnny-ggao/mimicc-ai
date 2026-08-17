@@ -4,6 +4,9 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { FakeListChatModel } from "@langchain/core/utils/testing";
+
+import { CONFIRMATION_POLICY, registeredTools } from "@/agents";
 import {
   CATEGORIES,
   MAX_MEMORIES,
@@ -236,4 +239,38 @@ test("starting from a subdirectory is a different project, as decided", () => {
   // not an accident. If it is ever changed, this test is where the decision is
   // recorded.
   expect(repo.project).not.toBe(sub.project);
+});
+
+// ── the wiring: registered only when the program was started with a directory ──
+
+test("the memory tools are registered when a directory was resolved, and not otherwise", () => {
+  const model = new FakeListChatModel({ responses: ["unused"] });
+
+  const without = registeredTools({ model }).map((tool) => tool.name);
+  const withMemory = registeredTools({ model, memory: store }).map((tool) => tool.name);
+
+  // The control half. Absent memory must not half-register anything: a tool that
+  // always fails is worse than a capability the model was never offered.
+  expect(without).not.toContain("MemoryAdd");
+
+  expect(withMemory).toEqual([
+    ...without,
+    "MemorySearch",
+    "MemoryAdd",
+    "MemoryUpdate",
+    "MemoryDelete",
+  ]);
+});
+
+test("every memory tool has an explicit confirmation decision", () => {
+  // The same claim `tests/agent.test.ts` makes for the base set, asked again with
+  // memory configured — that test builds its environment without a store, so it
+  // cannot see these four. A tool missing from the policy is auto-approved
+  // (fail-open), so "it passed over there" is not cover.
+  const registered = registeredTools({
+    model: new FakeListChatModel({ responses: ["unused"] }),
+    memory: store,
+  }).map((tool) => tool.name);
+
+  expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(registered.sort());
 });

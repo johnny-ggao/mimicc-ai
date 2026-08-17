@@ -13,6 +13,7 @@ import {
 
 import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
 import { toolRecovery } from "./recovery";
+import { createMemoryTools, MemoryStore, type MemoryDirs } from "../memory";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
@@ -121,6 +122,21 @@ export interface AgentOptions {
    * process is not a history.
    */
   checkpointer?: BaseCheckpointSaver;
+  /**
+   * Where cross-session memory lives, or absent to run without any.
+   *
+   * The two directories rather than a store, for the same reason `stateDir` is a
+   * path and `projectInstructions` is a string: `main.ts` decides where things
+   * live, and the agent builder does not touch the filesystem.
+   *
+   * ⚠️ This is **not** the general tool-injection seam that was declined on
+   * 2026-08-17. That request was for letting arbitrary tools be passed in for
+   * tests; this is a named capability with a named dependency, exactly like
+   * `checkpointer` and `stateDir` above it. The distinction matters because the
+   * reason for declining — "the gap it was for closed, so do not open it" —
+   * does not reach a capability the program actually ships.
+   */
+  memory?: MemoryDirs;
   /**
    * Where thread files live, so tool calls can be journalled beside them.
    *
@@ -240,6 +256,16 @@ export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
   // An explore agent carries only the three read-only tools, so dispatching one can do
   // nothing a Read could not — the decision is already made by EXPLORE_TOOLS.
   [TASK_TOOL_NAME]: false,
+  // The memory tools do not ask, and this is a decision rather than an omission
+  // (2026-08-17). Not because writing a memory is harmless — it is confined to
+  // `~/.mimicc/memory` and gated on category, size, and duplication, but it is a
+  // write. Because it is **frequent**: a gate that fires constantly stops being
+  // read, and the gate that stops being read is the one guarding Bash. What
+  // makes these observable is the transcript and the files, not a prompt.
+  MemorySearch: false,
+  MemoryAdd: false,
+  MemoryUpdate: false,
+  MemoryDelete: false,
   Bash: {
     allowedDecisions: ["approve", "edit", "reject"],
     description: "Bash runs with your shell. Approve, edit the command, or reject.",
@@ -350,6 +376,13 @@ export function registeredTools(environment: AgentEnvironment): ClientTool[] {
   return [
     ...TOOLS,
     createTaskTool({ model: environment.model, subagents: subagentSpecs(environment) }),
+    // After Task, and last on purpose: the six the prompt names keep their pinned
+    // order and, with them, the cached prefix. Absent when the program was
+    // started without a memory directory, which is the honest default — a tool
+    // that always fails is worse than a capability the model was never offered.
+    ...(environment.memory !== undefined
+      ? createMemoryTools({ store: environment.memory })
+      : []),
   ];
 }
 
@@ -374,6 +407,9 @@ function environment(model: ChatOpenAI, options: AgentOptions): AgentEnvironment
     ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
     ...(options.onWindow !== undefined ? { onWindow: options.onWindow } : {}),
     ...(options.window !== undefined ? { window: options.window } : {}),
+    ...(options.memory !== undefined
+      ? { memory: new MemoryStore(options.memory) }
+      : {}),
   };
 }
 

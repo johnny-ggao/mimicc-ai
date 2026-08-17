@@ -15,6 +15,7 @@ import {
   registeredTools,
 } from "@/agents";
 
+import { MemoryStore } from "@/memory";
 import { TASK_TOOL_NAME, TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
 
@@ -191,8 +192,19 @@ test("every registered tool has an explicit confirmation decision", () => {
   //
   // A fake model because `registeredTools` builds the dispatch tool and that
   // needs one; nothing here calls it.
+  //
+  // Memory is supplied, and it has to be: the policy map lists every tool this
+  // program *can* register, while `registeredTools` only returns the ones the
+  // current environment asked for. Comparing against a partial registration
+  // would let a memory tool ship with no confirmation decision — and a tool
+  // missing from the map is auto-approved, so that gap fails open. The
+  // directories are never touched; nothing here invokes a tool.
   const registered = registeredTools({
     model: new FakeListChatModel({ responses: ["unused"] }),
+    memory: new MemoryStore({
+      global: "/nonexistent/global",
+      project: "/nonexistent/project",
+    }),
   }).map((tool) => tool.name);
 
   expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(registered.sort());
@@ -202,6 +214,9 @@ test("every registered tool has an explicit confirmation decision", () => {
 // above passes if both sides are wrong together. This one pins what the set
 // actually contains, so dropping a tool from `TOOLS` and from the policy in one
 // commit still fails.
+// Deliberately *without* memory: this pins the base registration, which is what
+// the system prompt describes and what the cached prefix depends on. The memory
+// tools are optional and tested where they are wired (`tests/memory.test.ts`).
 test("the registered set is the six plus the dispatch tool", () => {
   const registered = registeredTools({
     model: new FakeListChatModel({ responses: ["unused"] }),

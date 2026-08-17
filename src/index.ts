@@ -65,3 +65,13 @@ export {
   type TaskToolOptions,
 } from "./tools";
 export { usageMeter, usageOf, type ModelUsage } from "./usage";
+
+export {
+  CATEGORIES,
+  createMemoryTools,
+  MemoryStore,
+  resolveMemoryDirs,
+  type Category,
+  type Memory,
+  type MemoryDirs,
+} from "./memory";

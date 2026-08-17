@@ -6,6 +6,7 @@ import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
 import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
+import { resolveMemoryDirs } from "./memory";
 import { buildSystemPrompt, type PromptEnvironment } from "./agents";
 import { runRepl } from "./console";
 
@@ -29,6 +30,14 @@ async function main(): Promise<void> {
     cwd: process.cwd(),
   });
 
+  // Same reasoning as the state directory, different answer. Memory does not
+  // follow the dev/production split — see the note in memory/location.ts for why
+  // a NODE_ENV-dependent path would fork one project's memory in half.
+  const memory = resolveMemoryDirs({
+    override: process.env.MIMICC_MEMORY_DIR,
+    cwd: process.cwd(),
+  });
+
   const graph = createUniversalAgent({
     baseURL: config.LLM_BASE_URL,
     apiKey: config.LLM_API_KEY,
@@ -37,6 +46,7 @@ async function main(): Promise<void> {
     systemPrompt,
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
     checkpointer: new JsonlSaver(stateDir),
+    memory,
     // The same path, so a tool call's journal lands beside its thread's file.
     stateDir,
     // One line per request to the provider. This is the scale every

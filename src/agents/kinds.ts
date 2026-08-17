@@ -2,6 +2,7 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { AnyAgentMiddleware } from "langchain";
 
 import { pinTurnTask, projectInstructions } from "../context";
+import type { MemoryStore } from "../memory";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { usageMeter, type ModelUsage } from "../usage";
 import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
@@ -85,6 +86,17 @@ export interface AgentEnvironment {
   onWindow?: (event: WindowEvent) => void;
   /** Overrides for where this kind's context window is cut. Tests only. */
   window?: WindowTuning;
+  /**
+   * Cross-session memory, when the program was started with any.
+   *
+   * ⚠️ Only the main agent gets the memory tools — see `registeredTools`.
+   * `EXPLORE_TOOLS` deliberately does not include them: an Explore is read-only,
+   * single-shot, and stateless by design ("a dispatch is stateless" in
+   * CONTEXT.md), so there is nothing for it to carry across sessions. That was
+   * decided rather than overlooked (2026-08-17); the axis reopens the day a kind
+   * of subagent exists that outlives one dispatch.
+   */
+  memory?: MemoryStore;
 }
 
 /**
