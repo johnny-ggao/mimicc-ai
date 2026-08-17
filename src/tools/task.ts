@@ -8,6 +8,8 @@ import { tool, type ClientTool, type ToolRuntime } from "@langchain/core/tools";
 import { createAgent, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
+import { NEVER_REPLAY } from "./replay";
+
 /**
  * `Task`: dispatch a registered subagent, get one report back.
  *
@@ -181,6 +183,13 @@ export function createTaskTool(options: TaskToolOptions) {
         // parent's saver from an inherited config. A subagent's working notes
         // are not the user's conversation and do not belong in their thread.
         checkpointer: false,
+        // ⚠️ A consequence worth knowing before it looks like a bug: with no
+        // checkpointer, nothing inside an Explore run can be journalled — its own
+        // tool calls have no durable intent, so a crash mid-dispatch cannot be
+        // recovered call by call. That is not a gap. From the parent's side a
+        // dispatch **is** one call with one intent and one settlement, and this
+        // tool declares itself `never`, so the parent recovers it the same way it
+        // recovers any other unreplayable call.
         systemPrompt: new SystemMessage(spec.prompt),
         middleware: spec.middleware ?? [],
       }),
@@ -239,6 +248,11 @@ export function createTaskTool(options: TaskToolOptions) {
     },
     {
       name: TASK_TOOL_NAME,
+      // Never, although an Explore agent only reads. Re-running a dispatch buys
+      // the same report at uncached prices — the subagent line measured a 50x
+      // gap against the parent's cached prefix — and "leaves the world
+      // unchanged" includes money.
+      metadata: { ...NEVER_REPLAY },
       description: describeTask(options.subagents),
       schema: z.object({
         description: z

@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
+import { SAFE_TO_REPLAY } from "./replay";
+
 import {
   MAX_FILE_BYTES,
   ROOT,
@@ -48,6 +50,8 @@ export const readTool = tool(
   },
   {
     name: "Read",
+    // Reading the same path twice leaves the world exactly as it was.
+    metadata: { ...SAFE_TO_REPLAY },
     description:
       "Read a UTF-8 text file inside the working directory. Returns the file with 1-based line numbers.",
     schema: z.object({
@@ -72,6 +76,8 @@ export const globTool = tool(
   },
   {
     name: "Glob",
+    // A scan. Same pattern, same answer, nothing touched.
+    metadata: { ...SAFE_TO_REPLAY },
     description:
       "Find files by path pattern, e.g. src/**/*.test.ts. Skips node_modules, .git, dist and coverage.",
     schema: z.object({
@@ -114,6 +120,8 @@ export const grepTool = tool(
   },
   {
     name: "Grep",
+    // Same: it looks, it does not touch.
+    metadata: { ...SAFE_TO_REPLAY },
     description:
       "Find files by content, using a JavaScript regular expression. Returns path:line:text.",
     schema: z.object({

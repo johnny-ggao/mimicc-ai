@@ -2,6 +2,15 @@ import { bashTool, editTool, writeTool } from "./mutating";
 import { globTool, grepTool, readTool } from "./readonly";
 
 export { globTool, grepTool, readTool } from "./readonly";
+export {
+  bothSafe,
+  declaredReplay,
+  NEVER_REPLAY,
+  replayOf,
+  REPLAY_KEY,
+  SAFE_TO_REPLAY,
+  type Replay,
+} from "./replay";
 export { bashTool, editTool, writeTool } from "./mutating";
 
 /**

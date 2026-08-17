@@ -234,6 +234,11 @@ export class JsonlSaver extends BaseCheckpointSaver {
   async deleteThread(threadId: string): Promise<void> {
     this.#threads.delete(threadId);
     await removeFile(this.#pathFor(threadId));
+    // ⚠️ A thread has a second file: `<threadId>.tools.jsonl`, the tool journal
+    // (`checkpoint/journal.ts`). It is deliberately not removed from here — this
+    // saver implements a langchain interface and has no business owning a sidecar
+    // it never writes. Nothing calls this method today; whoever gives it a caller
+    // owns deleting both, and `ToolJournal.remove()` is the other half.
   }
 
   async #open(threadId: string): Promise<Thread> {

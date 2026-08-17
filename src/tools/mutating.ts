@@ -4,6 +4,8 @@ import { mkdir } from "node:fs/promises";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
+import { NEVER_REPLAY } from "./replay";
+
 import { AmbiguousMatch, locate } from "./matching";
 import { ROOT, resolveInside, withPathLock } from "./workspace";
 
@@ -58,6 +60,8 @@ export const writeTool = tool(
   },
   {
     name: "Write",
+    // It writes. Running it again after a crash overwrites whatever came since.
+    metadata: { ...NEVER_REPLAY },
     description:
       "Create a new file. Refuses to overwrite an existing one — use Edit for anything that already exists, including replacing it in full. Creates parent directories as needed.",
     schema: z.object({
@@ -122,6 +126,8 @@ export const editTool = tool(
   },
   {
     name: "Edit",
+    // Read-modify-write: a second run edits the result of the first, or refuses.
+    metadata: { ...NEVER_REPLAY },
     description:
       "Replace one exact string in a file with another. The target must resolve to exactly one place; line endings, blank lines around the block, and indentation are tolerated, ambiguity is not.",
     schema: z.object({
@@ -173,6 +179,8 @@ export const bashTool = tool(
   },
   {
     name: "Bash",
+    // Never, even when the command is `ls` — the declaration is per tool, and the runtime cannot read a shell command.
+    metadata: { ...NEVER_REPLAY },
     description: `Run one shell command in the working directory. Returns stdout and stderr combined; a non-zero exit is reported as [exit N] rather than as a failure. Times out after ${String(MAX_COMMAND_MS / 1000)}s.`,
     schema: z.object({
       command: z.string().describe("The command to run. One command per call."),
