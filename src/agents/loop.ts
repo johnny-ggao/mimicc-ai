@@ -20,17 +20,17 @@ import { markPinned, type WindowEvent, type WindowTuning } from "../context";
 import { failureMarker, isAbort } from "./failure";
 import { loopGuard, type TurnCapReason } from "./loopguard";
 import { stallGuard } from "./stallguard";
+import { emptyReplyGuard } from "./terminal";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
- * the loop is two nodes (model, then tools) — so this is roughly 12 model calls.
+ * the loop is the model node, the afterModel middleware nodes, and the tools
+ * node — several nodes, not two. The guards (loop, stall, empty reply) fire on
+ * their own thresholds well inside this budget; this is the crash net behind
+ * them, and it must stay wide enough that a guard always fires first.
  * Exceeding it raises GraphRecursionError.
- *
- * It is a crash guard, not a strategy: it stops a runaway turn, it does not
- * notice a model going in circles. Recognising that and bowing out gracefully is
- * a separate job nobody has done yet.
  */
-export const RECURSION_LIMIT = 24;
+export const RECURSION_LIMIT = 48;
 
 /**
  * When a checkpoint has to be **on disk** rather than merely handed to the saver.
@@ -555,6 +555,7 @@ export function createUniversalAgent(options: AgentOptions) {
     // the gate did to it.
     loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
     stallGuard(),
+    emptyReplyGuard(),
     confirmationGate(),
     // Appended here for the same reason the gate is: it is the main agent's
     // alone. A subagent has `checkpointer: false`, so there is no thread for a
