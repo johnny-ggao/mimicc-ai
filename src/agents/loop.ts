@@ -17,6 +17,7 @@ import { createMemoryTools, MemoryStore, type MemoryDirs } from "../memory";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
+import { failureMarker, isAbort } from "./failure";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -414,6 +415,82 @@ function environment(model: ChatOpenAI, options: AgentOptions): AgentEnvironment
 }
 
 /**
+ * Writes a durable failure marker when a turn fails, without widening the
+ * console's narrow seam.
+ *
+ * The model's error surfaces when the returned iterable is consumed (for
+ * `stream`) or when the promise settles (for `invoke`) — never at the call
+ * itself, so both entry points are wrapped rather than a middleware hook.
+ * There is no middleware slot that runs on model *error*: `wrapModelCall` can
+ * retry or substitute a response but cannot reach the checkpoint, and the
+ * error propagates before any `afterModel` hook (see ticket 14).
+ *
+ * A failure writes the marker via `updateState` before re-throwing, so the
+ * caller sees exactly the error it saw before — the only difference is that the
+ * checkpoint now records the failure for the next turn to read. Abort is left
+ * untouched: it is control, not failure (CONTEXT.md「中止」), and re-throws as
+ * it came.
+ */
+function withFailureMarker<T>(graph: T): T {
+  // The graph is viewed through a loose lens here, because the wrapped entry
+  // points only need three methods and forwarding the rest is the proxy's job.
+  // The public type stays `T` — this cast never leaks to a caller.
+  const g = graph as unknown as {
+    invoke: (...args: unknown[]) => Promise<unknown>;
+    stream: (...args: unknown[]) => Promise<AsyncIterable<unknown>>;
+    updateState: (config: unknown, values: unknown) => Promise<unknown>;
+  };
+
+  const record = async (config: unknown, error: unknown): Promise<void> => {
+    if (isAbort(error)) return;
+    const threadId = (config as { configurable?: { thread_id?: unknown } } | undefined)
+      ?.configurable?.thread_id;
+    if (typeof threadId !== "string") return;
+    try {
+      await g.updateState(
+        { configurable: { thread_id: threadId } },
+        { messages: [failureMarker(error)] },
+      );
+    } catch {
+      // Best effort: the turn already failed, and a marker that cannot be
+      // written must not mask that failure with a bookkeeping error.
+    }
+  };
+
+  const invoke = async (...args: unknown[]): Promise<unknown> => {
+    try {
+      return await g.invoke(...args);
+    } catch (error) {
+      await record(args[1], error);
+      throw error;
+    }
+  };
+
+  const stream = async (...args: unknown[]): Promise<AsyncIterable<unknown>> => {
+    const inner = await g.stream(...args);
+    return (async function* () {
+      try {
+        for await (const event of inner) yield event;
+      } catch (error) {
+        await record(args[1], error);
+        throw error;
+      }
+    })();
+  };
+
+  // A proxy, not a new type: it forwards everything except the two wrapped
+  // entry points, so callers keep the full compiled-graph surface while the
+  // failure marker is written on their behalf.
+  return new Proxy(graph as object, {
+    get(target, prop, receiver) {
+      if (prop === "invoke") return invoke;
+      if (prop === "stream") return stream;
+      return Reflect.get(target, prop, receiver) as unknown;
+    },
+  }) as T;
+}
+
+/**
  * The loop.
  *
  * `createAgent` is `new ReactAgent(...)`, which builds a StateGraph over two
@@ -472,7 +549,7 @@ export function createUniversalAgent(options: AgentOptions) {
       : []),
   ];
 
-  return createAgent({
+  const graph = createAgent({
     model,
     tools: registeredTools(env),
     // Wrapped, not handed over as a string, and the difference is on the wire.
@@ -493,4 +570,5 @@ export function createUniversalAgent(options: AgentOptions) {
     checkpointer: options.checkpointer ?? new MemorySaver(),
     middleware,
   });
+  return withFailureMarker(graph);
 }
