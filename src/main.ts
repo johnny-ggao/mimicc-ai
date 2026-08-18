@@ -61,6 +61,12 @@ async function main(): Promise<void> {
     onWindow: (event) => {
       log.info("context_window", { ...event });
     },
+    // A turn that was force-stopped is neither a failure nor a clean success;
+    // it is the third state the loop guard reports, and it must be observable
+    // as structured data rather than inferred from the transcript.
+    onCap: (reason) => {
+      log.info("turn_capped", { reason });
+    },
   });
 
   log.info("repl_start", {

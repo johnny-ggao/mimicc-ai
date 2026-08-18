@@ -18,6 +18,7 @@ import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
 import { failureMarker, isAbort } from "./failure";
+import { loopGuard, type TurnCapReason } from "./loopguard";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -175,6 +176,15 @@ export interface AgentOptions {
    * these numbers, so main.ts always passes one.
    */
   onUsage?: (usage: ModelUsage) => void;
+  /**
+   * Told when a turn ends capped rather than clean (forced by the loop guard).
+   *
+   * Structured and separate from `onUsage`/`onWindow` because it is a turn
+   * outcome, not a request: a capped turn is neither a failure nor a clean
+   * success, and that third state is the whole point (see ticket 17 and
+   * ADR 0005). main.ts logs it as `turn_capped`.
+   */
+  onCap?: (reason: TurnCapReason) => void;
 }
 
 /**
@@ -540,6 +550,9 @@ export function createUniversalAgent(options: AgentOptions) {
 
   const middleware: AnyAgentMiddleware[] = [
     ...agentStack(MAIN_AGENT, env),
+    // Before the gate, so it hashes the raw model output rather than whatever
+    // the gate did to it.
+    loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
     confirmationGate(),
     // Appended here for the same reason the gate is: it is the main agent's
     // alone. A subagent has `checkpointer: false`, so there is no thread for a
