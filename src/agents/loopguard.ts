@@ -1,5 +1,7 @@
-import { AIMessage, HumanMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
+
+import { hintInjector } from "./hint";
 
 /**
  * Detects a model going in circles and force-stops it, instead of leaving it to
@@ -45,14 +47,14 @@ export function loopGuard(options: {
 }): AnyAgentMiddleware {
   let streak = 0;
   let lastKey: string | null = null;
-  let pendingWarning: string | null = null;
+  const inject = hintInjector();
 
   return createMiddleware({
     name: "LoopGuard",
     beforeAgent: () => {
       streak = 0;
       lastKey = null;
-      pendingWarning = null;
+      inject.reset();
     },
     afterModel: (state: { messages?: BaseMessage[] }) => {
       const last = state.messages?.[state.messages.length - 1];
@@ -89,18 +91,10 @@ export function loopGuard(options: {
         };
       }
       if (streak >= WARN_THRESHOLD) {
-        pendingWarning = warningText(streak);
+        inject.queue(warningText(streak));
       }
       return;
     },
-    wrapModelCall: async (request, handler) => {
-      if (pendingWarning === null) return handler(request);
-      const warning = pendingWarning;
-      pendingWarning = null;
-      return handler({
-        ...request,
-        messages: [...(request.messages ?? []), new HumanMessage(warning)],
-      });
-    },
+    wrapModelCall: inject.wrapModelCall,
   }) as AnyAgentMiddleware;
 }

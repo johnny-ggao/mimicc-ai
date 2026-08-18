@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { fromSubagent, summarizeCall } from "@/console";
+import { describeError, fromSubagent, summarizeCall } from "@/console";
 
 /**
  * The console is a debugging shell and mostly out of scope for tests — but this
@@ -90,5 +90,27 @@ describe("naming a tool call in one line", () => {
 
     expect(line.length).toBeLessThan(90);
     expect(line).toEndWith("...");
+  });
+});
+
+describe("turning a thrown error into one line", () => {
+  test("abort, recursion and llm status keep their exact wording", () => {
+    expect(describeError({ name: "AbortError" })).toBe("^C interrupted");
+    expect(describeError({ name: "GraphRecursionError" })).toBe(
+      "stopped after 48 steps without a final answer",
+    );
+    expect(describeError({ status: 429, message: "rate" })).toBe(
+      "llm 429: rate (rate limited, or out of balance)",
+    );
+    expect(describeError({ status: 401, message: "bad key" })).toBe(
+      "llm 401: bad key (check LLM_API_KEY)",
+    );
+    expect(describeError({ status: 402, message: "empty" })).toBe(
+      "llm 402: empty (insufficient balance)",
+    );
+  });
+
+  test("anything else falls back to the error message", () => {
+    expect(describeError(new Error("boom"))).toBe("boom");
   });
 });

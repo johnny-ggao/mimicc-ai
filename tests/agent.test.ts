@@ -174,6 +174,14 @@ describe("createAgent", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.tool_call_id).toBe("call_1");
   });
+
+  test("a forwarded method survives the failure-marker proxy", () => {
+    // withFailureMarker wraps invoke/stream and forwards the rest through a
+    // Proxy. Every forwarded method reads `this.#graph`, so `this` must be the
+    // graph, not the proxy — before the bind fix this threw a TypeError.
+    const g = graph();
+    expect(() => g.getState({ configurable: { thread_id: "t" } })).not.toThrow();
+  });
 });
 
 /* ---------- 以下是能力，不是循环 ---------- */

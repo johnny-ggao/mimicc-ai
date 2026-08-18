@@ -7,6 +7,8 @@ import {
 } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
+import { hintInjector } from "./hint";
+
 /**
  * Ensures a tool-using turn ends with a visible assistant response.
  *
@@ -48,13 +50,13 @@ function toolResultSinceLastUser(messages: BaseMessage[]): boolean {
 
 export function emptyReplyGuard(): AnyAgentMiddleware {
   let retried = false;
-  let pendingReminder: string | null = null;
+  const inject = hintInjector();
 
   return createMiddleware({
     name: "EmptyReplyGuard",
     beforeAgent: () => {
       retried = false;
-      pendingReminder = null;
+      inject.reset();
     },
     afterModel: {
       canJumpTo: ["model"],
@@ -68,7 +70,7 @@ export function emptyReplyGuard(): AnyAgentMiddleware {
 
         if (!retried) {
           retried = true;
-          pendingReminder = REMINDER;
+          inject.queue(REMINDER);
           return {
             messages: last.id !== undefined ? [new RemoveMessage({ id: last.id })] : [],
             jumpTo: "model" as const,
@@ -84,14 +86,6 @@ export function emptyReplyGuard(): AnyAgentMiddleware {
         };
       },
     },
-    wrapModelCall: async (request, handler) => {
-      if (pendingReminder === null) return handler(request);
-      const reminder = pendingReminder;
-      pendingReminder = null;
-      return handler({
-        ...request,
-        messages: [...(request.messages ?? []), new HumanMessage(reminder)],
-      });
-    },
+    wrapModelCall: inject.wrapModelCall,
   }) as AnyAgentMiddleware;
 }

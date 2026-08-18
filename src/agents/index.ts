@@ -13,10 +13,14 @@
  *
  * A barrel, following `tools/` and `checkpoint/`: everything outside this
  * directory imports `@/agents`, and only files inside it reach for a specific
- * module.
+ * module. The one exception is `tools/task.ts`, which imports `./outcome`
+ * directly — importing this barrel there would close the cycle
+ * `agents → loop → tools → task → agents` (see the note in task.ts).
  */
 export {
+  assertLoopGuardBeforeGate,
   createUniversalAgent,
+  pinRejections,
   CONFIRMATION_POLICY,
   DURABILITY,
   MAIN_AGENT,
@@ -35,3 +39,4 @@ export {
 } from "./kinds";
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
 export { interruptedText, toolRecovery, type ToolRecoveryOptions } from "./recovery";
+export { classify, failureMarker, failureText, type TurnOutcome } from "./outcome";

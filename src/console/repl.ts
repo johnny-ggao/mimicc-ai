@@ -3,7 +3,13 @@ import { createInterface } from "node:readline/promises";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
-import { DURABILITY, RECURSION_LIMIT, type AgentGraph } from "../agents";
+import {
+  classify,
+  DURABILITY,
+  failureText,
+  RECURSION_LIMIT,
+  type AgentGraph,
+} from "../agents";
 import { markdownStream } from "./markdown";
 import { TASK_TOOL_NAME } from "../tools";
 
@@ -146,7 +152,7 @@ export async function runRepl({ graph }: ReplOptions): Promise<void> {
 
 /** Prints whatever the turn produced, and returns the batch still waiting. */
 function finish(turn: TurnResult): Pending | null {
-  if (turn.error !== null) process.stdout.write(`${describe(turn.error)}\n`);
+  if (turn.error !== null) process.stdout.write(`${describeError(turn.error)}\n`);
   if (turn.requests === null) {
     process.stdout.write("\n");
     return null;
@@ -448,20 +454,15 @@ function renderStructure(
 }
 
 /** Turns whatever the graph threw into one line a user can act on. */
-function describe(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const { name, status, message } = error as {
-      name?: string;
-      status?: number;
-      message?: string;
-    };
-
-    if (name === "AbortError" || name?.includes("Abort") === true)
-      return "^C interrupted";
-    if (name === "GraphRecursionError") {
-      return `stopped after ${String(RECURSION_LIMIT)} steps without a final answer`;
-    }
-
+export function describeError(error: unknown): string {
+  const outcome = classify(error);
+  if (outcome.kind === "abort") return "^C interrupted";
+  if (outcome.reason === "recursion") {
+    return `stopped after ${String(RECURSION_LIMIT)} steps without a final answer`;
+  }
+  if (outcome.reason === "llm_status") {
+    const status = outcome.status;
+    const message = (outcome.error as { message?: string }).message;
     const hint =
       status === 401 || status === 403
         ? " (check LLM_API_KEY)"
@@ -470,8 +471,7 @@ function describe(error: unknown): string {
           : status === 402
             ? " (insufficient balance)"
             : "";
-    if (status !== undefined) return `llm ${String(status)}: ${message ?? ""}${hint}`;
+    return `llm ${String(status)}: ${message ?? ""}${hint}`;
   }
-
-  return error instanceof Error ? error.message : String(error);
+  return failureText(outcome.error);
 }

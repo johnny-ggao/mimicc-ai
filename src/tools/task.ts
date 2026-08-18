@@ -9,6 +9,9 @@ import { createAgent, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
 import { NEVER_REPLAY } from "./replay";
+// Direct, not the barrel: the barrel imports loop.ts, which imports ../tools
+// (this file), so importing ../agents here would close a cycle.
+import { classify, failureText } from "../agents/outcome";
 
 /**
  * `Task`: dispatch a registered subagent, get one report back.
@@ -306,11 +309,11 @@ function describeTask(specs: SubagentSpec[]): string {
  * structurally.
  */
 function explain(error: unknown, type: string, limit: number): string {
-  const named = error as { name?: string; message?: string };
-  if (named.name === "GraphRecursionError") {
+  const outcome = classify(error);
+  if (outcome.kind === "failure" && outcome.reason === "recursion") {
     return `the ${type} subagent used all ${String(limit)} steps without reporting back. Narrow the objective, or split it across several dispatches.`;
   }
-  const message = (named.message ?? String(error)).split("\n")[0] ?? "";
+  const message = failureText(error).split("\n")[0] ?? "";
   return `the ${type} subagent failed: ${message}`;
 }
 

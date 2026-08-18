@@ -11,12 +11,14 @@
  * method, so changing what middleware is installed does not ripple in here.
  */
 export { runRepl, type ReplOptions } from "./repl";
-// `fromSubagent` and `summarizeCall` are exported for their tests rather than
-// for callers: both encode a fact about langchain's stream that was measured
-// rather than read off documentation (a subagent's chunks are told apart by
-// `checkpoint_ns` depth, not by `name`), and a fact like that has to be pinned
-// somewhere a change would fail.
-export { fromSubagent, summarizeCall } from "./repl";
+// `describeError`, `fromSubagent` and `summarizeCall` are exported for their
+// tests rather than for callers. `fromSubagent` and `summarizeCall` encode a
+// fact about langchain's stream that was measured rather than read off
+// documentation (a subagent's chunks are told apart by `checkpoint_ns` depth,
+// not by `name`) — a fact like that has to be pinned somewhere a change would
+// fail. `describeError` is pinned so the turn-ending wording the user reads
+// does not drift (ticket 08).
+export { describeError, fromSubagent, summarizeCall } from "./repl";
 export {
   markdownStream,
   renderLine,

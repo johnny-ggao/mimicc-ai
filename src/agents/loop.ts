@@ -17,7 +17,7 @@ import { createMemoryTools, MemoryStore, type MemoryDirs } from "../memory";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
-import { failureMarker, isAbort } from "./failure";
+import { classify, failureMarker } from "./outcome";
 import { loopGuard, type TurnCapReason } from "./loopguard";
 import { stallGuard } from "./stallguard";
 import { emptyReplyGuard } from "./terminal";
@@ -328,10 +328,16 @@ function confirmationGate(): AnyAgentMiddleware {
  * Every `ToolMessage` in that update is a rejection — `hitl.js:492-493` only
  * pushes one when the decision was `reject` — so there is nothing to filter.
  */
-function pinRejections(gate: AnyAgentMiddleware): AnyAgentMiddleware {
+export function pinRejections(gate: AnyAgentMiddleware): AnyAgentMiddleware {
   const slot = (gate as { afterModel?: unknown }).afterModel;
+  // No afterModel means nothing to pin: the gate simply has no hook to wrap.
+  if (slot === undefined) return gate;
   const hook = typeof slot === "function" ? slot : (slot as { hook?: unknown })?.hook;
-  if (typeof hook !== "function") return gate;
+  if (typeof hook !== "function") {
+    throw new Error(
+      "the confirmation gate's afterModel changed shape — rejections would not be pinned",
+    );
+  }
 
   const wrapped = async (...args: unknown[]): Promise<unknown> => {
     const update = (await (hook as (...a: unknown[]) => Promise<unknown>)(...args)) as
@@ -453,7 +459,7 @@ function withFailureMarker<T>(graph: T): T {
   };
 
   const record = async (config: unknown, error: unknown): Promise<void> => {
-    if (isAbort(error)) return;
+    if (classify(error).kind === "abort") return;
     const threadId = (config as { configurable?: { thread_id?: unknown } } | undefined)
       ?.configurable?.thread_id;
     if (typeof threadId !== "string") return;
@@ -496,9 +502,42 @@ function withFailureMarker<T>(graph: T): T {
     get(target, prop, receiver) {
       if (prop === "invoke") return invoke;
       if (prop === "stream") return stream;
-      return Reflect.get(target, prop, receiver) as unknown;
+      const value = Reflect.get(target, prop, receiver) as unknown;
+      // Bind methods back to the graph: a forwarded method reads `this.#graph`
+      // (a private field), and `this` would otherwise be the proxy, which
+      // throws a TypeError (ticket 05).
+      if (typeof value !== "function") return value;
+      const fn = value as (...args: unknown[]) => unknown;
+      return (...args: unknown[]) => fn.apply(target, args);
     },
   }) as T;
+}
+
+/**
+ * Refuses a main-agent stack whose loop guard would not see the raw model output.
+ *
+ * The loop guard hashes the tool-call set in `afterModel` to notice a model
+ * going in circles. The gate also runs in `afterModel`, and it intercepts tool
+ * calls to ask for confirmation — so if it ran first, the guard would hash
+ * whatever the gate left, not what the model wrote. Both are installed
+ * unconditionally for the main agent, so a missing half is as wrong as the
+ * wrong order, and both are refused.
+ *
+ * By name rather than by identity, for the same reason as
+ * `assertMeterInsideWindow`: the names are what langchain carries
+ * (`createMiddleware({ name })`), and comparing instances would only prove the
+ * function returned what it just built. Exported so a test can hand it a
+ * deliberately wrong stack.
+ */
+export function assertLoopGuardBeforeGate(stack: AnyAgentMiddleware[]): void {
+  const at = (name: string) =>
+    stack.findIndex((middleware) => middleware.name === name);
+  const guard = at("LoopGuard");
+  const gate = at("HumanInTheLoopMiddleware");
+  if (guard !== -1 && gate !== -1 && guard < gate) return;
+  throw new Error(
+    `the loop guard must be installed before the confirmation gate, or it hashes what the gate left instead of the raw model output (LoopGuard at ${String(guard)}, HumanInTheLoopMiddleware at ${String(gate)})`,
+  );
 }
 
 /**
@@ -554,16 +593,21 @@ export function createUniversalAgent(options: AgentOptions) {
     // Before the gate, so it hashes the raw model output rather than whatever
     // the gate did to it.
     loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
-    stallGuard(),
-    emptyReplyGuard(),
-    confirmationGate(),
-    // Appended here for the same reason the gate is: it is the main agent's
-    // alone. A subagent has `checkpointer: false`, so there is no thread for a
-    // journal to sit beside — see the note in tools/task.ts.
+    // Outside stallGuard: wrapToolCall nests first-in-outermost, so this must
+    // sit outside the guard to see the error ToolMessage the guard turns a
+    // throw into and record its settlement — the reverse order skips it
+    // (ticket 10). It belongs to the main agent alone: a subagent has
+    // `checkpointer: false`, so there is no thread for a journal to sit
+    // beside (see the note in tools/task.ts).
     ...(options.stateDir !== undefined
       ? [toolRecovery({ directory: options.stateDir })]
       : []),
+    stallGuard(),
+    emptyReplyGuard(),
+    confirmationGate(),
   ];
+
+  assertLoopGuardBeforeGate(middleware);
 
   const graph = createAgent({
     model,

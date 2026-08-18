@@ -256,6 +256,25 @@ test("an ordinary call records an intent and then a settlement", async () => {
   if (settled.kind !== "settled") throw new Error("unreachable");
   expect(settled.settlement.content).toContain('"name": "mimicc-ai"');
 });
+/**
+ * A tool that *throws* still settles — as an error, not as an interruption.
+ *
+ * A throw is "this call ran and failed", not "the process died mid-call". The
+ * journal must not confuse the two: an interruption means the outcome is
+ * unknown, an error settlement means it is known and bad (tickets 10/11).
+ */
+test("a call that throws records a settled error, not an interruption", async () => {
+  const { state } = workspace();
+  // `Read` throws on a missing file — the ordinary path, not a crash.
+  ask = { name: "Read", args: { path: "definitely-not-here.txt" } };
+
+  await agentOn(state, "threw")();
+
+  const settled = await new ToolJournal(state, "threw").lookup("call_1");
+  expect(settled.kind).toBe("settled");
+  if (settled.kind !== "settled") throw new Error("unreachable");
+  expect(settled.settlement.isError).toBe(true);
+});
 
 /**
  * The gate runs in `afterModel`, before the tools superstep, so a rejected call

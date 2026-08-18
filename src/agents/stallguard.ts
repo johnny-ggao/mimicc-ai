@@ -1,5 +1,7 @@
-import { HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { ToolMessage } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
+
+import { hintInjector } from "./hint";
 
 /**
  * Detects a run of failing tool calls and prompts the model to change approach.
@@ -21,12 +23,12 @@ const HINT_TEXT =
 
 export function stallGuard(): AnyAgentMiddleware {
   let badStreak = 0;
-  let pendingHint: string | null = null;
+  const inject = hintInjector();
 
   const record = (bad: boolean): void => {
     badStreak = bad ? badStreak + 1 : 0;
     if (badStreak >= BAD_STREAK_LIMIT) {
-      pendingHint = HINT_TEXT;
+      inject.queue(HINT_TEXT);
       badStreak = 0;
     }
   };
@@ -35,7 +37,7 @@ export function stallGuard(): AnyAgentMiddleware {
     name: "StallGuard",
     beforeAgent: () => {
       badStreak = 0;
-      pendingHint = null;
+      inject.reset();
     },
     wrapToolCall: async (request, handler) => {
       try {
@@ -48,17 +50,12 @@ export function stallGuard(): AnyAgentMiddleware {
           tool_call_id: request.toolCall.id ?? "",
           name: request.toolCall.name ?? "",
           content: `${String(error)}\n Please fix your mistakes.`,
+          // A throw is a failure, not a crash — mark it so the journal records an
+          // error settlement rather than a success (ticket 10).
+          status: "error",
         });
       }
     },
-    wrapModelCall: async (request, handler) => {
-      if (pendingHint === null) return handler(request);
-      const hint = pendingHint;
-      pendingHint = null;
-      return handler({
-        ...request,
-        messages: [...(request.messages ?? []), new HumanMessage(hint)],
-      });
-    },
+    wrapModelCall: inject.wrapModelCall,
   }) as AnyAgentMiddleware;
 }
