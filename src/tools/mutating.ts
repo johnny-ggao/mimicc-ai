@@ -144,9 +144,16 @@ export const bashTool = tool(
       cwd: ROOT,
       stdout: "pipe",
       stderr: "pipe",
-      // The model's own environment, minus the one variable it must never read
-      // back out of a process it started.
-      env: { ...process.env, LLM_API_KEY: undefined },
+      // The model's own environment, minus the key variables it must never read
+      // back out of a process it started. All three names are stripped — the two
+      // per-provider keys and the legacy alias — because any one of them is the
+      // credential for whichever provider the program happens to run on.
+      env: {
+        ...process.env,
+        LLM_API_KEY: undefined,
+        LLM_DEEPSEEK_API_KEY: undefined,
+        LLM_MOONSHOT_CN_API_KEY: undefined,
+      },
     });
 
     const timer = setTimeout(() => void child.kill(), MAX_COMMAND_MS);

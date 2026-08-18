@@ -100,7 +100,7 @@ export function usageMeter(
         messages: request.messages.length,
         inputTokens: usage?.input_tokens ?? 0,
         outputTokens: usage?.output_tokens ?? 0,
-        cacheRead: usage?.input_token_details?.cache_read ?? 0,
+        cacheRead: cacheReadOf(response),
         reasoningTokens: usage?.output_token_details?.reasoning,
         elapsedMs,
       });
@@ -126,4 +126,32 @@ export function usageMeter(
 export function usageOf(message: unknown): UsageMetadata | undefined {
   return (message as { usage_metadata?: unknown }).usage_metadata as
     UsageMetadata | undefined;
+}
+
+/**
+ * Input tokens the provider served from its prefix cache, in one place.
+ *
+ * Two providers, two spellings of the same number:
+ *
+ * - OpenAI's `prompt_tokens_details.cached_tokens` — what `@langchain/openai`
+ *   maps into `usage_metadata.input_token_details.cache_read`, and what DeepSeek
+ *   fills in.
+ * - Moonshot's top-level `usage.cached_tokens` — which the mapper drops. It rides
+ *   through untouched on the chunk's `response_metadata.usage`, but only on the
+ *   streaming path (the non-streaming branch never attaches it — see the note in
+ *   `usageMeter` above).
+ *
+ * The fallback to `cached_tokens` is what keeps the scale honest for Moonshot;
+ * without it every Moonshot request would report `cacheRead: 0`, and the one
+ * number this file exists for would silently lie. The non-streaming summary call
+ * cannot reach Moonshot's field, so its `cacheRead` stays 0 there — a known gap,
+ * not a silent one.
+ */
+export function cacheReadOf(message: unknown): number {
+  const mapped = usageOf(message)?.input_token_details?.cache_read;
+  if (mapped !== undefined && mapped !== null) return mapped;
+  const raw = (
+    message as { response_metadata?: { usage?: { cached_tokens?: number } } }
+  ).response_metadata?.usage;
+  return raw?.cached_tokens ?? 0;
 }

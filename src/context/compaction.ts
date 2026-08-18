@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { downgrade } from "./downgrade";
 import { planCut, project, requestTokens, tailWithin, type Cut } from "./projection";
-import { usageOf, type ModelUsage } from "../usage";
+import { cacheReadOf, usageOf, type ModelUsage } from "../usage";
 
 /**
  * Keeping the context window under the limit, and everything that requires
@@ -240,7 +240,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
         messages: 1,
         inputTokens: usageOf(reply)?.input_tokens ?? 0,
         outputTokens: usageOf(reply)?.output_tokens ?? 0,
-        cacheRead: usageOf(reply)?.input_token_details?.cache_read ?? 0,
+        cacheRead: cacheReadOf(reply),
         reasoningTokens: usageOf(reply)?.output_token_details?.reasoning,
         elapsedMs: Date.now() - startedAt,
       });

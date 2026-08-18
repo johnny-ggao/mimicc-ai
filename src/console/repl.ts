@@ -465,7 +465,7 @@ export function describeError(error: unknown): string {
     const message = (outcome.error as { message?: string }).message;
     const hint =
       status === 401 || status === 403
-        ? " (check LLM_API_KEY)"
+        ? " (check the provider's API key)"
         : status === 429
           ? " (rate limited, or out of balance)"
           : status === 402

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { createUniversalAgent } from "./agents";
 import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
+import { resolveModelConfig } from "./models";
 import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
 import { resolveMemoryDirs } from "./memory";
@@ -13,6 +14,17 @@ import { runRepl } from "./console";
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger(config.LOG_LEVEL);
+
+  // Resolved here, once, rather than passed through as three env strings: the
+  // per-model facts (window limit, max tokens, base URL) live in the registry,
+  // and "which one model runs" is an environment question the agent builder
+  // should not re-answer.
+  const model = resolveModelConfig(config);
+  if (model.usedLegacyKey) {
+    log.warn("deprecated_llm_api_key", {
+      note: "LLM_API_KEY is the legacy name for the DeepSeek key; set LLM_DEEPSEEK_API_KEY",
+    });
+  }
 
   const systemPrompt = buildSystemPrompt(describeEnvironment());
   // Read once, here, for the same reason `describeEnvironment` is called here:
@@ -39,10 +51,13 @@ async function main(): Promise<void> {
   });
 
   const graph = createUniversalAgent({
-    baseURL: config.LLM_BASE_URL,
-    apiKey: config.LLM_API_KEY,
-    model: config.LLM_MODEL,
-    maxTokens: 4096,
+    baseURL: model.baseURL,
+    apiKey: model.apiKey,
+    model: model.model,
+    ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+    // The window limit is a per-model fact from the registry, not the global
+    // `WINDOW_LIMIT` constant that only described DeepSeek.
+    window: { limit: model.windowLimit },
     systemPrompt,
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
     checkpointer: new JsonlSaver(stateDir),
@@ -70,8 +85,10 @@ async function main(): Promise<void> {
   });
 
   log.info("repl_start", {
-    model: config.LLM_MODEL,
-    baseURL: config.LLM_BASE_URL,
+    provider: model.provider,
+    model: model.model,
+    baseURL: model.baseURL,
+    windowLimit: model.windowLimit,
     // Worth watching: this is the cacheable prefix sent on every single turn.
     systemPromptChars: systemPrompt.length,
     projectInstructionsChars: instructions?.length ?? 0,

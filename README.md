@@ -136,18 +136,24 @@ learn/                     教学工作区（讲义 / 参考卡 / 学习记录�
 
 ## LLM 接入
 
-模型层是 `@langchain/openai` 的 `ChatOpenAI`，走 **OpenAI 兼容协议**，但 `baseURL` 指向
-DeepSeek——协议兼容不代表用的是 OpenAI 的模型。三个环境变量控制它：
+模型层是 `@langchain/openai` 的 `ChatOpenAI`，走 **OpenAI 兼容协议**——协议兼容不代表用的是
+OpenAI 的模型。选哪个 provider、哪个模型，由 `src/models.ts` 的注册表决定，每个 provider 自带
+baseURL、默认模型、API key 变量，每个模型自带窗口上限和 maxTokens 这两个**实测/文档事实**。
 
-| 变量           | 必填 | 默认值                     |
-| -------------- | ---- | -------------------------- |
-| `LLM_API_KEY`  | 是   | 无，缺失则启动即失败       |
-| `LLM_BASE_URL` | 否   | `https://api.deepseek.com` |
-| `LLM_MODEL`    | 否   | `deepseek-chat`            |
+| 变量                      | 必填           | 默认值                 | 说明                                     |
+| ------------------------- | -------------- | ---------------------- | ---------------------------------------- |
+| `LLM_PROVIDER`            | 否             | `deepseek`             | `deepseek` 或 `moonshot-cn`              |
+| `LLM_DEEPSEEK_API_KEY`    | 选 DeepSeek 时 | 无                     | DeepSeek key；`LLM_API_KEY` 是其弃用别名 |
+| `LLM_MOONSHOT_CN_API_KEY` | 选 Moonshot 时 | 无                     | Moonshot 中国区 key                      |
+| `LLM_MODEL`               | 否             | 该 provider 的默认模型 | 必须是注册过的模型，未知即启动报错       |
+| `LLM_BASE_URL`            | 否             | provider 注册表里的值  | 代理 / 自建端点的逃生门                  |
 
-`GET /models` 目前只列 `deepseek-v4-flash` 与 `deepseek-v4-pro`；`deepseek-chat` 和
-`deepseek-reasoner` 虽未列出但仍可调用（别名，实测 2026-08-12）。所以上面那个默认值指向一个
-不在清单里的别名，落到哪个 v4 未知——要确定性就显式设 `LLM_MODEL=deepseek-v4-flash`。
+DeepSeek 默认模型 `deepseek-v4-flash`；Moonshot 中国区默认 `kimi-k3`，另有 `kimi-k2.7-code`、
+`kimi-k2.6`（`https://api.moonshot.cn/v1`，`/v1` 必带，与中国区 `.cn` / 国际区 `.ai` 是两套
+平台两套 key）。
+
+`LLM_MODEL` 必须是注册表里写明的模型：窗口上限是溢出保护靠它算的，而对一个没核实过窗口的别名
+猜一个数，正是这里拒绝的事。
 
 ## 控制台
 
@@ -412,10 +418,10 @@ LangGraph 上并弄懂它），同时是对照组。
   \`reasoning_content\` in the thinking mode must be passed back to the API.”）。
   DeepSeek 签发过的 id——**哪怕来自另一段对话**——不带也是 200；格式相符但从未签发的假 id
   会 400。流式与否无差别；`thinking: { type: "disabled" }` 下一律通过。
-- 所以**正常 agent 循环不会撞上它**，id 都来自模型。实测 `ChatOpenAI` 发出去时**会丢掉**
-  这个字段，而真实 API 依然返回 200——正因为 id 是它自己签发的。值得留意的只有两个场合：
-  历史被持久化后隔久了重放（识别是否过期**未实测**），以及自己伪造 tool_call id（测试夹具、
-  HITL 注入）。
+- 所以**正常 agent 循环不会撞上它**，id 都来自模型。框架的 converter 发出去时**会丢掉**
+  `reasoning_content`，DeepSeek 对自签发的 id 仍返回 200——但 `src/agents/model.ts` 现在把它
+  原样回传，对 DeepSeek 无害、且把「非自签发 id 才报错」那个窄例也堵上了（Moonshot 无条件要求
+  回传，这一步是它跑得起来的必要条件）。
 - **`tool_choice: "required"` 不被支持**：400 `Thinking mode does not support this tool_choice`。
   想强制调工具得靠提示词，或先关 thinking。
 - **v4 两个模型都支持 `tools`**（实测）。`temperature` / `top_p` 在 v4 上未实测；旧的

@@ -1,7 +1,7 @@
 import { ContextOverflowError } from "@langchain/core/errors";
 import type { ClientTool } from "@langchain/core/tools";
 import { SystemMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
-import { ChatOpenAI } from "@langchain/openai";
+import type { ChatOpenAI } from "@langchain/openai";
 import { MemorySaver } from "@langchain/langgraph";
 import type { BaseCheckpointSaver, Command } from "@langchain/langgraph";
 import {
@@ -12,6 +12,7 @@ import {
 } from "langchain";
 
 import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
+import { createChatModel } from "./model";
 import { toolRecovery } from "./recovery";
 import { createMemoryTools, MemoryStore, type MemoryDirs } from "../memory";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
@@ -221,10 +222,10 @@ export interface AgentGraph {
 }
 
 function createModel(options: AgentOptions): ChatOpenAI {
-  return new ChatOpenAI({
+  return createChatModel({
     model: options.model,
     apiKey: options.apiKey,
-    configuration: { baseURL: options.baseURL },
+    baseURL: options.baseURL,
     ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
     // Retrying a request that was refused for being too long is retrying a
     // request that cannot succeed: the bytes do not change between attempts.

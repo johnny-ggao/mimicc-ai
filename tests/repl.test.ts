@@ -103,7 +103,7 @@ describe("turning a thrown error into one line", () => {
       "llm 429: rate (rate limited, or out of balance)",
     );
     expect(describeError({ status: 401, message: "bad key" })).toBe(
-      "llm 401: bad key (check LLM_API_KEY)",
+      "llm 401: bad key (check the provider's API key)",
     );
     expect(describeError({ status: 402, message: "empty" })).toBe(
       "llm 402: empty (insufficient balance)",
