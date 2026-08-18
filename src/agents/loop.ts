@@ -19,6 +19,7 @@ import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
 import { failureMarker, isAbort } from "./failure";
 import { loopGuard, type TurnCapReason } from "./loopguard";
+import { stallGuard } from "./stallguard";
 
 /**
  * A ceiling on one user turn. The graph counts *node* executions, and one lap of
@@ -553,6 +554,7 @@ export function createUniversalAgent(options: AgentOptions) {
     // Before the gate, so it hashes the raw model output rather than whatever
     // the gate did to it.
     loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
+    stallGuard(),
     confirmationGate(),
     // Appended here for the same reason the gate is: it is the main agent's
     // alone. A subagent has `checkpointer: false`, so there is no thread for a
