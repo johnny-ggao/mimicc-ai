@@ -23,9 +23,13 @@
 | `13-crash-mid-tool.ts` | 崩溃打断一批工具调用后盘上剩什么：**默认档 `"async"` 会丢掉 intent 且整批重跑，`"sync"` 不会** | 否（stub） |
 | `14-recovery-end-to-end.ts` | 崩溃打断**我们自己的 agent** 之后重启：跑完的调用会不会再跑一次（**不会**） | 否（stub） |
 | `18-resume-at-an-open-gate.ts` | 门**还开着**时被 kill，重启后那道门还在不在：**在**（`getState` 里 `tasks=1 interrupts=1`），且冷启动的 `Command({resume})` 能答它；**但拿旧 id 直接敲一句话会把它吃掉** | 否（stub） |
+| `19-orphan-tool-call.ts` | 悬空的 `tool_calls`（后面没有 tool 结果）真 provider 认不认：**400，硬错误**；完整工具轮与平的历史都被接受，所以原因就是悬空本身 | **是 ≈ $0.001** |
 
-**只有 `08-overflow.ts` 花钱**（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
-2026-08-13 用户批准）。其余要么打本地 stub server，要么纯算术，要么小请求。
+**两个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
+2026-08-13 用户批准）与 `19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
+合计 < $0.001，2026-08-19 用户批准）。其余要么打本地 stub server，要么纯算术，要么小请求。
 
 ⚠️ **任何「让某个调用失败」的探针，别用失败状态码**：带失败码的响应会被 `AsyncCaller` 重试六次
 （实测一次溢出的 400 打了服务器**七次**）。用 200 + 空 `choices`。
+2026-08-19 在 `19-orphan-tool-call.ts` 上**原样复现**：一次真 400，`onFailedAttempt` 数到 7 次。
+那个探针必须打真 provider（问的就是 provider 收不收），所以它只能把重试**数出来**，压不掉。
