@@ -24,7 +24,11 @@ export { runRepl, type ReplOptions, type Start } from "./repl";
 // not by `name`) — a fact like that has to be pinned somewhere a change would
 // fail. `describeError` is pinned so the turn-ending wording the user reads
 // does not drift (ticket 08).
-export { describeError, fromSubagent, summarizeCall } from "./repl";
+// `fromModel` is the same kind of fact and was the same kind of bug: the
+// `"messages"` stream carries node output as well as model tokens, so a message
+// injected by a `beforeAgent` was rendered as the model's own prose on the first
+// turn of every session (`repro/22`).
+export { describeError, fromModel, fromSubagent, summarizeCall } from "./repl";
 // Same reason, and the sharpest case of it: `readDecision` decides whether a
 // keystroke approves a shell command. That an empty line is *not* a decision was
 // a shipping bug once (`repro/15`), so it is pinned where a change fails.

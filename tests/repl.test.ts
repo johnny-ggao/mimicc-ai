@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test";
 
-import { describeError, fromSubagent, readDecision, summarizeCall } from "@/console";
+import {
+  AIMessageChunk,
+  HumanMessage,
+  SystemMessage,
+  ToolMessage,
+} from "@langchain/core/messages";
+
+import {
+  describeError,
+  fromModel,
+  fromSubagent,
+  readDecision,
+  summarizeCall,
+} from "@/console";
 import type { Pending } from "@/console";
 
 /**
@@ -11,6 +24,41 @@ import type { Pending } from "@/console";
  * announces itself. Every value below was measured by
  * `repro/12-subagent-stream.ts` rather than imagined.
  */
+/**
+ * The other half of the same question. `fromSubagent` asks *whose* chunk it is;
+ * this asks whether a chunk is speech at all — and getting it wrong is not a
+ * cosmetic problem, it prints the injected context at the user.
+ *
+ * The `"messages"` stream carries node output alongside model tokens, and the
+ * dedup that hides that only covers messages already in the node's input. So a
+ * `beforeAgent` injection is emitted on the first turn of a session and rendered
+ * as the model's reply — which is exactly what shipped, for both injectors, in
+ * the order they run (`repro/22-injected-messages-hit-the-message-stream.ts`).
+ */
+describe("telling the model's speech from what a node wrote into state", () => {
+  test("the model's own chunks are prose", () => {
+    expect(fromModel(new AIMessageChunk({ content: "答案" }))).toBe(true);
+  });
+
+  // The injected catalogue and the project instructions are both HumanMessages
+  // returned from a beforeAgent hook. This is the bug, pinned by its own shape.
+  test("an injected human message is not", () => {
+    expect(
+      fromModel(new HumanMessage({ id: "skill-catalog", content: "<skill-catalog>" })),
+    ).toBe(false);
+  });
+
+  test("a tool result is not — it is drawn from state instead", () => {
+    expect(fromModel(new ToolMessage({ content: "ok", tool_call_id: "call_1" }))).toBe(
+      false,
+    );
+  });
+
+  test("a system message is not", () => {
+    expect(fromModel(new SystemMessage("you are"))).toBe(false);
+  });
+});
+
 describe("telling a subagent's chunks from the agent's", () => {
   test("the agent's own model chunks are not nested", () => {
     expect(

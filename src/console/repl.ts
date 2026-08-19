@@ -660,7 +660,7 @@ async function runTurn(
       }
 
       const [chunk, metadata] = payload as [BaseMessage, unknown];
-      if (chunk.getType() === "tool") continue; // Rendered from state instead.
+      if (!fromModel(chunk)) continue;
 
       if (fromSubagent(metadata)) {
         // Throttled to one a second, not one per chunk: an explore agent writing five
@@ -744,6 +744,35 @@ export function summarizeCall(name: string, args: unknown): string {
 
 function clip(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, width - 3)}...` : text;
+}
+
+/**
+ * Whether a streamed chunk is the model speaking, rather than a message some
+ * node wrote into state.
+ *
+ * The `"messages"` stream is not only tokens, and langgraph's own handler says
+ * so verbatim: *Collects messages from (1) chat model stream events and (2) node
+ * outputs* (@langchain/langgraph@1.4.9, dist/pregel/messages.js:22).
+ * `handleChainEnd` (:88-102) emits every BaseMessage it finds in a node's
+ * output, deduplicated only against the messages that were already in that
+ * node's *input* (:80-85).
+ *
+ * A `beforeAgent` that injects a message is exactly what slips through that
+ * dedup: on the first turn the injected message is not in the node's input, so
+ * it is emitted here and rendered as if the model had written it. Both injectors
+ * shipped that way — the skill catalogue and the project instructions were
+ * printed above the first reply of every session, in that order
+ * (`repro/22-injected-messages-hit-the-message-stream.ts`). From the second turn
+ * on the same message is in state and gets deduplicated, which is why the leak
+ * looked like a first-turn quirk instead of the rule it is.
+ *
+ * So the test is the *speaker*, not a list of the types we have noticed being
+ * noisy — that list was `"tool"` alone, and it was one entry short. Everything
+ * the graph writes into state is structure, and `renderStructure` already draws
+ * it from the `"values"` stream.
+ */
+export function fromModel(chunk: BaseMessage): boolean {
+  return chunk.getType() === "ai";
 }
 
 /**
