@@ -196,15 +196,32 @@ test("an interrupted unreplayable call is not repeated, and says so", async () =
   expect(toolText(out)).toContain("unsafe to repeat");
 });
 
-test("an interrupted call settles as interrupted, so a second resume does not ask again", async () => {
+/**
+ * The synthesised settlement is a record like any other, so a closed turn drops
+ * it too.
+ *
+ * ⚠️ This used to assert `settled` — and it was right to, until the turn started
+ * closing itself: `toolRecovery` now prunes on `afterAgent` (ticket 05), and a
+ * settled record's whole job is over by then. What the assertion pins now is the
+ * pruning, which is why it is not the same test wearing a new name: remove the
+ * prune and this fails.
+ *
+ * The half that moved out of reach — *that* recovery wrote a settlement at all,
+ * rather than leaving a bare intent — is only observable while the turn is still
+ * open, so it is measured where that is possible: `repro/21-when-a-turn-closes.ts`
+ * aborts a batch mid-flight and reads the settlement straight off the file.
+ */
+test("a closed turn leaves no settled record behind, synthesised or not", async () => {
   const { state } = workspace();
   ask = { name: "Write", args: { path: target("twice").relative, content: "hello" } };
   await seedIntent(state, "twice", "Write", "never");
 
-  await agentOn(state, "twice")();
+  const out = await agentOn(state, "twice")();
 
+  // It did settle as interrupted — that is what the model was handed.
+  expect(toolText(out)).toContain("interrupted");
   const after = await new ToolJournal(state, "twice").lookup("call_1");
-  expect(after.kind).toBe("settled");
+  expect(after.kind).toBe("unrecorded");
 });
 
 test("an interrupted call both sides call safe is simply run again", async () => {
@@ -246,15 +263,17 @@ test("a declaration that is safe now but was not then does not replay either", a
   expect(toolText(out)).toContain("interrupted");
 });
 
-test("an ordinary call records an intent and then a settlement", async () => {
+test("an ordinary call's result reaches the model, and its record does not outlive the turn", async () => {
   const { state } = workspace();
 
-  await agentOn(state, "ordinary")();
+  const out = await agentOn(state, "ordinary")();
 
-  const settled = await new ToolJournal(state, "ordinary").lookup("call_1");
-  expect(settled.kind).toBe("settled");
-  if (settled.kind !== "settled") throw new Error("unreachable");
-  expect(settled.settlement.content).toContain('"name": "mimicc-ai"');
+  expect(toolText(out)).toContain('"name": "mimicc-ai"');
+  // Pruned on `afterAgent`: settled means "already in the conversation", and the
+  // conversation is where it lives from here.
+  expect((await new ToolJournal(state, "ordinary").lookup("call_1")).kind).toBe(
+    "unrecorded",
+  );
 });
 /**
  * A tool that *throws* still settles — as an error, not as an interruption.
@@ -263,17 +282,21 @@ test("an ordinary call records an intent and then a settlement", async () => {
  * journal must not confuse the two: an interruption means the outcome is
  * unknown, an error settlement means it is known and bad (tickets 10/11).
  */
-test("a call that throws records a settled error, not an interruption", async () => {
+test("a call that throws settles as an error, not as an interruption", async () => {
   const { state } = workspace();
   // `Read` throws on a missing file — the ordinary path, not a crash.
   ask = { name: "Read", args: { path: "definitely-not-here.txt" } };
 
-  await agentOn(state, "threw")();
+  const out = await agentOn(state, "threw")();
 
-  const settled = await new ToolJournal(state, "threw").lookup("call_1");
-  expect(settled.kind).toBe("settled");
-  if (settled.kind !== "settled") throw new Error("unreachable");
-  expect(settled.settlement.isError).toBe(true);
+  // The distinction the journal must not blur: an error is a known-bad outcome,
+  // an interruption is an unknown one. Read off the message, because the record
+  // itself is pruned with the turn.
+  expect(toolText(out)).toContain("Error");
+  expect(toolText(out)).not.toContain("interrupted");
+  expect((await new ToolJournal(state, "threw").lookup("call_1")).kind).toBe(
+    "unrecorded",
+  );
 });
 
 /**

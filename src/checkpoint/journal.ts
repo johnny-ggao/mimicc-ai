@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { Replay } from "../tools/replay";
@@ -132,6 +132,13 @@ export class ToolJournal {
    * ask again whether a call that is already in the conversation should re-run.
    * Rewrites the file rather than appending a tombstone, because the file's whole
    * purpose is to be small enough to read on every lookup.
+   *
+   * ⚠️ **Published atomically** — temp file, then rename — for the same reason
+   * `checkpoint/file.ts` does it, and here the reason is sharper: this file's
+   * entire purpose is that the process can die at any moment, so a rewrite that
+   * can be caught half-done would be a crash-recovery file that is not itself
+   * crash-safe. What would be lost is exactly the records with an intent and no
+   * settlement, which are the only thing recovery has to go on.
    */
   async prune(): Promise<void> {
     const lines = await this.#read();
@@ -146,10 +153,13 @@ export class ToolJournal {
       return;
     }
     await mkdir(dirname(this.path), { recursive: true });
-    await Bun.write(
-      this.path,
+    const temp = `${this.path}.${String(process.pid)}.tmp`;
+    await writeFile(
+      temp,
       kept.map((line) => `${JSON.stringify(line)}\n`).join(""),
+      "utf8",
     );
+    await rename(temp, this.path);
   }
 
   /** Deletes the journal. Called when its session is deleted. */

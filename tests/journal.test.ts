@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import { ToolJournal } from "@/checkpoint";
 
@@ -99,6 +105,28 @@ test("pruning drops what settled and keeps what is still in doubt", async () => 
 
   expect((await log.lookup("done")).kind).toBe("unrecorded");
   expect((await log.lookup("pending")).kind).toBe("interrupted");
+});
+
+/**
+ * The rewrite is published atomically — temp file, then rename — and this is the
+ * only observable half of that: no debris left beside the journal.
+ *
+ * It matters more here than it looks. This file exists because the process can
+ * die at any moment, so a rewrite that could be caught half-done would be a
+ * crash-recovery file that is not itself crash-safe, and what a torn rewrite
+ * loses is exactly the records with an intent and no settlement — the only thing
+ * recovery has to go on.
+ */
+test("pruning leaves nothing behind beside the journal", async () => {
+  const log = journal();
+  await log.recordIntent(intent("done"));
+  await log.recordSettlement({ toolCallId: "done", content: "ok", isError: false });
+  await log.recordIntent(intent("pending"));
+
+  await log.prune();
+
+  const directory = dirname(log.path);
+  expect(readdirSync(directory)).toEqual([basename(log.path)]);
 });
 
 test("pruning the last settled call takes the file with it", async () => {

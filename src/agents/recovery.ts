@@ -78,6 +78,28 @@ export function interruptedText(tool: string): string {
 export function toolRecovery(options: ToolRecoveryOptions): AnyAgentMiddleware {
   return createMiddleware({
     name: "ToolRecovery",
+    /**
+     * Drops the records this turn no longer needs.
+     *
+     * `afterAgent` and not the console, because the journal is this middleware's
+     * data and the console has no business knowing the file exists. `afterAgent`
+     * and not `beforeAgent`, because a turn that opens after a crash must read
+     * those records *before* anything clears them — clearing on the way in is the
+     * same work in the one order that breaks it.
+     *
+     * 🔑 The safety of this rests on **when it does not run**: a turn suspended at
+     * the confirmation gate and a turn killed by Ctrl+C never reach here, and
+     * those are exactly the two endings whose records are still needed. Measured
+     * rather than assumed — `repro/21-when-a-turn-closes.ts` aborts a batch with
+     * one call already settled and checks that its settlement survives.
+     */
+    afterAgent: async (_state, runtime) => {
+      const threadId = (runtime as { configurable?: { thread_id?: unknown } })
+        ?.configurable?.thread_id;
+      if (typeof threadId !== "string") return undefined;
+      await forgive(new ToolJournal(options.directory, threadId).prune());
+      return undefined;
+    },
     wrapToolCall: async (request, handler) => {
       const threadId = (
         request.runtime as { configurable?: { thread_id?: unknown } } | undefined
