@@ -27,6 +27,7 @@
 | `20-abort-mid-tool-then-type.ts` | 出货路径造不造得出那个形状：**造得出**——Ctrl+C 打断跑着工具的回合、再敲一句话，下一次请求就带着悬空的 `tool_call` | 否（stub） |
 | `21-when-a-turn-closes.ts` | 把 `prune()` 接到 `afterAgent` 上安不安全：**安全**——中止的回合到不了 `afterAgent`，已 settle 的记录留了下来；而跑完的回合把旁挂清空 | 否（stub） |
 | `22-injected-messages-hit-the-message-stream.ts` | `beforeAgent` 注入的消息会不会被 `streamMode: "messages"` 当成模型的话流出来：**会，而且只在第一个回合**（后面的回合它已经在节点输入里，被 langgraph 的 dedup 挡掉）；skill 目录与项目 instructions **两个都漏** | 否（stub） |
+| `23-crash-mid-approved-tools.ts` | 门批准之后、工具跑到一半断电，冷启动还剩什么：**`next=["tools"] tasks=1` 但 `interrupts=0`**——盘上看得见，而 `adopt` 只看 interrupts 所以看不见；`invoke(null)` 在冷进程里能收完（合成结果、**副作用不重复**）并拿到最终回答 | 否（stub） |
 
 **两个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）与 `19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
