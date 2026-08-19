@@ -11,6 +11,7 @@ import {
   type AgentGraph,
 } from "../agents";
 import { markdownStream } from "./markdown";
+import { describeDrops, InputQueue, type Arrived, type Tag } from "./queue";
 import { describeSession, readChoice, renderSessionList } from "./picker";
 import { spendBreakdown, spendLine } from "./spend";
 import { addSpend, creditsOf, noSpend, type Spend } from "../usage";
@@ -114,6 +115,12 @@ export async function runRepl({
   rl.on("SIGINT", () => {
     if (inFlight) {
       inFlight.abort();
+      // Emptied too, and that is the point of ticket 09 rather than a tidy-up.
+      // Stopping the turn while letting the line typed over it start the next
+      // one is the console carrying on after being told to stop; what the queue
+      // held is reported by the loop, one flush later, so it does not land in the
+      // middle of the interrupted reply.
+      queue.clear();
       return;
     }
     rl.close();
@@ -214,41 +221,23 @@ export async function runRepl({
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Reading input: a line belongs to whatever the console was asking when it
-  // **arrived**, not to whatever it happens to be asking when the line is read.
-  //
-  // That distinction is the whole of ticket 04, and it was a shipping bug rather
-  // than a nicety. `for await (const line of rl)` does not pause readline while
-  // the body is awaiting a turn — the events keep firing and the async iterator
-  // buffers them, then replays them when the loop comes back (measured, both on
-  // a TTY and on a pipe: `repro/15-typing-during-a-turn.ts`). The arrival order
-  // survives; the arrival *moment* does not, and the moment is the only thing
-  // that distinguishes "answering the gate" from "was typed before the gate
-  // existed". Collecting the lines ourselves is what keeps it.
-  //
-  // ⚠️ **Only on a terminal.** Piped input has no such moment: the whole script
-  // was written before the process started, its order is deliberate, and there is
-  // no human whose stray keystroke needs protecting. Enforcing arrival there
-  // would make it impossible to answer a gate from a script at all — which is how
-  // this program is driven in probes and tests. So the rule is on where it
-  // protects somebody and off where it would only get in the way, and that is a
-  // decision rather than an oversight.
-  type Tag = "input" | "gate" | "picker";
-  interface Arrived {
-    tag: Tag;
-    text: string;
-  }
+  // Reading input. The rules — a line belongs to the question that was on screen
+  // when it arrived, at most one may wait, only an abort empties the queue — and
+  // the reasons for all three live in `queue.ts`. What stays here is the two
+  // things a queue must not do: wait, and write to the terminal.
 
-  const strict = process.stdin.isTTY === true;
-  const arrived: Arrived[] = [];
+  const queue = new InputQueue(process.stdin.isTTY === true);
   let ended = false;
   let wake: (() => void) | null = null;
 
   const asking = (): Tag =>
     pending !== null ? "gate" : picking !== null ? "picker" : "input";
 
+  // `inFlight !== null` is the whole of "was this typed over a running reply",
+  // and it is only true at the moment the line lands — which is why it is read
+  // here rather than reconstructed later.
   rl.on("line", (raw) => {
-    arrived.push({ tag: asking(), text: raw.trim() });
+    queue.push(asking(), raw.trim(), inFlight !== null);
     wake?.();
   });
   rl.on("close", () => {
@@ -259,35 +248,21 @@ export async function runRepl({
   /**
    * The next line this console is allowed to act on, or null once input ends.
    *
-   * Everything the arrival rule buys is in here; the loop below is unchanged.
+   * The reporting is deliberately here and not at the moment a line is refused:
+   * a refusal happens while a reply is streaming, and writing into that would
+   * put the console's words in the middle of the model's sentence — the same
+   * collision `runTurn` already flushes around.
    */
   const take = async (): Promise<Arrived | null> => {
     for (;;) {
-      if (strict) {
-        // A decision typed at a gate that has since been answered, or a choice
-        // typed at a picker that is gone, can never be consumed. Dropping it
-        // silently would be the same class of bug in the other direction, so it
-        // is dropped out loud.
-        for (let index = arrived.length - 1; index >= 0; index -= 1) {
-          const item = arrived[index];
-          if (item === undefined) continue;
-          const stale =
-            (item.tag === "gate" && pending === null) ||
-            (item.tag === "picker" && picking === null);
-          if (!stale) continue;
-          arrived.splice(index, 1);
-          process.stdout.write(
-            `${DIM}(dropped, the question it answered is gone: ${item.text})${RESET}\n`,
-          );
-        }
+      const alive = (tag: Tag): boolean =>
+        tag === "gate" ? pending !== null : tag === "picker" ? picking !== null : true;
+      for (const line of describeDrops(queue.sweep(alive))) {
+        process.stdout.write(`${DIM}${line}${RESET}\n`);
       }
 
-      const want = asking();
-      const index = strict ? arrived.findIndex((item) => item.tag === want) : 0;
-      if (index !== -1 && arrived.length > 0) {
-        const [item] = arrived.splice(index, 1);
-        if (item !== undefined) return item;
-      }
+      const item = queue.take(asking());
+      if (item !== undefined) return item;
       if (ended) return null;
       await new Promise<void>((resolve) => {
         wake = resolve;
@@ -308,6 +283,21 @@ export async function runRepl({
     const line = await take();
     if (line === null) break;
     const input = line.text;
+
+    // Said before it runs, not as a courtesy: the reply this was typed over has
+    // scrolled by now, so on screen it is indistinguishable from a line the user
+    // has just entered — and it is about to spend a turn of its own.
+    //
+    // Slash commands are left out because that last clause is the whole reason.
+    // They start no turn, and each already announces itself — `(new session)`,
+    // the cost table, `bye`. Narrating those would be saying twice what the
+    // console is about to show once (measured: `/exit` typed over a running
+    // reply got the notice, and it read as noise).
+    if (line.queued && input.length > 0 && !input.startsWith("/")) {
+      process.stdout.write(
+        `${DIM}(typed during the last turn, running it now: ${input})${RESET}\n`,
+      );
+    }
 
     if (picking !== null) {
       const choice = readChoice(input, picking);

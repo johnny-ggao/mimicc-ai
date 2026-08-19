@@ -8,9 +8,11 @@ import {
 } from "@langchain/core/messages";
 
 import {
+  describeDrops,
   describeError,
   fromModel,
   fromSubagent,
+  InputQueue,
   readDecision,
   summarizeCall,
 } from "@/console";
@@ -231,5 +233,96 @@ describe("an empty line is not a decision", () => {
     expect(resumed).toBeNull();
     expect(pending.editing).toBe(true);
     expect(pending.decisions).toEqual([]);
+  });
+});
+
+/**
+ * The input queue. Every rule in here fails silently when it is wrong — the
+ * symptom is a turn the user did not ask for, which on screen is indented and
+ * streamed exactly like a turn they did — so each one is pinned by the scenario
+ * that produced it (ticket 09; the numbers were measured on a real terminal
+ * with `expect`, not imagined).
+ */
+describe("the input queue", () => {
+  const alive = () => true;
+
+  test("a line typed over a running turn waits, and knows it waited", () => {
+    const queue = new InputQueue(true);
+    queue.push("input", "排队的话", true);
+    expect(queue.take("input")).toEqual({
+      tag: "input",
+      text: "排队的话",
+      queued: true,
+    });
+  });
+
+  // Five pasted lines produced five back-to-back turns and five model calls.
+  test("a paste is capped at one, and says how many it refused", () => {
+    const queue = new InputQueue(true);
+    for (const text of ["行1", "行2", "行3", "行4", "行5"])
+      queue.push("input", text, true);
+
+    expect(queue.depth).toBe(1);
+    expect(queue.take("input")?.text).toBe("行1");
+    expect(describeDrops(queue.sweep(alive))).toEqual([
+      "(dropped 4 lines — only one line can wait for the current turn)",
+    ]);
+  });
+
+  test("one stray extra line is named rather than counted", () => {
+    const queue = new InputQueue(true);
+    queue.push("input", "第一句", true);
+    queue.push("input", "手滑", true);
+    expect(describeDrops(queue.sweep(alive))).toEqual([
+      "(dropped, only one line can wait for the current turn: 手滑)",
+    ]);
+  });
+
+  // The cap counts "input" alone. A batch of three tool calls is answered with
+  // three lines; capping those would break the confirmation gate itself.
+  test("decisions at a gate are not capped", () => {
+    const queue = new InputQueue(true);
+    for (const text of ["y", "y", "y"]) queue.push("gate", text, false);
+    expect(queue.depth).toBe(3);
+    expect(describeDrops(queue.sweep(alive))).toEqual([]);
+  });
+
+  // Ctrl+C used to stop the turn and let the queued line start the next one.
+  test("an abort empties the queue and says so", () => {
+    const queue = new InputQueue(true);
+    queue.push("input", "排队的话", true);
+    queue.clear();
+
+    expect(queue.take("input")).toBeUndefined();
+    expect(describeDrops(queue.sweep(alive))).toEqual(["(dropped, ^C: 排队的话)"]);
+  });
+
+  test("a decision whose gate is gone can never be consumed, so it is dropped out loud", () => {
+    const queue = new InputQueue(true);
+    queue.push("gate", "y", false);
+    const drops = queue.sweep((tag) => tag !== "gate");
+    expect(describeDrops(drops)).toEqual([
+      "(dropped, the question it answered is gone: y)",
+    ]);
+    expect(queue.depth).toBe(0);
+  });
+
+  /**
+   * A piped script was written before the process started: its order is
+   * deliberate, and there is no stray keystroke to protect. Both rules are off
+   * there — the cap especially, since every probe in the repository sends its
+   * whole script up front and would otherwise lose all but the first line.
+   */
+  test("a pipe keeps every line, in order, whatever it was tagged", () => {
+    const queue = new InputQueue(false);
+    queue.push("input", "你好", false);
+    queue.push("input", "/exit", false);
+    queue.push("gate", "y", false);
+
+    expect(queue.depth).toBe(3);
+    expect(queue.take("input")?.text).toBe("你好");
+    expect(queue.take("input")?.text).toBe("/exit");
+    expect(queue.take("input")?.text).toBe("y");
+    expect(describeDrops(queue.sweep(() => false))).toEqual([]);
   });
 });

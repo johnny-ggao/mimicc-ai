@@ -33,6 +33,19 @@ export { describeError, fromModel, fromSubagent, summarizeCall } from "./repl";
 // keystroke approves a shell command. That an empty line is *not* a decision was
 // a shipping bug once (`repro/15`), so it is pinned where a change fails.
 export { readDecision, type Pending } from "./repl";
+// The input queue is exported for the same reason as everything above it. Its
+// three rules — a line belongs to the question that was on screen when it
+// arrived, at most one line may wait, only an abort empties it — are each the
+// kind that fails silently: the symptom of getting one wrong is a turn the user
+// did not ask for, which looks exactly like a turn they did.
+export {
+  describeDrops,
+  InputQueue,
+  QUEUE_LIMIT,
+  type Arrived,
+  type Dropped,
+  type Tag,
+} from "./queue";
 export { parseArgs, type Invocation } from "./args";
 export { cachedShare, compact, spendBreakdown, spendLine } from "./spend";
 export {
