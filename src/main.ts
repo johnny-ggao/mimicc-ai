@@ -10,6 +10,7 @@ import { createLogger } from "./logger";
 import { resolveMemoryDirs } from "./memory";
 import { buildSystemPrompt, type PromptEnvironment } from "./agents";
 import { runRepl } from "./console";
+import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -50,6 +51,12 @@ async function main(): Promise<void> {
     cwd: process.cwd(),
   });
 
+  // Same reasoning as the instructions above: read once, here, so the agent
+  // builder never touches the filesystem. Skills come from outside the working
+  // directory (~/.mimicc/skills and ~/.claude/skills), which is also why they
+  // are read by name here and not reachable through the Read tool.
+  const skills = new SkillRegistry(loadSkills(defaultSkillRoots(), log));
+
   const graph = createUniversalAgent({
     baseURL: model.baseURL,
     apiKey: model.apiKey,
@@ -62,6 +69,7 @@ async function main(): Promise<void> {
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
     checkpointer: new JsonlSaver(stateDir),
     memory,
+    skills,
     // The same path, so a tool call's journal lands beside its thread's file.
     stateDir,
     // One line per request to the provider. This is the scale every
@@ -92,12 +100,13 @@ async function main(): Promise<void> {
     // Worth watching: this is the cacheable prefix sent on every single turn.
     systemPromptChars: systemPrompt.length,
     projectInstructionsChars: instructions?.length ?? 0,
+    skills: skills.all().length,
     // Printed because "where did my history go" is otherwise a guess, and
     // because the answer differs between development and a released build.
     stateDir,
   });
 
-  await runRepl({ graph });
+  await runRepl({ graph, skills });
 }
 
 function describeEnvironment(): PromptEnvironment {

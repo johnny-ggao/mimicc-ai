@@ -75,3 +75,17 @@ export {
   type Memory,
   type MemoryDirs,
 } from "./memory";
+
+export {
+  createSkillTool,
+  defaultSkillRoots,
+  loadSkills,
+  parseSkillCommand,
+  renderSkillList,
+  skillActivationMessage,
+  SKILL_CATALOG_ID,
+  SKILL_TOOL_NAME,
+  SkillRegistry,
+  type Skill,
+  type SkillCommand,
+} from "./skills";

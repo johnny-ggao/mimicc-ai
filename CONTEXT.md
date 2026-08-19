@@ -17,6 +17,18 @@ _Avoid_: 系统消息、system prompt（指通道时）
 名字里有 instructions，是因为我们确实要模型照做；但它不能覆盖系统提示词里的任何规则。
 _Avoid_: 项目约定、仓库指令、项目上下文
 
+**技能（skill）**：
+装在工作目录之外（`~/.mimicc/skills`、`~/.claude/skills`）、**按需装载**的一组任务专用指令。
+**权限低于系统提示词，也低于项目指令**：系统 > AGENTS.md > skill——仓库里写的规则要赢过一个装一次、
+处处生效的通用流程。走 **user 通道**、钉住、带 `<skill name="…">` 标签，跟项目指令同一条 ADR 0001
+判断，只是内容的作者从「能提交仓库的人」换成了「装这个 skill 的人」。装载是惰性的：常驻的只有一份
+**技能目录（skill catalog）**——「模型可触发」skill 的名字 + 一句描述；正文靠两个入口之一按需拉进：
+模型调 `Skill(name)` 工具，或用户在 REPL 敲 `/name`（斜杠命令）。frontmatter 里
+`disable-model-invocation: true` 的 skill 只能斜杠触发——`Skill` 工具会拒绝它，因为那面旗子的全部
+意义就是「人是索引」。**只挂主 agent**：目录注入和 `Skill` 工具加在主 agent 的中间件上，不进
+`agentStack`，所以 Explore 子 agent 永远背不上它（同 0003：子 agent 能干什么 = 它的工具清单）。
+_Avoid_: 插件、扩展（指技能时）
+
 **注入（injection）**：
 由 harness 而非模型，把内容放进消息历史。**与 prompt injection 是两个词**——后者是攻击，
 中文里一律写全 `prompt injection`，不简称成「注入」。

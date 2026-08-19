@@ -16,6 +16,7 @@ import {
 } from "@/agents";
 
 import { MemoryStore } from "@/memory";
+import { SKILL_TOOL_NAME, SkillRegistry } from "@/skills";
 import { TASK_TOOL_NAME, TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
 
@@ -207,15 +208,38 @@ test("every registered tool has an explicit confirmation decision", () => {
   // would let a memory tool ship with no confirmation decision — and a tool
   // missing from the map is auto-approved, so that gap fails open. The
   // directories are never touched; nothing here invokes a tool.
-  const registered = registeredTools({
-    model: new FakeListChatModel({ responses: ["unused"] }),
-    memory: new MemoryStore({
-      global: "/nonexistent/global",
-      project: "/nonexistent/project",
-    }),
-  }).map((tool) => tool.name);
+  //
+  // Skills are supplied for the same reason: the Skill tool is registered
+  // whenever a registry exists, even an empty one, so it too must have a
+  // decision in the policy.
+  const registered = registeredTools(
+    {
+      model: new FakeListChatModel({ responses: ["unused"] }),
+      memory: new MemoryStore({
+        global: "/nonexistent/global",
+        project: "/nonexistent/project",
+      }),
+    },
+    new SkillRegistry([]),
+  ).map((tool) => tool.name);
 
   expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(registered.sort());
+});
+
+// The Skill tool joins Task as a tool assembled outside `TOOLS` — the base
+// registration (no skills, no memory) stays the six plus Task, and with a
+// registry it gains Skill, after Task in the order the prompt advertises.
+test("the Skill tool is registered when a registry exists, after Task", () => {
+  const registered = registeredTools(
+    { model: new FakeListChatModel({ responses: ["unused"] }) },
+    new SkillRegistry([]),
+  ).map((tool) => tool.name);
+
+  expect(registered).toEqual([
+    ...TOOLS.map((tool) => tool.name),
+    TASK_TOOL_NAME,
+    SKILL_TOOL_NAME,
+  ]);
 });
 
 // The other half of the same claim, and it needs saying separately: the test

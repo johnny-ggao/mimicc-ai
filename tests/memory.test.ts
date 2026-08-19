@@ -18,6 +18,7 @@ import {
   type MemoryDirs,
   type WriteContext,
 } from "@/memory";
+import { SkillRegistry } from "@/skills";
 
 /**
  * The gates, and — for every gate — a case that must *not* be stopped by it.
@@ -267,10 +268,13 @@ test("every memory tool has an explicit confirmation decision", () => {
   // memory configured — that test builds its environment without a store, so it
   // cannot see these four. A tool missing from the policy is auto-approved
   // (fail-open), so "it passed over there" is not cover.
-  const registered = registeredTools({
-    model: new FakeListChatModel({ responses: ["unused"] }),
-    memory: store,
-  }).map((tool) => tool.name);
+  const registered = registeredTools(
+    {
+      model: new FakeListChatModel({ responses: ["unused"] }),
+      memory: store,
+    },
+    new SkillRegistry([]),
+  ).map((tool) => tool.name);
 
   expect(Object.keys(CONFIRMATION_POLICY).sort()).toEqual(registered.sort());
 });

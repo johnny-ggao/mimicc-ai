@@ -15,6 +15,13 @@ import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
 import { createChatModel } from "./model";
 import { toolRecovery } from "./recovery";
 import { createMemoryTools, MemoryStore, type MemoryDirs } from "../memory";
+import {
+  createSkillTool,
+  injectSkillCatalog,
+  pinSkillLoads,
+  SKILL_TOOL_NAME,
+  type SkillRegistry,
+} from "../skills";
 import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
@@ -141,6 +148,17 @@ export interface AgentOptions {
    * does not reach a capability the program actually ships.
    */
   memory?: MemoryDirs;
+  /**
+   * The skills installed outside the repository, already read and indexed, or
+   * absent to run without any.
+   *
+   * A registry rather than the paths, for the same reason `projectInstructions`
+   * is a string and `memory` is two directories: `main.ts` does the filesystem
+   * read, and the agent builder does not. Skills are a **main-agent-only**
+   * capability — the catalogue and the `Skill` tool are added here rather than
+   * in `agentStack`, so an Explore subagent never carries them.
+   */
+  skills?: SkillRegistry;
   /**
    * Where thread files live, so tool calls can be journalled beside them.
    *
@@ -269,6 +287,10 @@ export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
   // An explore agent carries only the three read-only tools, so dispatching one can do
   // nothing a Read could not — the decision is already made by EXPLORE_TOOLS.
   [TASK_TOOL_NAME]: false,
+  // Reading a skill is a read of installed instructions — nothing a Read could
+  // not already reach the text of, and it never mutates. No gate, same reason
+  // Read and Grep have none.
+  [SKILL_TOOL_NAME]: false,
   // The memory tools do not ask, and this is a decision rather than an omission
   // (2026-08-17). Not because writing a memory is harmless — it is confined to
   // `~/.mimicc/memory` and gated on category, size, and duplication, but it is a
@@ -391,10 +413,18 @@ export function pinRejections(gate: AnyAgentMiddleware): AnyAgentMiddleware {
  * its last overload, which demands `responseFormat` — measured, both ways round.
  * Naming the element type sidesteps the inference instead of casting past it.
  */
-export function registeredTools(environment: AgentEnvironment): ClientTool[] {
+export function registeredTools(
+  environment: AgentEnvironment,
+  skills?: SkillRegistry,
+): ClientTool[] {
   return [
     ...TOOLS,
     createTaskTool({ model: environment.model, subagents: subagentSpecs(environment) }),
+    // After Task: the six the prompt names keep their pinned order, and Skill
+    // joins as the eighth in the same order the prompt lists it. Absent when the
+    // program was started with no skills — a tool with nothing to load is a
+    // capability the model was never offered.
+    ...(skills !== undefined ? [createSkillTool(skills)] : []),
     // After Task, and last on purpose: the six the prompt names keep their pinned
     // order and, with them, the cached prefix. Absent when the program was
     // started without a memory directory, which is the honest default — a tool
@@ -589,8 +619,23 @@ export function createUniversalAgent(options: AgentOptions) {
   // tools, once for the middleware — which was harmless only because it is pure.
   const env = environment(model, options);
 
+  // The catalogue is built (or not) here rather than inline, so the decision
+  // "no model-invoked skills → no middleware" is made once and the array below
+  // reads as a plain conditional.
+  const skillCatalog =
+    options.skills === undefined ? undefined : injectSkillCatalog(options.skills);
+
   const middleware: AnyAgentMiddleware[] = [
     ...agentStack(MAIN_AGENT, env),
+    // Skills are main-agent-only, so both halves are added here rather than in
+    // `agentStack`, which a subagent shares. The catalogue is a beforeAgent hook
+    // (injected once per thread, like the project instructions). The pinner is a
+    // wrapToolCall hook and must sit before the other wrapToolCall users —
+    // toolRecovery and stallGuard — because wrapToolCall nests
+    // first-in-outermost, and it has to see the final result of a Skill call,
+    // however the inner wraps shaped it.
+    ...(skillCatalog !== undefined ? [skillCatalog] : []),
+    ...(options.skills !== undefined ? [pinSkillLoads()] : []),
     // Before the gate, so it hashes the raw model output rather than whatever
     // the gate did to it.
     loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
@@ -612,7 +657,7 @@ export function createUniversalAgent(options: AgentOptions) {
 
   const graph = createAgent({
     model,
-    tools: registeredTools(env),
+    tools: registeredTools(env, options.skills),
     // Wrapped, not handed over as a string, and the difference is on the wire.
     // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
     // string into `new SystemMessage({ content: [{ type: "text", text }] })` —

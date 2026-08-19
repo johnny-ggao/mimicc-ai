@@ -12,15 +12,23 @@ import {
 } from "../agents";
 import { markdownStream } from "./markdown";
 import { TASK_TOOL_NAME } from "../tools";
+import {
+  parseSkillCommand,
+  renderSkillList,
+  skillActivationMessage,
+  type SkillRegistry,
+} from "../skills";
 
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
 const BANNER = [
   "mimicc-ai — type a message and press enter",
-  "  tools    Read · Write · Edit · Bash · Glob · Grep · Task",
+  "  tools    Read · Write · Edit · Bash · Glob · Grep · Task · Skill",
   "  Task     sends a read-only explore agent; its searching stays out of the conversation",
+  "  Skill    loads a skill's instructions (see /skills)",
   "  Bash     stops and asks before it runs; the others do not",
+  "  /skills  list skills",
   "  /clear   start a new thread; the old one stays in the checkpointer",
   "  /exit    quit (same as Ctrl+D)",
   "  Ctrl+C   interrupt the current reply; at an idle prompt, quit",
@@ -28,6 +36,8 @@ const BANNER = [
 
 export interface ReplOptions {
   graph: AgentGraph;
+  /** The installed skills, for the slash commands. Same registry the agent has. */
+  skills: SkillRegistry;
 }
 
 /** One tool call waiting on a human. Shape comes from `__interrupt__`. */
@@ -57,7 +67,7 @@ interface Pending {
   editing: boolean;
 }
 
-export async function runRepl({ graph }: ReplOptions): Promise<void> {
+export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -124,6 +134,47 @@ export async function runRepl({ graph }: ReplOptions): Promise<void> {
       thread = crypto.randomUUID();
       rendered = 0;
       process.stdout.write("(new thread)\n\n");
+      rl.prompt();
+      continue;
+    }
+
+    // Slash commands beyond the built-ins. `/exit` and `/clear` are handled
+    // above, which is what makes them win over a skill of the same name.
+    if (input.startsWith("/")) {
+      const command = parseSkillCommand(input, skills);
+
+      if (command.type === "list") {
+        process.stdout.write(`${renderSkillList(skills)}\n\n`);
+        rl.prompt();
+        continue;
+      }
+
+      if (command.type === "unknown") {
+        process.stdout.write(`${DIM}unknown command — try /skills${RESET}\n\n`);
+        rl.prompt();
+        continue;
+      }
+
+      // The skill body enters as a pinned activation message; anything typed
+      // after the name is this turn's task and enters as an ordinary user
+      // message, pinned by the graph like every other turn's input. Same loader
+      // as the Skill tool — only the message shape differs.
+      const messages: BaseMessage[] = [
+        skillActivationMessage(command.skill),
+        ...(command.tail !== undefined ? [new HumanMessage(command.tail)] : []),
+      ];
+
+      inFlight = new AbortController();
+      const turn = await runTurn(
+        graph,
+        { messages },
+        thread,
+        rendered,
+        inFlight.signal,
+      );
+      inFlight = null;
+      pending = finish(turn);
+      rendered = turn.rendered;
       rl.prompt();
       continue;
     }
