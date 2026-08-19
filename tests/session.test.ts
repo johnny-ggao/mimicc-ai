@@ -100,6 +100,63 @@ test("the tool journal, probe directories and temp files are not sessions", asyn
   expect(sessions.map((session) => session.title)).toEqual(["真的"]);
 });
 
+test("what a session spent is summed off the messages, dispatches included", async () => {
+  const AI = (id: string, input: number, output: number, cached: number) =>
+    JSON.stringify({
+      kind: "message",
+      id,
+      data: {
+        type: "ai",
+        data: {
+          content: "ok",
+          usage_metadata: {
+            input_tokens: input,
+            output_tokens: output,
+            input_token_details: { cache_read: cached },
+          },
+        },
+      },
+    });
+  // A dispatch's tokens ride in on the tool result: the subagent's own messages
+  // are never written down, so this is the only place they can be.
+  const DISPATCH = JSON.stringify({
+    kind: "message",
+    id: "t1",
+    data: {
+      type: "tool",
+      data: {
+        content: "report",
+        tool_call_id: "call_1",
+        response_metadata: { usage: { input: 900, output: 100, cacheRead: 400 } },
+      },
+    },
+  });
+
+  const dir = fixture([
+    [
+      "abcd1111-1111-4111-8111-111111111111.jsonl",
+      HUMAN("h", "跑一下"),
+      AI("a1", 1000, 200, 600),
+      DISPATCH,
+      AI("a2", 500, 50, 0),
+    ],
+  ]);
+
+  const [session] = await listSessions(dir);
+  expect(session?.spent).toEqual({ input: 2400, output: 350, cacheRead: 1000 });
+});
+
+test("a message with no usage on it costs nothing rather than breaking the sum", async () => {
+  const dir = fixture([
+    ["abcd2222-2222-4222-8222-222222222222.jsonl", HUMAN("h", "一")],
+  ]);
+  expect((await listSessions(dir))[0]?.spent).toEqual({
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+  });
+});
+
 test("parked at a gate is judged from the newest checkpoint, not from the whole file", async () => {
   const answered = fixture([
     [

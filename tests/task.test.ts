@@ -557,7 +557,12 @@ describe("a subagent's own window", () => {
       }),
     }).invoke({ description: "look at several files", subagent_type: "explore" });
 
-    expect(report).toContain("src/config.ts:17");
+    // The report now rides on a `ToolMessage` rather than being the bare string:
+    // a dispatch carries what it spent, and a message is where that can live
+    // (see `spentOn` in `tools/task.ts`).
+    expect(report.content).toContain("src/config.ts:17");
+    const spent = report.response_metadata["usage"] as { input: number };
+    expect(spent.input).toBeGreaterThan(0);
     // Billed under its own name, not "summary": two agents summarising into one
     // column is the problem the label exists to prevent.
     expect(usage.some((record) => record.agent === "explore summary")).toBe(true);

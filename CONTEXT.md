@@ -189,9 +189,14 @@ session。`/clear` 开一条新 session，旧的仍然可寻址。
 
 概念取自 pi（`packages/agent/docs/harness.md:86-99`），它把一条 session 定义成四个部分：
 **entry 树**、**facts**（session 的名字、entry 的标签）、**lanes**（树上的命名游标）、
-**用量账**。🔴 **我们今天只有第一个里的一条分支。** facts 没有（要列历史时，标题只能拿第一条
-用户消息兜底——pi 自己也是这么兜的）；lanes 没有；账在 `src/usage.ts` 的秤里，但**不落进
-session**，只进日志。⚠️ **有一样明确不抄**：pi 用 lane 让 subagent 共享同一段历史，我们反着
+**用量账**。🔴 **我们今天只有第一个里的一条分支**，外加账。facts 没有（要列历史时，标题
+只能拿第一条用户消息兜底——pi 自己也是这么兜的）；lanes 没有。
+**账在 session 里，但不是一份独立的账本**：每条 ai 消息自带 `usage_metadata`，
+派发的花费由 `Task` 的结果捎回来（子 agent 的消息不落盘），所以「这条 session 花了多少」
+是从消息上加出来的。这跟调研过的三个实现是同一条原则——**成本跟着产生它的那个工作单位走**
+（pi 的 usage 行用 `entryId` 挂回 entry、Claude Code 挂在 assistant 消息上、
+codex 一次 inference 一条记录并写明消耗与产出的 item）。⚠️ 两处不在账内：摘要那一跳的
+消息进的是通道值不是消息列表，`elapsedMs` 根本不是 provider 的字段。⚠️ **有一样明确不抄**：pi 用 lane 让 subagent 共享同一段历史，我们反着
 判过——`src/tools/task.ts` 里 `checkpointer: false`，**子 agent 的工作笔记不进用户的 session**。
 ⚠️ `/clear` 是开新 session，不是在同一条 session 上开分支（同 pi：`slash-commands.ts:37`
 逐字 `{ name: "new", description: "Start a new session" }`，**分支在那边是另外两个动作**）。

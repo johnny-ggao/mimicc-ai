@@ -21,7 +21,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "bun run typecheck && bun run lint && bun run format:check && bun run test"
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run test",
+    "install:global": "bash scripts/install.sh install",
+    "update:global": "bash scripts/install.sh update"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

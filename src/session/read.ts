@@ -56,6 +56,35 @@ export interface Session {
    * at a gate right now.
    */
   atGate: boolean;
+  /**
+   * What this session spent, in tokens.
+   *
+   * Summed off the messages rather than kept in a ledger of its own, because it
+   * is already there: every persisted `ai` message carries `usage_metadata`
+   * (measured — 28 of 28 in this repository's own history, 24 of them with a
+   * cache-read figure), and `messages.ts` round-trips that field. The survey
+   * that settled it found the same principle everywhere — pi writes a usage row
+   * in the same transaction as the entry and points back with `entryId`
+   * (`packages/agent/docs/harness.md:281-288`); Claude Code puts `usage` on the
+   * assistant message; codex records one row per inference naming the items it
+   * consumed. **The cost travels with the work that caused it**, and a second
+   * store for it would be a second thing to keep in step.
+   *
+   * A dispatch's tokens ride in on the `Task` result's `response_metadata`,
+   * because a subagent's own messages are never written down (`tools/task.ts`).
+   *
+   * ⚠️ Two things are outside this number, and both are structural rather than
+   * oversights: a summary's own model call lands in a channel value rather than
+   * in the message list, and `elapsedMs` is not a provider figure at all.
+   */
+  spent: Spend;
+}
+
+export interface Spend {
+  input: number;
+  output: number;
+  /** Input tokens the provider served from its cache — the column the scale exists for. */
+  cacheRead: number;
 }
 
 /** How much of the first message becomes the title. */
@@ -78,6 +107,7 @@ export async function readSession(path: string): Promise<Session | undefined> {
 
   let messages = 0;
   let title = "";
+  const spent: Spend = { input: 0, output: 0, cacheRead: 0 };
   /** Used only when every human message in the file is a skill activation. */
   let fallback = "";
   let newest: string | undefined;
@@ -113,6 +143,7 @@ export async function readSession(path: string): Promise<Session | undefined> {
 
     if (record.kind === "message") {
       messages += 1;
+      addSpend(spent, record.data);
       if (title === "") {
         const id = typeof record.id === "string" ? record.id : "";
         if (id.startsWith(SKILL_ID)) {
@@ -163,7 +194,50 @@ export async function readSession(path: string): Promise<Session | undefined> {
     messages,
     lastActive,
     atGate: newest !== undefined && gated.has(newest),
+    spent,
   };
+}
+
+/**
+ * Adds one stored message's tokens to the running total.
+ *
+ * Two shapes, because two kinds of work are being paid for: the agent's own
+ * model calls, whose numbers langchain puts in `usage_metadata`, and dispatches,
+ * whose numbers `tools/task.ts` puts on the tool result because the subagent's
+ * messages are never stored at all.
+ */
+function addSpend(total: Spend, data: unknown): void {
+  const stored = data as {
+    type?: unknown;
+    data?: {
+      usage_metadata?: {
+        input_tokens?: unknown;
+        output_tokens?: unknown;
+        input_token_details?: { cache_read?: unknown };
+      };
+      response_metadata?: { usage?: unknown };
+    };
+  } | null;
+
+  if (stored?.type === "ai") {
+    const usage = stored.data?.usage_metadata;
+    total.input += count(usage?.input_tokens);
+    total.output += count(usage?.output_tokens);
+    total.cacheRead += count(usage?.input_token_details?.cache_read);
+    return;
+  }
+
+  if (stored?.type === "tool") {
+    const usage = stored.data?.response_metadata?.usage as
+      { input?: unknown; output?: unknown; cacheRead?: unknown } | undefined;
+    total.input += count(usage?.input);
+    total.output += count(usage?.output);
+    total.cacheRead += count(usage?.cacheRead);
+  }
+}
+
+function count(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 /** The first line of a stored message's content, clipped to one row. */

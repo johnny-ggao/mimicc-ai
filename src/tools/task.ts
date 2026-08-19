@@ -1,7 +1,9 @@
 import {
   HumanMessage,
   SystemMessage,
+  ToolMessage,
   type BaseMessage,
+  type UsageMetadata,
 } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { tool, type ClientTool, type ToolRuntime } from "@langchain/core/tools";
@@ -146,6 +148,31 @@ export interface TaskToolOptions {
  * file under a `tools:<id>` namespace, while the parent's `state.messages`
  * stayed clean and every unit test stayed green.
  */
+/**
+ * What one dispatch spent, summed off the subagent's own messages.
+ *
+ * Read from `usage_metadata` rather than wired through the scale: the numbers
+ * are already on the messages the run returns, and a second channel for the same
+ * fact is a second thing to keep in step. `cacheRead` is kept because it is the
+ * column the scale exists for — a dispatch that re-pays for an uncached prefix
+ * is exactly the cost this repository measures.
+ */
+function spentOn(messages: BaseMessage[]): {
+  input: number;
+  output: number;
+  cacheRead: number;
+} {
+  const total = { input: 0, output: 0, cacheRead: 0 };
+  for (const message of messages) {
+    const usage = (message as { usage_metadata?: UsageMetadata }).usage_metadata;
+    if (usage === undefined) continue;
+    total.input += usage.input_tokens;
+    total.output += usage.output_tokens;
+    total.cacheRead += usage.input_token_details?.cache_read ?? 0;
+  }
+  return total;
+}
+
 export function createTaskTool(options: TaskToolOptions) {
   if (options.subagents.length === 0) {
     // Registering the tool with nothing to dispatch would advertise a capability
@@ -200,7 +227,10 @@ export function createTaskTool(options: TaskToolOptions) {
   );
 
   return tool(
-    async ({ description, subagent_type }, runtime: ToolRuntime): Promise<string> => {
+    async (
+      { description, subagent_type },
+      runtime: ToolRuntime,
+    ): Promise<ToolMessage> => {
       const graph = graphs.get(subagent_type);
       // Thrown rather than returned, because ToolNode turns a throw into a tool
       // message: the model reads the allowed list and picks again, instead of
@@ -247,7 +277,33 @@ export function createTaskTool(options: TaskToolOptions) {
       // from that. Saying so is the difference between a wrong answer and a
       // reported gap.
       if (text.trim() === "") throw new Error("the subagent returned an empty report");
-      return text;
+
+      // What the dispatch cost, carried out on the result.
+      //
+      // A subagent runs with `checkpointer: false`, so **none of its messages
+      // are ever written down** — and the tokens it spent would vanish with
+      // them, leaving the session's own ledger quietly understating what it
+      // cost. Explore is the expensive one (three at a time is ordinary), so
+      // that gap is not a rounding error.
+      //
+      // Every implementation surveyed keeps the cost attached to the unit of
+      // work that produced it: pi writes a usage row in the same transaction as
+      // the entry and points it back with `entryId`
+      // (`packages/agent/docs/harness.md:281-288`); Claude Code puts `usage` on
+      // the assistant message itself; codex records one row per inference and
+      // names the items it consumed and produced. Here the only unit of work
+      // that reaches disk is **this tool result** — from the parent's side a
+      // dispatch is exactly one call with one settlement, which is the same
+      // sentence the rest of this file is built on — so the numbers ride on it.
+      //
+      // ⚠️ Not the same as putting the subagent's *notes* in the user's session,
+      // which stays refused: what travels is the bill, not the work.
+      return new ToolMessage({
+        content: text,
+        tool_call_id: runtime.toolCallId ?? "",
+        name: TASK_TOOL_NAME,
+        response_metadata: { usage: spentOn(result.messages) },
+      });
     },
     {
       name: TASK_TOOL_NAME,
