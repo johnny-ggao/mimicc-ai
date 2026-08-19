@@ -22,6 +22,7 @@
 | `10-summary-fail.ts` | 摘要一直失败时一个回合还能不能走完 | 否（stub） |
 | `13-crash-mid-tool.ts` | 崩溃打断一批工具调用后盘上剩什么：**默认档 `"async"` 会丢掉 intent 且整批重跑，`"sync"` 不会** | 否（stub） |
 | `14-recovery-end-to-end.ts` | 崩溃打断**我们自己的 agent** 之后重启：跑完的调用会不会再跑一次（**不会**） | 否（stub） |
+| `18-resume-at-an-open-gate.ts` | 门**还开着**时被 kill，重启后那道门还在不在：**在**（`getState` 里 `tasks=1 interrupts=1`），且冷启动的 `Command({resume})` 能答它；**但拿旧 id 直接敲一句话会把它吃掉** | 否（stub） |
 
 **只有 `08-overflow.ts` 花钱**（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）。其余要么打本地 stub server，要么纯算术，要么小请求。

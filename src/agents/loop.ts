@@ -208,7 +208,9 @@ export interface AgentOptions {
 }
 
 /**
- * All the console needs from the loop: hand it messages, get a stream back.
+ * All the console needs from the loop: hand it messages, get a stream back —
+ * and, since it learned to carry on from a session it did not start, ask what is
+ * parked on a thread.
  *
  * Stated outright rather than derived as `ReturnType<typeof
  * createUniversalAgent>`. That alias would drag langchain's whole compiled graph
@@ -237,6 +239,24 @@ export interface AgentGraph {
       configurable: { thread_id: string };
     },
   ): Promise<AsyncIterable<unknown>>;
+  /**
+   * What is parked on this thread right now.
+   *
+   * On the console rather than on the session repository, and that placement was
+   * decided rather than fallen into: a confirmation gate that was open when the
+   * process died is a **pending write on the newest checkpoint**, and the thing
+   * that knows how to read one is the runtime. A directory lister can guess at it
+   * from the file — and does, for the list's ⚠️ column — but the console is about
+   * to *act* on the answer, so it asks the graph.
+   *
+   * Narrow for the same reason `stream` is: the console reads exactly two things
+   * out of a snapshot — how long the branch is, which is the render watermark,
+   * and whatever interrupt is still waiting.
+   */
+  getState(config: { configurable: { thread_id: string } }): Promise<{
+    values: { messages?: BaseMessage[] };
+    tasks?: readonly { interrupts?: readonly { value?: unknown }[] }[];
+  }>;
 }
 
 function createModel(options: AgentOptions): ChatOpenAI {

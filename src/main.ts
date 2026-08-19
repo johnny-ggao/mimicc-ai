@@ -9,7 +9,8 @@ import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
 import { resolveMemoryDirs } from "./memory";
 import { buildSystemPrompt, type PromptEnvironment } from "./agents";
-import { runRepl } from "./console";
+import { parseArgs, runRepl, type Start } from "./console";
+import { resolveSession } from "./session";
 import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
 
 async function main(): Promise<void> {
@@ -42,6 +43,10 @@ async function main(): Promise<void> {
     override: process.env.MIMICC_STATE_DIR,
     cwd: process.cwd(),
   });
+
+  // Read before the model client is built, so a typo in the arguments costs a
+  // usage line rather than a connection.
+  const start = await resolveStart(stateDir);
 
   // Same reasoning as the state directory, different answer. Memory does not
   // follow the dev/production split — see the note in memory/location.ts for why
@@ -106,7 +111,42 @@ async function main(): Promise<void> {
     stateDir,
   });
 
-  await runRepl({ graph, skills });
+  await runRepl({ graph, skills, stateDir, start });
+}
+
+/**
+ * What the command line asked for, resolved against what is on disk.
+ *
+ * Split in two on purpose: the parsing is pure and lives in `console/args.ts`,
+ * where a test can reach it, and the half that touches the filesystem is here,
+ * for the same reason every other path in this file is here.
+ *
+ * ⚠️ An ambiguous prefix cannot turn into a picker the way it does inside the
+ * repl. `--resume <id>` is the *non-interactive* path — it exists so this
+ * feature can be tested and scripted at all — and answering it with a prompt
+ * would take that away.
+ */
+async function resolveStart(stateDir: string): Promise<Start> {
+  const invocation = parseArgs(process.argv.slice(2));
+
+  if (invocation.kind === "error") {
+    process.stderr.write(`${invocation.message}\n`);
+    process.exit(1);
+  }
+  if (invocation.kind !== "resume") return invocation;
+
+  const found = await resolveSession(stateDir, invocation.prefix);
+  if (found.kind === "one") return { kind: "session", session: found.session };
+  if (found.kind === "none") {
+    process.stderr.write(`no session starts with ${invocation.prefix}\n`);
+    process.exit(1);
+  }
+
+  const listed = found.candidates.map((one) => `  ${one.id}  ${one.title}`).join("\n");
+  process.stderr.write(
+    `${invocation.prefix} matches ${String(found.candidates.length)} sessions:\n${listed}\n`,
+  );
+  process.exit(1);
 }
 
 function describeEnvironment(): PromptEnvironment {

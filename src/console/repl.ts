@@ -11,6 +11,8 @@ import {
   type AgentGraph,
 } from "../agents";
 import { markdownStream } from "./markdown";
+import { describeSession, readChoice, renderSessionList } from "./picker";
+import { listSessions, resolveSession, type Session } from "../session";
 import { TASK_TOOL_NAME } from "../tools";
 import {
   parseSkillCommand,
@@ -29,7 +31,8 @@ const BANNER = [
   "  Skill    loads a skill's instructions (see /skills)",
   "  Bash     stops and asks before it runs; the others do not",
   "  /skills  list skills",
-  "  /clear   start a new thread; the old one stays in the checkpointer",
+  "  /resume  carry on from an earlier session (only before this one has messages)",
+  "  /clear   start a new session; the old one stays on disk",
   "  /exit    quit (same as Ctrl+D)",
   "  Ctrl+C   interrupt the current reply; at an idle prompt, quit",
 ].join("\n");
@@ -38,7 +41,21 @@ export interface ReplOptions {
   graph: AgentGraph;
   /** The installed skills, for the slash commands. Same registry the agent has. */
   skills: SkillRegistry;
+  /** Where sessions live, for the picker and for `/resume`. */
+  stateDir: string;
+  /** What the command line asked for before the first prompt. */
+  start: Start;
 }
+
+/**
+ * How the console opens.
+ *
+ * `pick` carries no list: the console reads it itself, through the same call
+ * `/resume` uses. One code path for "show me what there is", rather than one for
+ * the flag and another for the command.
+ */
+export type Start =
+  { kind: "new" } | { kind: "session"; session: Session } | { kind: "pick" };
 
 /** One tool call waiting on a human. Shape comes from `__interrupt__`. */
 interface ActionRequest {
@@ -67,7 +84,12 @@ interface Pending {
   editing: boolean;
 }
 
-export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
+export async function runRepl({
+  graph,
+  skills,
+  stateDir,
+  start,
+}: ReplOptions): Promise<void> {
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -89,21 +111,93 @@ export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
   });
 
   // History lives in the checkpointer now, keyed by this. `/clear` mints a new
-  // one rather than deleting anything: the old thread stays addressable, which
-  // is what makes time travel possible at all.
-  let thread = crypto.randomUUID();
-  // How many messages of this thread have already been rendered. The graph hands
-  // back the whole thread on every values event, so without a watermark every
+  // one rather than deleting anything: the old session stays addressable, which
+  // is what makes both `/resume` and time travel possible at all.
+  // Annotated, because `crypto.randomUUID()` narrows to a template-literal type
+  // and a session id adopted from disk is an ordinary string.
+  let session: string = crypto.randomUUID();
+  // How many messages of this session have already been rendered. The graph hands
+  // back the whole branch on every values event, so without a watermark every
   // tool line would be reprinted each lap.
   let rendered = 0;
   let pending: Pending | null = null;
+  // The sessions on offer while the picker is up. Non-null puts the loop in the
+  // same shape `pending` does: the next line read is an answer, not a prompt.
+  let picking: Session[] | null = null;
+  // Whether this session has any messages yet. `/resume` is refused once it has
+  // — switching away from a session that is mid-conversation would leave its
+  // state parked with no way back to it from here, and an empty session is a
+  // session that **does not exist on disk at all** (the saver only creates the
+  // file on its first append), so leaving that one behind costs nothing.
+  let touched = false;
+
+  /**
+   * Carries on from a session this process did not start.
+   *
+   * Two things have to be recovered, and only one of them is the messages.
+   * Measured in `repro/18-resume-at-an-open-gate.ts`: a confirmation gate that
+   * was open when the process died is still on disk, and answering it from a
+   * cold process runs **the command that was captured before the crash**. So the
+   * first thing on screen after resuming into a parked session is that gate —
+   * not a prompt, which would invite exactly the input that orphans it.
+   */
+  const adopt = async (chosen: Session): Promise<Pending | null> => {
+    session = chosen.id;
+    touched = true;
+    process.stdout.write(`${describeSession(chosen)}\n\n`);
+
+    const state = await graph.getState({ configurable: { thread_id: session } });
+    // The watermark comes from the graph, not from the row's message count: the
+    // row counts bodies stored in the file, the renderer counts the branch it is
+    // printing, and the two part ways the moment history is rewritten or forked.
+    rendered = state.values.messages?.length ?? 0;
+
+    const requests = (state.tasks ?? []).flatMap((task) =>
+      (task.interrupts ?? []).flatMap(
+        (stop) =>
+          (stop.value as { actionRequests?: ActionRequest[] } | undefined)
+            ?.actionRequests ?? [],
+      ),
+    );
+    if (requests.length === 0) return null;
+
+    const gate: Pending = { requests, decisions: [], editing: false };
+    ask(gate);
+    return gate;
+  };
+
+  /** Shows the list and hands the next line to the picker. */
+  const offer = async (): Promise<void> => {
+    const sessions = await listSessions(stateDir);
+    process.stdout.write(`${renderSessionList(sessions)}\n\n`);
+    picking = sessions.length === 0 ? null : sessions;
+  };
 
   process.stdout.write(`${BANNER}\n\n`);
+
+  if (start.kind === "session") pending = await adopt(start.session);
+  else if (start.kind === "pick") await offer();
+
   rl.setPrompt("> ");
   rl.prompt();
 
   for await (const line of rl) {
     const input = line.trim();
+
+    if (picking !== null) {
+      const choice = readChoice(input, picking);
+      if (choice.kind === "again") {
+        process.stdout.write(`${DIM}enter a number, or press enter${RESET}\n`);
+        rl.prompt();
+        continue;
+      }
+      const chosen = choice.kind === "pick" ? choice.session : null;
+      picking = null;
+      if (chosen === null) process.stdout.write("(new session)\n\n");
+      else pending = await adopt(chosen);
+      rl.prompt();
+      continue;
+    }
 
     if (pending) {
       const resume = readDecision(input, pending);
@@ -115,7 +209,7 @@ export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
       // otherwise start on that same line.
       process.stdout.write("\n");
       inFlight = new AbortController();
-      const turn = await runTurn(graph, resume, thread, rendered, inFlight.signal);
+      const turn = await runTurn(graph, resume, session, rendered, inFlight.signal);
       inFlight = null;
       pending = finish(turn);
       rendered = turn.rendered;
@@ -131,9 +225,45 @@ export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
     }
 
     if (input === "/clear") {
-      thread = crypto.randomUUID();
+      session = crypto.randomUUID();
       rendered = 0;
-      process.stdout.write("(new thread)\n\n");
+      touched = false;
+      process.stdout.write("(new session)\n\n");
+      rl.prompt();
+      continue;
+    }
+
+    // Only before this session has said anything — see `touched`. The refusal
+    // names the way through rather than just saying no: `/clear` then `/resume`
+    // is the supported way to switch mid-conversation, and it is one step
+    // instead of a second mechanism precisely because that step is "finish with
+    // this one first".
+    if (input === "/resume" || input.startsWith("/resume ")) {
+      if (touched) {
+        process.stdout.write(
+          `${DIM}this session has already started — /clear first, then /resume${RESET}\n\n`,
+        );
+        rl.prompt();
+        continue;
+      }
+
+      const prefix = input.slice("/resume".length).trim();
+      if (prefix === "") {
+        await offer();
+        rl.prompt();
+        continue;
+      }
+
+      const found = await resolveSession(stateDir, prefix);
+      if (found.kind === "one") pending = await adopt(found.session);
+      else if (found.kind === "none") {
+        process.stdout.write(`${DIM}no session starts with ${prefix}${RESET}\n\n`);
+      } else {
+        // Ambiguity is a shorter list, not an error: the candidates are exactly
+        // what a picker is for, and the user is already sitting at one.
+        process.stdout.write(`${renderSessionList(found.candidates)}\n\n`);
+        picking = found.candidates;
+      }
       rl.prompt();
       continue;
     }
@@ -165,10 +295,11 @@ export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
       ];
 
       inFlight = new AbortController();
+      touched = true;
       const turn = await runTurn(
         graph,
         { messages },
-        thread,
+        session,
         rendered,
         inFlight.signal,
       );
@@ -188,8 +319,9 @@ export async function runRepl({ graph, skills }: ReplOptions): Promise<void> {
     // which caller invoked the graph is not a guarantee.
     const messages: BaseMessage[] = [new HumanMessage(input)];
 
+    touched = true;
     inFlight = new AbortController();
-    const turn = await runTurn(graph, { messages }, thread, rendered, inFlight.signal);
+    const turn = await runTurn(graph, { messages }, session, rendered, inFlight.signal);
     inFlight = null;
 
     pending = finish(turn);
@@ -292,7 +424,7 @@ interface TurnResult {
 async function runTurn(
   graph: AgentGraph,
   input: { messages: BaseMessage[] } | Command,
-  thread: string,
+  session: string,
   rendered: number,
   signal: AbortSignal,
 ): Promise<TurnResult> {
@@ -328,7 +460,11 @@ async function runTurn(
       recursionLimit: RECURSION_LIMIT,
       durability: DURABILITY,
       signal,
-      configurable: { thread_id: thread },
+      // ⚠️ The one place two vocabularies meet. `thread_id` is LangGraph's key
+      // and it addresses the whole tree — which is what `CONTEXT.md` calls a
+      // **session**. A `thread` is one branch inside it, of which there is
+      // exactly one today because nothing here ever passes a `checkpoint_id`.
+      configurable: { thread_id: session },
     })) as AsyncIterable<[string, unknown]>;
 
     for await (const [mode, payload] of stream) {

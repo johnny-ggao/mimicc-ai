@@ -8,7 +8,7 @@
 ### 上下文的来源与权限
 
 **操作方通道（operator channel）**：
-线上 `role: "system"` 的那条消息。**只有我们写的内容进这里**——它是唯一无法被会话中的其它参与方
+线上 `role: "system"` 的那条消息。**只有我们写的内容进这里**——它是唯一无法被对话中的其它参与方
 伪造的通道，所以进了这里就等于拿到操作方权限。
 _Avoid_: 系统消息、system prompt（指通道时）
 
@@ -120,7 +120,7 @@ _Avoid_: 消息列表、transcript（中文里）
 
 **窗口上限（window limit）**：
 一次请求装得下多少 token。`deepseek-v4-flash` 是 **1,048,576**（实测，撞上去是硬 400）。
-**它约束的是单次请求，不是一段会话的总和**——六次请求各花 3000，不等于用掉了 18000。
+**它约束的是单次请求，不是一条 session 的总和**——六次请求各花 3000，不等于用掉了 18000。
 单次请求 = 常驻段（系统提示词 + 工具定义）+ 这条 thread 至今的全部历史，
 所以 **thread 越长、单次请求越大**，这才是窗口会满的机制。**这个数只能从 provider 的文档或
 实测拿**：API 不返回它，SDK 会替你编一个。
@@ -140,7 +140,7 @@ _Avoid_: 上下文压缩、省 token（指这类机制的目的时）
 ⚠️ **不要用「用户按一次回车到交还提示符之间」定义它**（2026-08-17 之前就是这么写的）：
 那从系统内部不可判定，而且不准——实测（`repro/15-typing-during-a-turn.ts`）回合进行中敲的
 行会被缓冲、回合结束后补放，**开启下一个回合的那次回车，是在上一个回合里按的**。
-_Avoid_: 会话、轮次（指一次模型调用时）
+_Avoid_: session（一条 session 是一串回合）、轮次（指一次模型调用时）
 
 **排队的输入（nextRun）**：
 回合进行中敲下的那一行。它**不进当前回合**，排在后面自成一个新回合。名字取自 pi 的
@@ -177,9 +177,35 @@ _Avoid_: 失败（capped 不是失败）、中止
 进程被 kill（SIGKILL、断电），运行中的状态没来得及收口。**它是无序的**，与「中止」相对；恢复靠检查点：重启后从盘上续跑、不重复已完成的副作用（R4 的地盘）。
 _Avoid_: 中止（那是 Ctrl+C 的有序停止）
 
+**session（会话）**：
+一次可恢复的工作单位。**盘上一个文件就是一条 session**（`<id>.jsonl`），外加一个旁挂的
+`<id>.tools.jsonl` 工具日志——**所以删一条 session 要删两个文件**，这是 `checkpoint/saver.ts`
+里那条长期没有主人的 ⚠️ 说的同一件事。由 LangGraph 的 `thread_id` 寻址：⚠️ **那是外来词，
+它寻址的是 session，不是下面那条 thread**——两套词表的接缝只有一处，`src/console/repl.ts`
+交给 `configurable` 的那一行。`/clear` 开一条新 session，旧的仍然可寻址。
+
+概念取自 pi（`packages/agent/docs/harness.md:86-99`），它把一条 session 定义成四个部分：
+**entry 树**、**facts**（session 的名字、entry 的标签）、**lanes**（树上的命名游标）、
+**用量账**。🔴 **我们今天只有第一个里的一条分支。** facts 没有（要列历史时，标题只能拿第一条
+用户消息兜底——pi 自己也是这么兜的）；lanes 没有；账在 `src/usage.ts` 的秤里，但**不落进
+session**，只进日志。⚠️ **有一样明确不抄**：pi 用 lane 让 subagent 共享同一段历史，我们反着
+判过——`src/tools/task.ts` 里 `checkpointer: false`，**子 agent 的工作笔记不进用户的 session**。
+⚠️ `/clear` 是开新 session，不是在同一条 session 上开分支（同 pi：`slash-commands.ts:37`
+逐字 `{ name: "new", description: "Start a new session" }`，**分支在那边是另外两个动作**）。
+_Avoid_: 线程、对话（指这个单位时）、thread（那是里面的一条）
+
 **thread**：
-checkpointer 里的一条历史，由 `thread_id` 寻址。`/clear` 换一个新的，旧的仍然可寻址。
-_Avoid_: 会话、session
+一条 session 的 entry 树上的**一条分支**。在 LangGraph 里就是一条 checkpoint 血脉——每个
+checkpoint 记着父指针（`langgraph/dist/pregel/loop.js:778`）——由 `checkpoint_id` 寻址。
+🔴 **今天每条 session 恰好一条 thread。** 能有多条**不是还没做的功能，是还没有入口**：分支在
+LangGraph 里是一等状态（`langgraph-checkpoint/dist/types.d.ts:19`，
+`source: "input" | "loop" | "update" | "fork"`），我们的 saver 也早就存得下（`checkpoint/saver.ts`
+的 `newestFirst()` 与 `asAppend()` 两处注释讲的都是 fork）。**缺的那样东西叫命名游标**：
+LangGraph 没有 pi 的 lane，唯一的隐式游标是「id 最大的那个 checkpoint」，想寻址某一条分支
+只能自己拿着 `checkpoint_id`。分支导航本身是 R10，判在范围外。
+⚠️ **与 session 的边界**：session 是人能列、能选、能续、能删的那个单位（一个文件）；thread 是
+模型看得见的那条线。**「这条 thread 至今的全部历史」是单次请求的分母，一条 session 的总和不是。**
+_Avoid_: 会话、session（那是容器）
 
 **种类（kind）**：
 这程序能跑起来的一类 agent，**主 agent 也是一种**——不只是子 agent 的分类。一种由三样东西
