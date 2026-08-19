@@ -31,6 +31,7 @@ import { Command } from "@langchain/langgraph";
 
 import { createUniversalAgent, RECURSION_LIMIT } from "../src/agents";
 import { loadConfig } from "../src/config";
+import { resolveModelConfig } from "../src/models";
 import { buildSystemPrompt } from "../src/agents";
 
 const SOURCE = "bench/fixture-edit";
@@ -49,6 +50,7 @@ function externalEdit(text: string): string {
 }
 
 const config = loadConfig();
+const resolved = resolveModelConfig(config);
 const systemPrompt = buildSystemPrompt({
   cwd: process.cwd(),
   platform: process.platform,
@@ -62,9 +64,15 @@ async function sample(index: number) {
   cpSync(SOURCE, WORK, { recursive: true });
 
   const graph = createUniversalAgent({
-    baseURL: config.LLM_BASE_URL,
-    apiKey: config.LLM_API_KEY,
-    model: config.LLM_MODEL,
+    // ⚠️ 2026-08-20 修：原来直接读 `config.LLM_API_KEY`／`LLM_MODEL`／`LLM_BASE_URL`。
+    // 那是 provider 注册表出现**之前**的读法，`LLM_API_KEY` 后来降级成 DeepSeek 的弃用别名，
+    // 今天的 `.env` 不再定义它——于是这个探针死在客户端构造上（`Missing credentials`），
+    // 一个请求都没发出去，而**它躺了多久没人知道**：`repro/` 不在 typecheck 里，
+    // 跑起来才看得见。`scripts/probe-smoke.ts` 就是为这个加的。
+    // 现在走和出货同一条解析（`resolveModelConfig`），provider 换了它跟着换。
+    baseURL: resolved.baseURL,
+    apiKey: resolved.apiKey,
+    model: resolved.model,
     maxTokens: 4096,
     systemPrompt,
   });

@@ -4,6 +4,28 @@
 跑一次就有答案。它们进 git 的理由和 `bench/` 一样：**结论在 `docs/adr/` 与 `CONTEXT.md` 里，
 证据不能只存在于一台机器上。** 同样不进 prettier / eslint / tsconfig。
 
+## 那它们腐烂了谁知道？——`bun run probes:smoke`
+
+**改接口会无声打死探针。** 2026-08-19 实测过：给 `AgentGraph` 加一个方法、给 `ReplOptions`
+加两个字段，`repro/15` 当场抛，而 `bun run check` 全绿。
+
+**判过一次：不把 `repro/` 纳入 typecheck**（2026-08-20）。量过代价——**32 个错、9 个文件**，
+其中绝大多数是 strict 噪音（探针本来就写得松），而最像「真错」的那条是**假信号**：
+`profile-probe.ts` 的 `getProfileLimits` 运行时确实导出
+（`langchain/dist/agents/middleware/summarization.js:573`），只是 `.d.ts` 不声明它，
+探针注释里写着这是**故意穿过 dist 拿的**。反过来，同一天真正烂掉的那个
+（`05-write-lost-update.ts` 读弃用的 `LLM_API_KEY`，今天的 `.env` 不再定义它，
+死在客户端构造上、一个请求都没发出去）**typecheck 一个字都不会说**。
+
+所以判据是**起不起得来**：`scripts/probe-smoke.ts` 把每个探针跑一遍，断言退出码。
+**花钱的那三个也在里面**——它们跑在一个只回 200 + 空 `choices` 的本地 stub 上，
+判据换成「stub 收到过请求没有」，即「它活到了发请求那一步」。⚠️ 不用死端口：
+连接被拒会触发下面那条重试警告，实测 30 秒内读不到任何信号。
+
+⚠️ **它抓不到什么，写在这里免得被当成保险**：一个探针可以「跑得起来」但**答错**——
+比如引用一个已经改了语义的符号。冒烟只回答「它还活着吗」，不回答「它的结论还成立吗」。
+后者只有重新读它的注释和输出才知道。
+
 从仓库根跑，例如 `bun repro/profile-probe.ts`。
 
 | 脚本 | 回答了什么 | 花钱 |

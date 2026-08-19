@@ -32,4 +32,9 @@ jobs:
 
       - run: bun run test:coverage
 
+      # 探针不在 tsconfig 里（repro/README.md 的决定），所以改接口打死它们时
+      # 上面那一步是全绿的。这一步跑它们一遍，只问「还起得来吗」。
+      # 花钱的三个跑在本地 stub 上，CI 不会掏钱。
+      - run: bun run probes:smoke
+
       - run: bun run build
