@@ -12,6 +12,8 @@ import {
 } from "../agents";
 import { markdownStream } from "./markdown";
 import { describeSession, readChoice, renderSessionList } from "./picker";
+import { spendBreakdown, spendLine } from "./spend";
+import { addSpend, creditsOf, noSpend, type Spend } from "../usage";
 import { listSessions, resolveSession, type Session } from "../session";
 import { TASK_TOOL_NAME } from "../tools";
 import {
@@ -31,6 +33,7 @@ const BANNER = [
   "  Skill    loads a skill's instructions (see /skills)",
   "  Bash     stops and asks before it runs; the others do not",
   "  /skills  list skills",
+  "  /cost    what this session has spent, per model",
   "  /resume  carry on from an earlier session (only before this one has messages)",
   "  /clear   start a new session; the old one stays on disk",
   "  /exit    quit (same as Ctrl+D)",
@@ -136,6 +139,11 @@ export async function runRepl({
   // session that **does not exist on disk at all** (the saver only creates the
   // file on its first append), so leaving that one behind costs nothing.
   let touched = false;
+  // What this session has spent so far. Kept here rather than re-read from the
+  // file after every turn: the console already walks each new message once to
+  // render it, and the same walk can add up what it cost — see `renderStructure`.
+  let spent: Spend = noSpend();
+  let byModel: Record<string, Spend> = {};
 
   /**
    * Carries on from a session this process did not start.
@@ -157,6 +165,12 @@ export async function runRepl({
     // row counts bodies stored in the file, the renderer counts the branch it is
     // printing, and the two part ways the moment history is rewritten or forked.
     rendered = state.values.messages?.length ?? 0;
+    // Seeded from the row rather than recomputed: the lister already summed this
+    // file, and the running total has to continue the session, not restart it.
+    spent = { ...chosen.spent };
+    byModel = Object.fromEntries(
+      Object.entries(chosen.byModel).map(([model, cost]) => [model, { ...cost }]),
+    );
 
     const requests = (state.tasks ?? []).flatMap((task) =>
       (task.interrupts ?? []).flatMap(
@@ -170,6 +184,26 @@ export async function runRepl({
     const gate: Pending = { requests, decisions: [], editing: false };
     ask(gate);
     return gate;
+  };
+
+  /**
+   * Folds one turn's cost into the session's running total, and says so.
+   *
+   * One line at the end of a turn, because the console has no status area to put
+   * it in: pi keeps these numbers in a footer, which needs a TUI, and this is a
+   * readline prompt. Scrollback is the only always-visible surface we have.
+   *
+   * Silent when a turn spent nothing — a slash command that loaded a skill and
+   * called no model has nothing to report, and printing zeroes would teach the
+   * eye to skip the line that matters.
+   */
+  const account = (turn: TurnResult): void => {
+    if (turn.credits.length === 0) return;
+    for (const [model, cost] of turn.credits) {
+      addSpend(spent, cost);
+      addSpend((byModel[model] ??= noSpend()), cost);
+    }
+    process.stdout.write(`${DIM}  ∑ ${spendLine(spent)}${RESET}\n`);
   };
 
   /** Shows the list and hands the next line to the picker. */
@@ -308,6 +342,7 @@ export async function runRepl({
       inFlight = new AbortController();
       const turn = await runTurn(graph, resume, session, rendered, inFlight.signal);
       inFlight = null;
+      account(turn);
       pending = finish(turn);
       rendered = turn.rendered;
       rl.prompt();
@@ -321,10 +356,18 @@ export async function runRepl({
       continue;
     }
 
+    if (input === "/cost") {
+      process.stdout.write(`${spendBreakdown(byModel)}\n\n`);
+      rl.prompt();
+      continue;
+    }
+
     if (input === "/clear") {
       session = crypto.randomUUID();
       rendered = 0;
       touched = false;
+      spent = noSpend();
+      byModel = {};
       process.stdout.write("(new session)\n\n");
       rl.prompt();
       continue;
@@ -401,6 +444,7 @@ export async function runRepl({
         inFlight.signal,
       );
       inFlight = null;
+      account(turn);
       pending = finish(turn);
       rendered = turn.rendered;
       rl.prompt();
@@ -421,6 +465,7 @@ export async function runRepl({
     const turn = await runTurn(graph, { messages }, session, rendered, inFlight.signal);
     inFlight = null;
 
+    account(turn);
     pending = finish(turn);
     rendered = turn.rendered;
     rl.prompt();
@@ -527,6 +572,8 @@ export function readDecision(input: string, pending: Pending): Command | null {
 interface TurnResult {
   /** Tool calls the gate stopped, or null when the turn ran to completion. */
   requests: ActionRequest[] | null;
+  /** What this turn's new messages cost, keyed by the model that was paid. */
+  credits: [string, Spend][];
   /** New watermark for how much of the thread has been printed. */
   rendered: number;
   error: unknown;
@@ -550,6 +597,7 @@ async function runTurn(
   signal: AbortSignal,
 ): Promise<TurnResult> {
   let requests: ActionRequest[] | null = null;
+  const credits: [string, Spend][] = [];
   let dimmed = false;
   // When the last activity dot was printed; see the subagent branch below.
   let lastDot = 0;
@@ -606,7 +654,7 @@ async function runTurn(
           // arrives on a different event stream — the transcript would show the
           // model's sentence appearing after the call it introduced.
           markdown.flush();
-          rendered = renderStructure(state.messages, rendered, closeDim);
+          rendered = renderStructure(state.messages, rendered, closeDim, credits);
         }
         continue;
       }
@@ -667,7 +715,7 @@ async function runTurn(
     process.stdout.write("\n");
   }
 
-  return { requests, rendered, error };
+  return { requests, credits, rendered, error };
 }
 
 /** How much of a tool call's arguments fits on one line of the transcript. */
@@ -727,9 +775,14 @@ function renderStructure(
   messages: BaseMessage[],
   rendered: number,
   closeDim: () => void,
+  credits: [string, Spend][],
 ): number {
   for (const message of messages.slice(rendered)) {
     const type = message.getType();
+    // The same walk that renders a message counts what it cost. Riding the
+    // watermark is what makes it exact: every message is passed exactly once,
+    // and the values stream hands back the whole thread on every lap.
+    credits.push(...creditsOf(message));
 
     if (type === "ai") {
       const calls = (message as { tool_calls?: { name: string; args: unknown }[] })

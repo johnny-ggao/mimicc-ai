@@ -30,6 +30,7 @@ export { describeError, fromSubagent, summarizeCall } from "./repl";
 // a shipping bug once (`repro/15`), so it is pinned where a change fails.
 export { readDecision, type Pending } from "./repl";
 export { parseArgs, type Invocation } from "./args";
+export { cachedShare, compact, spendBreakdown, spendLine } from "./spend";
 export {
   describeSession,
   readChoice,

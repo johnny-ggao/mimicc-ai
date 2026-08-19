@@ -1,4 +1,4 @@
-import type { UsageMetadata } from "@langchain/core/messages";
+import type { BaseMessage, UsageMetadata } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
 /**
@@ -62,6 +62,36 @@ export function bucketsOf(usage: UsageMetadata | undefined): Spend {
     cacheRead,
     cacheWrite,
   };
+}
+
+/**
+ * What one message paid for, keyed by the model that was paid.
+ *
+ * Two shapes, and the second one is the reason this is shared rather than
+ * written twice: an assistant message carries its own `usage_metadata`, while a
+ * dispatch's cost rides on the **tool result** — the subagent's messages are
+ * never stored, so `tools/task.ts` puts an already-split map there instead.
+ * Anything that adds up a conversation has to know both, and knowing them in one
+ * place is how the two stay in step.
+ */
+export function creditsOf(message: BaseMessage): [string, Spend][] {
+  const usage = (message as { usage_metadata?: UsageMetadata }).usage_metadata;
+  const metadata = (message as { response_metadata?: Record<string, unknown> })
+    .response_metadata;
+
+  if (usage !== undefined) {
+    const label = metadata?.["model"];
+    return [
+      [typeof label === "string" && label !== "" ? label : "unknown", bucketsOf(usage)],
+    ];
+  }
+
+  const dispatched = metadata?.["usage"];
+  if (dispatched === null || typeof dispatched !== "object") return [];
+  return Object.entries(dispatched as Record<string, Spend>).map(([model, spend]) => [
+    model,
+    spend,
+  ]);
 }
 
 export function addSpend(total: Spend, next: Spend): void {

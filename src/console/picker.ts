@@ -1,5 +1,5 @@
 import type { Session } from "../session";
-import type { Spend } from "../usage";
+import { compact } from "./spend";
 
 /**
  * The list you pick from, and how a typed line becomes a pick.
@@ -32,7 +32,7 @@ export function renderSessionList(sessions: Session[]): string {
     const gate = session.atGate ? "⚠" : " ";
     return (
       `  ${number}  ${gate} ${DIM}${session.id.slice(0, 8)}  ` +
-      `${String(session.messages).padStart(3)} msg  ${tokens(session.spent).padStart(6)}  ` +
+      `${String(session.messages).padStart(3)} msg  ${sessionTokens(session).padStart(6)}  ` +
       `${stamp(session.lastActive)}${RESET}  ` +
       session.title
     );
@@ -71,19 +71,12 @@ export function describeSession(session: Session): string {
   );
 }
 
-/**
- * What the session moved, short enough for a column.
- *
- * All four buckets added, because the question a list answers is "how big was
- * this one", not "where did it go". The split that decides the real price — how
- * much was served from cache — and the per-model breakdown are on the `Session`
- * for anything that wants to ask properly.
- */
-function tokens(spent: Spend): string {
-  const total = spent.uncachedInput + spent.output + spent.cacheRead + spent.cacheWrite;
-  if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`;
-  if (total >= 1_000) return `${String(Math.round(total / 1_000))}k`;
-  return String(total);
+/** Everything the session moved, for the one column a list row can spare. */
+function sessionTokens(session: Session): string {
+  const spent = session.spent;
+  return compact(
+    spent.uncachedInput + spent.output + spent.cacheRead + spent.cacheWrite,
+  );
 }
 
 function stamp(when: Date): string {

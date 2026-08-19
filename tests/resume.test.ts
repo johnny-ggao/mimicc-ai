@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
-import { PAGE, parseArgs, readChoice, renderSessionList } from "@/console";
+import {
+  cachedShare,
+  compact,
+  PAGE,
+  parseArgs,
+  readChoice,
+  renderSessionList,
+  spendBreakdown,
+  spendLine,
+} from "@/console";
+import type { Spend } from "@/usage";
 import type { Session } from "@/session";
 
 /**
@@ -108,5 +118,64 @@ describe("the list", () => {
       session(`s${String(index)}`),
     );
     expect(renderSessionList(many)).toContain("and 3 more");
+  });
+});
+
+/**
+ * What a session has spent, as the console says it.
+ *
+ * Three numbers rather than one total, and that is this repository's own rule
+ * rather than taste: every context-engineering change is weighed on `input` and
+ * `cached` (`CONTEXT.md`), and a single total folds exactly those two together.
+ * Measured on real history, one session reads 557k total, 179k uncached, 65%
+ * from cache — three different statements, and only the last one would notice a
+ * cache that stopped working.
+ */
+describe("saying what a session spent", () => {
+  const spend = (extra: Partial<Spend> = {}): Spend => ({
+    uncachedInput: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    ...extra,
+  });
+
+  test("counts are shortened, and small ones are left alone", () => {
+    expect(compact(999)).toBe("999");
+    expect(compact(12_345)).toBe("12k");
+    expect(compact(1_240_000)).toBe("1.2M");
+  });
+
+  test("the cache share is of input, and absent before anything is sent", () => {
+    expect(cachedShare(spend({ uncachedInput: 35, cacheRead: 65 }))).toBe(65);
+    // Output is not input: including it would make a chatty turn look cache-cold.
+    expect(cachedShare(spend({ uncachedInput: 50, cacheRead: 50, output: 900 }))).toBe(
+      50,
+    );
+    // "0% cached" reads as a problem; "nothing sent yet" is not one.
+    expect(cachedShare(spend())).toBeUndefined();
+  });
+
+  test("the line carries all three numbers, and drops the share when there is none", () => {
+    expect(spendLine(spend({ uncachedInput: 1200, output: 300, cacheRead: 800 }))).toBe(
+      "1k in · 300 out · 40% cached",
+    );
+    expect(spendLine(spend())).toBe("0 in · 0 out");
+  });
+
+  test("the breakdown is per model, biggest first, and says so when empty", () => {
+    const rendered = spendBreakdown({
+      "kimi-k3": spend({ uncachedInput: 100, output: 10 }),
+      "deepseek-v4-flash": spend({ uncachedInput: 9000, output: 500, cacheRead: 1000 }),
+    });
+    const [first, second] = rendered.split("\n");
+
+    expect(first).toContain("deepseek-v4-flash");
+    expect(second).toContain("kimi-k3");
+    // The model column is padded, so the numbers of both rows start at the same
+    // place and two rows read as a column rather than as two sentences.
+    expect(first?.indexOf("9k in")).toBe(second?.indexOf("100 in") ?? -1);
+
+    expect(spendBreakdown({})).toBe("nothing spent yet.");
   });
 });
