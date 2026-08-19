@@ -1,4 +1,7 @@
+import type { UsageMetadata } from "@langchain/core/messages";
 import { readFile, stat } from "node:fs/promises";
+
+import { addSpend, bucketsOf, noSpend, type Spend } from "../usage";
 import { basename } from "node:path";
 
 /**
@@ -78,13 +81,19 @@ export interface Session {
    * in the message list, and `elapsedMs` is not a provider figure at all.
    */
   spent: Spend;
-}
-
-export interface Spend {
-  input: number;
-  output: number;
-  /** Input tokens the provider served from its cache — the column the scale exists for. */
-  cacheRead: number;
+  /**
+   * The same tokens, split by the model that spent them.
+   *
+   * A mixed total stops meaning anything once more than one model is in play,
+   * and that is reachable today rather than hypothetically: change `LLM_MODEL`,
+   * `--resume` an older session, and one number would be two providers' tokens
+   * added together. pi keys its breakdown the same way
+   * (`packages/coding-agent/src/core/usage-totals.ts:37-45`).
+   *
+   * `"unknown"` collects everything written before the model was recorded —
+   * which is every message in this repository's history at the time this landed.
+   */
+  byModel: Record<string, Spend>;
 }
 
 /** How much of the first message becomes the title. */
@@ -107,7 +116,8 @@ export async function readSession(path: string): Promise<Session | undefined> {
 
   let messages = 0;
   let title = "";
-  const spent: Spend = { input: 0, output: 0, cacheRead: 0 };
+  const spent: Spend = noSpend();
+  const byModel: Record<string, Spend> = {};
   /** Used only when every human message in the file is a skill activation. */
   let fallback = "";
   let newest: string | undefined;
@@ -143,7 +153,7 @@ export async function readSession(path: string): Promise<Session | undefined> {
 
     if (record.kind === "message") {
       messages += 1;
-      addSpend(spent, record.data);
+      collect(spent, byModel, record.data);
       if (title === "") {
         const id = typeof record.id === "string" ? record.id : "";
         if (id.startsWith(SKILL_ID)) {
@@ -195,44 +205,57 @@ export async function readSession(path: string): Promise<Session | undefined> {
     lastActive,
     atGate: newest !== undefined && gated.has(newest),
     spent,
+    byModel,
   };
 }
 
 /**
- * Adds one stored message's tokens to the running total.
+ * Adds one stored message's tokens to the totals, and to its model's column.
  *
  * Two shapes, because two kinds of work are being paid for: the agent's own
  * model calls, whose numbers langchain puts in `usage_metadata`, and dispatches,
- * whose numbers `tools/task.ts` puts on the tool result because the subagent's
- * messages are never stored at all.
+ * whose numbers `tools/task.ts` puts on the tool result — already split by model
+ * — because the subagent's messages are never stored at all.
  */
-function addSpend(total: Spend, data: unknown): void {
+function collect(total: Spend, byModel: Record<string, Spend>, data: unknown): void {
   const stored = data as {
     type?: unknown;
     data?: {
-      usage_metadata?: {
-        input_tokens?: unknown;
-        output_tokens?: unknown;
-        input_token_details?: { cache_read?: unknown };
-      };
-      response_metadata?: { usage?: unknown };
+      usage_metadata?: unknown;
+      response_metadata?: { model?: unknown; usage?: unknown };
     };
   } | null;
 
+  const into = (key: unknown, spend: Spend): void => {
+    addSpend(total, spend);
+    const label = typeof key === "string" && key !== "" ? key : "unknown";
+    addSpend((byModel[label] ??= noSpend()), spend);
+  };
+
   if (stored?.type === "ai") {
-    const usage = stored.data?.usage_metadata;
-    total.input += count(usage?.input_tokens);
-    total.output += count(usage?.output_tokens);
-    total.cacheRead += count(usage?.input_token_details?.cache_read);
+    if (stored.data?.usage_metadata === undefined) return;
+    into(
+      stored.data.response_metadata?.model,
+      bucketsOf(stored.data.usage_metadata as UsageMetadata),
+    );
     return;
   }
 
   if (stored?.type === "tool") {
-    const usage = stored.data?.response_metadata?.usage as
-      { input?: unknown; output?: unknown; cacheRead?: unknown } | undefined;
-    total.input += count(usage?.input);
-    total.output += count(usage?.output);
-    total.cacheRead += count(usage?.cacheRead);
+    const dispatched = stored.data?.response_metadata?.usage;
+    if (dispatched === null || typeof dispatched !== "object") return;
+    for (const [model, spend] of Object.entries(
+      dispatched as Record<string, unknown>,
+    )) {
+      if (spend === null || typeof spend !== "object") continue;
+      const parts = spend as Record<string, unknown>;
+      into(model, {
+        uncachedInput: count(parts["uncachedInput"]),
+        output: count(parts["output"]),
+        cacheRead: count(parts["cacheRead"]),
+        cacheWrite: count(parts["cacheWrite"]),
+      });
+    }
   }
 }
 

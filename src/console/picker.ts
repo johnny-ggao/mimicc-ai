@@ -1,4 +1,5 @@
-import type { Session, Spend } from "../session";
+import type { Session } from "../session";
+import type { Spend } from "../usage";
 
 /**
  * The list you pick from, and how a typed line becomes a pick.
@@ -71,14 +72,15 @@ export function describeSession(session: Session): string {
 }
 
 /**
- * What the session cost, short enough for a column.
+ * What the session moved, short enough for a column.
  *
- * Input plus output, because the question a list answers is "how much did this
- * one cost", not "where did it go" — the split, and the cache share that decides
- * the real price, are on `Session.spent` for anything that wants to ask properly.
+ * All four buckets added, because the question a list answers is "how big was
+ * this one", not "where did it go". The split that decides the real price — how
+ * much was served from cache — and the per-model breakdown are on the `Session`
+ * for anything that wants to ask properly.
  */
 function tokens(spent: Spend): string {
-  const total = spent.input + spent.output;
+  const total = spent.uncachedInput + spent.output + spent.cacheRead + spent.cacheWrite;
   if (total >= 1_000_000) return `${(total / 1_000_000).toFixed(1)}M`;
   if (total >= 1_000) return `${String(Math.round(total / 1_000))}k`;
   return String(total);

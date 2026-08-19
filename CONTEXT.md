@@ -193,7 +193,12 @@ session。`/clear` 开一条新 session，旧的仍然可寻址。
 只能拿第一条用户消息兜底——pi 自己也是这么兜的）；lanes 没有。
 **账在 session 里，但不是一份独立的账本**：每条 ai 消息自带 `usage_metadata`，
 派发的花费由 `Task` 的结果捎回来（子 agent 的消息不落盘），所以「这条 session 花了多少」
-是从消息上加出来的。这跟调研过的三个实现是同一条原则——**成本跟着产生它的那个工作单位走**
+是从消息上加出来的。**只记 token，不记钱**——我们接多家 provider，价目表是别人的且会漂，
+token 是能数准的那半（`dsh` 同样只计 token；pi 记了钱，因为它自带价目表）。
+四个桶**互不重叠**：`uncachedInput / output / cacheRead / cacheWrite`
+⚠️ **langchain 的约定相反**（`input_tokens` 含缓存、`cache_read` 是它的一个分解），
+混着加就会把缓存算两次。**并且按模型分栏**：换了模型再 `--resume`，一个总数就是两家
+provider 的 token 加在一起。这跟调研过的三个实现是同一条原则——**成本跟着产生它的那个工作单位走**
 （pi 的 usage 行用 `entryId` 挂回 entry、Claude Code 挂在 assistant 消息上、
 codex 一次 inference 一条记录并写明消耗与产出的 item）。⚠️ 两处不在账内：摘要那一跳的
 消息进的是通道值不是消息列表，`elapsedMs` 根本不是 provider 的字段。⚠️ **有一样明确不抄**：pi 用 lane 让 subagent 共享同一段历史，我们反着

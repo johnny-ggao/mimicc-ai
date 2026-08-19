@@ -11,6 +11,66 @@ import { createMiddleware, type AnyAgentMiddleware } from "langchain";
  * save 2k tokens can lose a 20k prefix discount doing it — and that trade is
  * invisible without this field.
  */
+/**
+ * Tokens, in four buckets that do not overlap.
+ *
+ * The shape is borrowed from DeepSeek's own harness (`dsh`), whose type carries
+ * the warning that makes it worth borrowing —
+ * `packages/llm/llm/src/types.ts:130-131`: *Counts are **DISJOINT**:
+ * `inputTokens` is uncached input only*. **langchain's convention is the
+ * opposite**: `input_tokens` is the whole prompt and
+ * `input_token_details.cache_read` is a slice of it (`@langchain/core`
+ * `messages/metadata.d.ts:34-52`: *Breakdown of input token counts. Does not
+ * need to sum to full input token count*).
+ *
+ * Getting that wrong is not a naming problem, it is a numbers problem: add one
+ * provider's `input` to another's and the cached tokens are counted once or
+ * twice depending on which library reported them. So the buckets here are
+ * disjoint by construction, and `uncachedInput` is stated as what it is —
+ * *input the provider did not tell us was cached* — because the breakdown is
+ * allowed to be incomplete.
+ *
+ * No money. We run against several providers and their price lists are theirs,
+ * not ours: tokens are the part we can count exactly. pi carries a `cost` block
+ * (`packages/ai/src/types.ts:380-387`) and can, because it owns a price table;
+ * `dsh` counts tokens only, and that is the side of the fence we are on.
+ */
+export interface Spend {
+  /** Input the provider did not report as cached. */
+  uncachedInput: number;
+  output: number;
+  /** Input served from the provider's cache — the column the scale exists for. */
+  cacheRead: number;
+  /** Input written *into* the cache. Reported by Anthropic-shaped providers; 0 elsewhere. */
+  cacheWrite: number;
+}
+
+export function noSpend(): Spend {
+  return { uncachedInput: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+/** Splits one langchain usage report into the four disjoint buckets. */
+export function bucketsOf(usage: UsageMetadata | undefined): Spend {
+  if (usage === undefined) return noSpend();
+  const cacheRead = usage.input_token_details?.cache_read ?? 0;
+  const cacheWrite = usage.input_token_details?.cache_creation ?? 0;
+  return {
+    // Clamped, because the breakdown is documented as not necessarily summing:
+    // a provider that reports more cache than input would otherwise go negative.
+    uncachedInput: Math.max(0, usage.input_tokens - cacheRead - cacheWrite),
+    output: usage.output_tokens,
+    cacheRead,
+    cacheWrite,
+  };
+}
+
+export function addSpend(total: Spend, next: Spend): void {
+  total.uncachedInput += next.uncachedInput;
+  total.output += next.output;
+  total.cacheRead += next.cacheRead;
+  total.cacheWrite += next.cacheWrite;
+}
+
 export interface ModelUsage {
   /**
    * Who made this request: a kind's identity — `"main"` for the agent,
@@ -82,6 +142,7 @@ export interface ModelUsage {
  */
 export function usageMeter(
   agent: string,
+  model: string,
   report: (usage: ModelUsage) => void,
 ): AnyAgentMiddleware {
   return createMiddleware({
@@ -90,6 +151,33 @@ export function usageMeter(
       const startedAt = Date.now();
       const response = await handler(request);
       const elapsedMs = Date.now() - startedAt;
+
+      // ⚠️ **Which model spent this is not on the message otherwise.** Measured
+      // on this repository's own history: a stored assistant message carries
+      // `response_metadata.model_provider`, and its value is `"openai"` for
+      // every one of them — we reach DeepSeek and Moonshot alike through an
+      // OpenAI-compatible endpoint, so the provider label says nothing. The
+      // model id does reach `generationInfo` (`agents/model.ts`), but that is
+      // not `response_metadata` and does not survive into state.
+      //
+      // Without it a session's totals are a sum across whatever models it
+      // happened to use — and that is reachable today, not hypothetical:
+      // change `LLM_MODEL`, `--resume` an older session, and its ledger mixes
+      // two providers' tokens into one number that means nothing.
+      //
+      // ⚠️ **This is the id we asked for, not the one that answered.** pi prefers
+      // the response's own (`responseModel ?? model`), which is the more truthful
+      // of the two when an alias resolves to a dated build. Ours is not reachable
+      // here: the provider's model name lands in `generationInfo`
+      // (`agents/model.ts`) and never joins `response_metadata`, so preferring it
+      // would mean another change inside the surgical copy of langchain's
+      // streaming path. Recorded as an approximation rather than left unrecorded.
+      (response as { response_metadata?: Record<string, unknown> }).response_metadata =
+        {
+          ...(response as { response_metadata?: Record<string, unknown> })
+            .response_metadata,
+          model,
+        };
 
       const usage = usageOf(response);
       // A provider that returns no usage is a broken scale, not a free call —

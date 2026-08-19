@@ -117,8 +117,8 @@ test("what a session spent is summed off the messages, dispatches included", asy
         },
       },
     });
-  // A dispatch's tokens ride in on the tool result: the subagent's own messages
-  // are never written down, so this is the only place they can be.
+  // A dispatch's tokens ride in on the tool result — already split by model,
+  // because the subagent's own messages are never written down.
   const DISPATCH = JSON.stringify({
     kind: "message",
     id: "t1",
@@ -127,7 +127,16 @@ test("what a session spent is summed off the messages, dispatches included", asy
       data: {
         content: "report",
         tool_call_id: "call_1",
-        response_metadata: { usage: { input: 900, output: 100, cacheRead: 400 } },
+        response_metadata: {
+          usage: {
+            "deepseek-v4-flash": {
+              uncachedInput: 500,
+              output: 100,
+              cacheRead: 400,
+              cacheWrite: 0,
+            },
+          },
+        },
       },
     },
   });
@@ -143,7 +152,57 @@ test("what a session spent is summed off the messages, dispatches included", asy
   ]);
 
   const [session] = await listSessions(dir);
-  expect(session?.spent).toEqual({ input: 2400, output: 350, cacheRead: 1000 });
+  // `uncachedInput` is what the provider did not say was cached: 1000-600 and
+  // 500-0 from the two assistant turns, plus the dispatch's own 500.
+  expect(session?.spent).toEqual({
+    uncachedInput: 1400,
+    output: 350,
+    cacheRead: 1000,
+    cacheWrite: 0,
+  });
+});
+
+test("tokens are kept per model, so a session that switched models still adds up", async () => {
+  const AI = (id: string, model: string | undefined, input: number, cached: number) =>
+    JSON.stringify({
+      kind: "message",
+      id,
+      data: {
+        type: "ai",
+        data: {
+          content: "ok",
+          usage_metadata: {
+            input_tokens: input,
+            output_tokens: 10,
+            input_token_details: { cache_read: cached },
+          },
+          ...(model === undefined ? {} : { response_metadata: { model } }),
+        },
+      },
+    });
+
+  const dir = fixture([
+    [
+      "abcd3333-3333-4333-8333-333333333333.jsonl",
+      HUMAN("h", "跑一下"),
+      AI("a1", "deepseek-v4-flash", 1000, 400),
+      AI("a2", "kimi-k3", 200, 0),
+      // Written before the model was recorded — every message in the repository's
+      // own history at the time this landed.
+      AI("a3", undefined, 50, 0),
+    ],
+  ]);
+
+  const [session] = await listSessions(dir);
+  expect(session?.byModel["deepseek-v4-flash"]).toEqual({
+    uncachedInput: 600,
+    output: 10,
+    cacheRead: 400,
+    cacheWrite: 0,
+  });
+  expect(session?.byModel["kimi-k3"]?.uncachedInput).toBe(200);
+  expect(session?.byModel["unknown"]?.uncachedInput).toBe(50);
+  expect(session?.spent.uncachedInput).toBe(850);
 });
 
 test("a message with no usage on it costs nothing rather than breaking the sum", async () => {
@@ -151,9 +210,10 @@ test("a message with no usage on it costs nothing rather than breaking the sum",
     ["abcd2222-2222-4222-8222-222222222222.jsonl", HUMAN("h", "一")],
   ]);
   expect((await listSessions(dir))[0]?.spent).toEqual({
-    input: 0,
+    uncachedInput: 0,
     output: 0,
     cacheRead: 0,
+    cacheWrite: 0,
   });
 });
 

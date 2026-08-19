@@ -61,7 +61,7 @@ describe("the order every kind is assembled in", () => {
    */
   test("a stack with the meter outside the window is refused at assembly", () => {
     const wrong = [
-      usageMeter("main", () => {}),
+      usageMeter("main", "stub", () => {}),
       contextWindow({ model, agent: "main" }),
     ];
 

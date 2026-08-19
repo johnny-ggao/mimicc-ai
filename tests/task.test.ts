@@ -561,8 +561,16 @@ describe("a subagent's own window", () => {
     // a dispatch carries what it spent, and a message is where that can live
     // (see `spentOn` in `tools/task.ts`).
     expect(report.content).toContain("src/config.ts:17");
-    const spent = report.response_metadata["usage"] as { input: number };
-    expect(spent.input).toBeGreaterThan(0);
+    // Split by model, because tokens from two models are two different things —
+    // the subagent runs on the agent's model today, and the key is what keeps
+    // that from silently becoming an assumption.
+    const spent = report.response_metadata["usage"] as Record<
+      string,
+      { uncachedInput: number }
+    >;
+    const columns = Object.values(spent);
+    expect(columns.length).toBe(1);
+    expect(columns[0]?.uncachedInput).toBeGreaterThan(0);
     // Billed under its own name, not "summary": two agents summarising into one
     // column is the problem the label exists to prevent.
     expect(usage.some((record) => record.agent === "explore summary")).toBe(true);

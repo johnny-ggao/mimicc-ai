@@ -152,7 +152,10 @@ export function agentStack(
     }),
     // Innermost, so `request.messages` here is exactly what goes on the wire and
     // `elapsedMs` is the provider's latency alone.
-    usageMeter(identity, onUsage ?? (() => {})),
+    // The model id is handed in rather than read off the response: the response
+    // does not carry it (see the note in `usageMeter`), and this assembler is
+    // the last place that still knows.
+    usageMeter(identity, modelIdOf(model), onUsage ?? (() => {})),
     // Both are beforeAgent hooks, so their position among the others is not
     // load-bearing the way the two above are. Between themselves it does not
     // matter either: the instructions arrive pinned, so PinTurnTask skips them
@@ -188,6 +191,19 @@ export function agentStack(
  * assertion nobody has shown to work. It guards the *next* edit to that array,
  * and this is how we know it still would.
  */
+/**
+ * The model's own id, for labelling what it spent.
+ *
+ * Read off the instance rather than plumbed through `AgentEnvironment`, because
+ * it is the same fact by a shorter route: `createChatModel` is handed the id and
+ * `ChatOpenAI` keeps it on `.model`. A model that does not expose one is labelled
+ * so — an unattributed bucket is honest, a wrong label is not.
+ */
+function modelIdOf(model: BaseChatModel): string {
+  const named = (model as { model?: unknown }).model;
+  return typeof named === "string" && named !== "" ? named : "unknown";
+}
+
 export function assertMeterInsideWindow(stack: AnyAgentMiddleware[]): void {
   const at = (name: string) =>
     stack.findIndex((middleware) => middleware.name === name);

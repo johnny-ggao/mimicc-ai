@@ -21,7 +21,8 @@ const session = (id: string, extra: Partial<Session> = {}): Session => ({
   messages: 2,
   lastActive: new Date("2026-08-19T10:00:00Z"),
   atGate: false,
-  spent: { input: 0, output: 0, cacheRead: 0 },
+  spent: { uncachedInput: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  byModel: {},
   ...extra,
 });
 

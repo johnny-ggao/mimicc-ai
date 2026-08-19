@@ -9,5 +9,5 @@
  * A barrel, following `agents/`, `tools/` and `checkpoint/`: everything outside
  * this directory imports `@/session`.
  */
-export { readSession, type Session, type Spend } from "./read";
+export { readSession, type Session } from "./read";
 export { listSessions, openSession, resolveSession, type Resolution } from "./repo";

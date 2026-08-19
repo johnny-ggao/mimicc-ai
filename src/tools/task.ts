@@ -14,6 +14,7 @@ import { NEVER_REPLAY } from "./replay";
 // Direct, not the barrel: the barrel imports loop.ts, which imports ../tools
 // (this file), so importing ../agents here would close a cycle.
 import { classify, failureText } from "../agents/outcome";
+import { addSpend, bucketsOf, noSpend, type Spend } from "../usage";
 
 /**
  * `Task`: dispatch a registered subagent, get one report back.
@@ -149,28 +150,31 @@ export interface TaskToolOptions {
  * stayed clean and every unit test stayed green.
  */
 /**
- * What one dispatch spent, summed off the subagent's own messages.
+ * What one dispatch spent, per model, summed off the subagent's own messages.
  *
  * Read from `usage_metadata` rather than wired through the scale: the numbers
  * are already on the messages the run returns, and a second channel for the same
- * fact is a second thing to keep in step. `cacheRead` is kept because it is the
- * column the scale exists for — a dispatch that re-pays for an uncached prefix
- * is exactly the cost this repository measures.
+ * fact is a second thing to keep in step.
+ *
+ * **Per model, not one total.** Tokens from two models are two different things
+ * — different windows, different prices, different providers — and pi keys its
+ * breakdown the same way (`packages/coding-agent/src/core/usage-totals.ts:37-45`,
+ * `${provider}/${model}`). A subagent runs on the agent's model today; keeping
+ * the key means the day it does not, the number stays meaningful instead of
+ * quietly becoming a sum of unlike things.
  */
-function spentOn(messages: BaseMessage[]): {
-  input: number;
-  output: number;
-  cacheRead: number;
-} {
-  const total = { input: 0, output: 0, cacheRead: 0 };
+function spentOn(messages: BaseMessage[]): Record<string, Spend> {
+  const byModel: Record<string, Spend> = {};
   for (const message of messages) {
     const usage = (message as { usage_metadata?: UsageMetadata }).usage_metadata;
     if (usage === undefined) continue;
-    total.input += usage.input_tokens;
-    total.output += usage.output_tokens;
-    total.cacheRead += usage.input_token_details?.cache_read ?? 0;
+    const label = (message as { response_metadata?: { model?: unknown } })
+      .response_metadata?.model;
+    const key = typeof label === "string" && label !== "" ? label : "unknown";
+    const bucket = (byModel[key] ??= noSpend());
+    addSpend(bucket, bucketsOf(usage));
   }
-  return total;
+  return byModel;
 }
 
 export function createTaskTool(options: TaskToolOptions) {
