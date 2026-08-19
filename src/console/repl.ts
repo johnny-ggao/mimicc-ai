@@ -179,6 +179,89 @@ export async function runRepl({
     picking = sessions.length === 0 ? null : sessions;
   };
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Reading input: a line belongs to whatever the console was asking when it
+  // **arrived**, not to whatever it happens to be asking when the line is read.
+  //
+  // That distinction is the whole of ticket 04, and it was a shipping bug rather
+  // than a nicety. `for await (const line of rl)` does not pause readline while
+  // the body is awaiting a turn — the events keep firing and the async iterator
+  // buffers them, then replays them when the loop comes back (measured, both on
+  // a TTY and on a pipe: `repro/15-typing-during-a-turn.ts`). The arrival order
+  // survives; the arrival *moment* does not, and the moment is the only thing
+  // that distinguishes "answering the gate" from "was typed before the gate
+  // existed". Collecting the lines ourselves is what keeps it.
+  //
+  // ⚠️ **Only on a terminal.** Piped input has no such moment: the whole script
+  // was written before the process started, its order is deliberate, and there is
+  // no human whose stray keystroke needs protecting. Enforcing arrival there
+  // would make it impossible to answer a gate from a script at all — which is how
+  // this program is driven in probes and tests. So the rule is on where it
+  // protects somebody and off where it would only get in the way, and that is a
+  // decision rather than an oversight.
+  type Tag = "input" | "gate" | "picker";
+  interface Arrived {
+    tag: Tag;
+    text: string;
+  }
+
+  const strict = process.stdin.isTTY === true;
+  const arrived: Arrived[] = [];
+  let ended = false;
+  let wake: (() => void) | null = null;
+
+  const asking = (): Tag =>
+    pending !== null ? "gate" : picking !== null ? "picker" : "input";
+
+  rl.on("line", (raw) => {
+    arrived.push({ tag: asking(), text: raw.trim() });
+    wake?.();
+  });
+  rl.on("close", () => {
+    ended = true;
+    wake?.();
+  });
+
+  /**
+   * The next line this console is allowed to act on, or null once input ends.
+   *
+   * Everything the arrival rule buys is in here; the loop below is unchanged.
+   */
+  const take = async (): Promise<Arrived | null> => {
+    for (;;) {
+      if (strict) {
+        // A decision typed at a gate that has since been answered, or a choice
+        // typed at a picker that is gone, can never be consumed. Dropping it
+        // silently would be the same class of bug in the other direction, so it
+        // is dropped out loud.
+        for (let index = arrived.length - 1; index >= 0; index -= 1) {
+          const item = arrived[index];
+          if (item === undefined) continue;
+          const stale =
+            (item.tag === "gate" && pending === null) ||
+            (item.tag === "picker" && picking === null);
+          if (!stale) continue;
+          arrived.splice(index, 1);
+          process.stdout.write(
+            `${DIM}(dropped, the question it answered is gone: ${item.text})${RESET}\n`,
+          );
+        }
+      }
+
+      const want = asking();
+      const index = strict ? arrived.findIndex((item) => item.tag === want) : 0;
+      if (index !== -1 && arrived.length > 0) {
+        const [item] = arrived.splice(index, 1);
+        if (item !== undefined) return item;
+      }
+      if (ended) return null;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      wake = null;
+    }
+  };
+
   process.stdout.write(`${BANNER}\n\n`);
 
   if (start.kind === "session") pending = await adopt(start.session);
@@ -187,8 +270,10 @@ export async function runRepl({
   rl.setPrompt("> ");
   rl.prompt();
 
-  for await (const line of rl) {
-    const input = line.trim();
+  for (;;) {
+    const line = await take();
+    if (line === null) break;
+    const input = line.text;
 
     if (picking !== null) {
       const choice = readChoice(input, picking);
@@ -211,6 +296,12 @@ export async function runRepl({
         rl.prompt();
         continue;
       }
+      // Cleared **before** the turn runs, not after it. Every request in the
+      // batch has an answer by now, so the question is over — and while the
+      // resumed turn is in flight, `asking()` must already say "input" or a line
+      // typed during it would be tagged as a decision for a gate that is gone,
+      // and dropped as stale instead of becoming the next turn.
+      pending = null;
       // The decision was typed at the "> " prompt, so the resumed output would
       // otherwise start on that same line.
       process.stdout.write("\n");
