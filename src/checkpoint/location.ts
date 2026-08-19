@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 /**
- * Where thread files live, and why the answer is not one place.
+ * Where session files live, and why the answer is not one place.
  *
  * Two placements, because the two audiences want opposite things:
  *

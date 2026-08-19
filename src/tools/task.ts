@@ -142,7 +142,7 @@ export interface TaskToolOptions {
  *
  * **Only** the signal. Handing over the whole runtime also hands over
  * `configurable`, which is where langgraph keeps the parent's saver and thread
- * id — measured: the subagent's entire run was written into the parent's thread
+ * id — measured: the subagent's entire run was written into the parent's session
  * file under a `tools:<id>` namespace, while the parent's `state.messages`
  * stayed clean and every unit test stayed green.
  */

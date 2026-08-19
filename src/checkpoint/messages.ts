@@ -46,7 +46,7 @@ interface TaggedMessage {
  * the mapper is asymmetric about it: `mapChatMessagesToStoredMessages` encodes it
  * happily as `type: "remove"`, and `mapStoredMessagesToChatMessages` then throws
  * `Got unexpected type: remove` reading it back. A saver that can write a value
- * it cannot read is a saver that corrupts a thread on the next open, so the
+ * it cannot read is a saver that corrupts a session on the next open, so the
  * asymmetry is closed here instead of being inherited.
  */
 export function encodeMessage(message: BaseMessage): StoredMessage {

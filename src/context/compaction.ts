@@ -69,7 +69,7 @@ export const KEEP_FRACTION = 0.3;
  *
  * Without it, one summary of a nearly-full window would itself be a
  * near-full-window request. What falls outside the ceiling is dropped from the
- * summary — and is still in the thread file, which is the whole reason that file
+ * summary — and is still in the session file, which is the whole reason that file
  * exists. Recency is what a summary is for, so the ceiling keeps the tail.
  */
 export const SUMMARY_INPUT_TOKENS = 100_000;
@@ -325,7 +325,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     wrapModelCall: async (request, handler) => {
       const state = request.state as WindowState;
       let history = request.messages ?? [];
-      // The persisted shape is two keys and has to stay that way — thread files
+      // The persisted shape is two keys and has to stay that way — session files
       // written before the projection existed contain them. `Cut` is built at
       // this boundary and never leaves it.
       let cut: Cut = { at: state._windowCutoff ?? 0, summary: state._windowSummary };
@@ -395,7 +395,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
  *
  * The reply is not lost: AgentNode keeps the model's message separately and
  * appends it whatever this hook returns (nodes/AgentNode.js:94-105). The two
- * keys are written separately rather than as one `Cut`, because thread files
+ * keys are written separately rather than as one `Cut`, because session files
  * predating the projection contain them under these names.
  */
 function update(response: unknown, cut: Cut): Command {

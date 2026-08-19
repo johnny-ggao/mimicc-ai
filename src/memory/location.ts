@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import { repoSlug } from "../checkpoint";
 
 /**
- * Where memory lives, and why it is *not* where the thread files live.
+ * Where memory lives, and why it is *not* where the session files live.
  *
  * `resolveStateDir` splits by environment on purpose: developing this repository
  * you want the history next to the code, running against somebody else's project
@@ -21,7 +21,7 @@ import { repoSlug } from "../checkpoint";
  *
  * There is a third, quieter reason: in development the state directory lives
  * inside the working tree and is git-ignored, which makes it exactly the sort of
- * directory a person deletes without thinking. Thread files can afford that.
+ * directory a person deletes without thinking. Session files can afford that.
  *
  * `MIMICC_MEMORY_DIR` overrides it, the same escape hatch `MIMICC_STATE_DIR` is
  * for the state directory — and, like that one, it is read from the environment

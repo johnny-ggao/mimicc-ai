@@ -75,7 +75,7 @@ async function main(): Promise<void> {
     checkpointer: new JsonlSaver(stateDir),
     memory,
     skills,
-    // The same path, so a tool call's journal lands beside its thread's file.
+    // The same path, so a tool call's journal lands beside its session's file.
     stateDir,
     // One line per request to the provider. This is the scale every
     // context-engineering change is weighed on, so it is wired up before the

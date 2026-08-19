@@ -20,7 +20,7 @@
  *
  * ## Why the subset is this subset
  *
- * Taken from what the model actually writes, read out of a real thread file
+ * Taken from what the model actually writes, read out of a real session file
  * rather than guessed: bold, inline code, ordered and unordered lists,
  * paragraphs. Headings, fences, quotes and rules are included because they cost
  * a line each and appear as soon as you ask for code. Tables are not: they need

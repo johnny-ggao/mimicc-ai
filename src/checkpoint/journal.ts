@@ -8,7 +8,7 @@ import { removeFile } from "./file";
 /**
  * What a tool call said about itself before it ran, and what came of it.
  *
- * ## Why a second file beside the thread
+ * ## Why a second file beside the session
  *
  * The checkpointer records the conversation. This records something else: that a
  * tool was *about to* run, with these exact arguments, and whether it declared
@@ -16,7 +16,7 @@ import { removeFile } from "./file";
  * write happens only after a task settles (`pregel/runner.js:67`), which is the
  * one moment this file exists to get ahead of.
  *
- * Beside the thread rather than inside it, because the two have different
+ * Beside the session rather than inside it, because the two have different
  * lifetimes and different readers. A settled record is dead weight the moment its
  * turn ends; a conversation is not. Folding them together would make "delete a
  * record" and "delete a message" the same action, which is exactly the confusion
@@ -25,9 +25,9 @@ import { removeFile } from "./file";
  * ## What it costs
  *
  * ⚠️ A settlement carries the tool's output, so every recorded result is on disk
- * twice — once in the thread file, once here. That is not free and it is not
+ * twice — once in the session file, once here. That is not free and it is not
  * hidden: {@link ToolJournal.prune} exists so a completed turn can drop what it
- * no longer needs, and the whole file dies with its thread.
+ * no longer needs, and the whole file dies with its session.
  *
  * The alternative — recording that a call settled and fetching the result from
  * history — does not work, and the reason is the point of the mechanism: on a
@@ -72,10 +72,10 @@ export type CallState =
 type Line = ({ kind: "intent" } & Intent) | ({ kind: "settlement" } & Settlement);
 
 /**
- * One thread's tool journal.
+ * One session's tool journal.
  *
- * Named for the thread it belongs to and living next to that thread's file, so a
- * directory listing shows the pair and removing a thread can remove both.
+ * Named for the session it belongs to and living next to that session's file, so
+ * a directory listing shows the pair and removing a session can remove both.
  */
 export class ToolJournal {
   readonly path: string;
@@ -152,7 +152,7 @@ export class ToolJournal {
     );
   }
 
-  /** Deletes the journal. Called when its thread is deleted. */
+  /** Deletes the journal. Called when its session is deleted. */
   async remove(): Promise<void> {
     await removeFile(this.path);
   }

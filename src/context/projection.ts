@@ -24,7 +24,7 @@ import { AIMessage, ToolMessage, type BaseMessage } from "@langchain/core/messag
  * `summarizationMiddleware` returns "delete everything, here is a summary".
  * **Both destroy the original to shrink the view.** This one does not, and three
  * properties follow, each with a test that would fail without it: a summarised
- * thread still reads back whole from disk; a second summary recomputes the cut
+ * session still reads back whole from disk; a second summary recomputes the cut
  * over the same history rather than summarising a summary; and a pinned message
  * that has fallen behind the cut can be fetched back.
  *
@@ -55,7 +55,7 @@ import { AIMessage, ToolMessage, type BaseMessage } from "@langchain/core/messag
  *
  * Note that this is *not* the persisted shape — the graph state still holds
  * `_windowCutoff` and `_windowSummary` as two keys, and it has to, because
- * thread files written before this refactor contain them. The adapter builds a
+ * session files written before this refactor contain them. The adapter builds a
  * `Cut` at the boundary. A value object here and two keys on disk is the right
  * way round: the interface can be designed, the file format is already spent.
  */

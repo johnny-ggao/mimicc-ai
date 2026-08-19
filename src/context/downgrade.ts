@@ -40,7 +40,7 @@ import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
  *
  * ⚠️ **The name is load-bearing.** It cannot be `.mimicc`: the tools' `SECRET`
  * pattern blacklists that directory outright (`tools/workspace.ts:28`) because
- * that is where thread files live, so a pointer into it is a pointer the model's
+ * that is where session files live, so a pointer into it is a pointer the model's
  * own `Read` refuses to open. It cannot be `/tmp` either — `resolveInside`
  * confines every read to the working directory. `tests/downgrade.test.ts` reads a
  * pointer back through the real tool, which is the only way to know this stayed

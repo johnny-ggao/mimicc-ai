@@ -59,7 +59,7 @@ export const RECURSION_LIMIT = 48;
  * is what makes it *durable before the tools start*.
  *
  * Measured, not assumed (`repro/13-crash-mid-tool.ts`): SIGKILL on the tool's
- * first line, then reopen the same thread. Under the default `"async"` the
+ * first line, then reopen the same session. Under the default `"async"` the
  * pending calls are gone and the restart is not a resume at all — it replays the
  * whole batch from an earlier checkpoint, which shows up as *different task ids*
  * (they are uuid5, so a real resume reproduces them exactly). Under `"sync"` the
@@ -125,7 +125,7 @@ export interface AgentOptions {
    */
   projectInstructions?: string;
   /**
-   * Where threads are persisted.
+   * Where sessions are persisted.
    *
    * Optional, and the default is deliberately the in-process saver: most tests
    * only care about the loop, and making them all name a directory would be
@@ -160,10 +160,10 @@ export interface AgentOptions {
    */
   skills?: SkillRegistry;
   /**
-   * Where thread files live, so tool calls can be journalled beside them.
+   * Where session files live, so tool calls can be journalled beside them.
    *
    * Absent means no journalling, and that is the honest default rather than a
-   * missing feature: without a directory there is no durable thread either, so
+   * missing feature: without a directory there is no durable session either, so
    * there would be nothing for a recovered call to be recovered *into*. `main.ts`
    * passes the same path it hands the saver.
    */
@@ -609,7 +609,7 @@ export function assertLoopGuardBeforeGate(stack: AnyAgentMiddleware[]): void {
  *
  * Which saver is the caller's business — and that is the whole point of the
  * seam. The in-process default dies with the process; `main.ts` hands in the
- * JSONL one, so a thread outlives the terminal. Nothing else about the loop
+ * JSONL one, so a session outlives the terminal. Nothing else about the loop
  * changes, which is what "durable history is a different saver, not a different
  * design" was always claiming and now demonstrates.
  */
@@ -663,7 +663,7 @@ export function createUniversalAgent(options: AgentOptions) {
     // sit outside the guard to see the error ToolMessage the guard turns a
     // throw into and record its settlement — the reverse order skips it
     // (ticket 10). It belongs to the main agent alone: a subagent has
-    // `checkpointer: false`, so there is no thread for a journal to sit
+    // `checkpointer: false`, so there is no session for a journal to sit
     // beside (see the note in tools/task.ts).
     ...(options.stateDir !== undefined
       ? [toolRecovery({ directory: options.stateDir })]

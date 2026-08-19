@@ -9,12 +9,12 @@ import {
 import { dirname, join } from "node:path";
 
 /**
- * The JSONL file underneath a thread: how it is read, how it is appended to, and
+ * The JSONL file underneath a session: how it is read, how it is appended to, and
  * what happens when the process died mid-write.
  *
  * The shape of the file is borrowed from pi, whose spec states the idea more
  * precisely than a comment can: *The file is not the state; it is the replay
- * recipe.* One physical line per commit. Opening a thread is decoding — parse
+ * recipe.* One physical line per commit. Opening a session is decoding — parse
  * every line into memory once — and every query after that runs against memory.
  * pi is emphatic that this is **not** crash-recovery logic, and the distinction
  * earns its keep: the moment "open the file" becomes "recover the session" it

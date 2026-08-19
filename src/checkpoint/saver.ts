@@ -78,8 +78,8 @@ import { decodeMessage, decodeValue, encodeMessage, encodeValue } from "./messag
  * serialised inline instead; they are small and short-lived.
  */
 export class JsonlSaver extends BaseCheckpointSaver {
-  /** Replayed threads, by thread id. A thread is replayed at most once. */
-  readonly #threads = new Map<string, Thread>();
+  /** Replayed session files, by thread id. Each is replayed at most once. */
+  readonly #files = new Map<string, SessionFile>();
 
   constructor(private readonly directory: string) {
     super();
@@ -88,14 +88,14 @@ export class JsonlSaver extends BaseCheckpointSaver {
   async getTuple(config: RunnableConfig): Promise<CheckpointTuple | undefined> {
     const threadId = requireThreadId(config, "get a checkpoint");
     const ns = namespaceOf(config);
-    const thread = await this.#open(threadId);
+    const file = await this.#open(threadId);
 
-    const id = checkpointIdOf(config) ?? thread.latest(ns);
+    const id = checkpointIdOf(config) ?? file.latest(ns);
     if (id === undefined) return undefined;
-    const stored = thread.checkpoint(ns, id);
+    const stored = file.checkpoint(ns, id);
     if (stored === undefined) return undefined;
 
-    return thread.toTuple(stored, threadId);
+    return file.toTuple(stored, threadId);
   }
 
   async *list(
@@ -103,7 +103,7 @@ export class JsonlSaver extends BaseCheckpointSaver {
     options?: CheckpointListOptions,
   ): AsyncGenerator<CheckpointTuple> {
     const threadId = requireThreadId(config, "list checkpoints");
-    const thread = await this.#open(threadId);
+    const file = await this.#open(threadId);
 
     const wantedNs = config.configurable?.checkpoint_ns as string | undefined;
     const wantedId = checkpointIdOf(config);
@@ -112,7 +112,7 @@ export class JsonlSaver extends BaseCheckpointSaver {
 
     // Newest first, which is what `before` paging and "give me the latest" both
     // assume. Checkpoint ids are uuid6 — lexicographic order is time order.
-    for (const stored of thread.newestFirst()) {
+    for (const stored of file.newestFirst()) {
       if (wantedNs !== undefined && stored.ns !== wantedNs) continue;
       if (wantedId !== undefined && stored.id !== wantedId) continue;
       if (before !== undefined && stored.id >= before) continue;
@@ -121,7 +121,7 @@ export class JsonlSaver extends BaseCheckpointSaver {
         if (remaining <= 0) break;
         remaining -= 1;
       }
-      yield thread.toTuple(stored, threadId);
+      yield file.toTuple(stored, threadId);
     }
   }
 
@@ -132,7 +132,7 @@ export class JsonlSaver extends BaseCheckpointSaver {
   ): Promise<RunnableConfig> {
     const threadId = requireThreadId(config, "put a checkpoint");
     const ns = namespaceOf(config);
-    const thread = await this.#open(threadId);
+    const file = await this.#open(threadId);
 
     // Split message channels out of the values: bodies become their own lines,
     // the checkpoint keeps only ids, and the ids themselves are stored as an
@@ -164,11 +164,11 @@ export class JsonlSaver extends BaseCheckpointSaver {
       }
       messageChannels.push(channel);
       const ids = messages.map(({ id }) => id);
-      channels[channel] = thread.asAppend(ns, parentId, channel, ids);
+      channels[channel] = file.asAppend(ns, parentId, channel, ids);
       for (const { id, message } of messages) {
-        if (thread.messages.has(id)) continue;
+        if (file.messages.has(id)) continue;
         const stored = encodeMessage(message);
-        thread.messages.set(id, stored);
+        file.messages.set(id, stored);
         fresh.push({ kind: "message", id, data: stored });
       }
     }
@@ -187,8 +187,8 @@ export class JsonlSaver extends BaseCheckpointSaver {
       metadata: encodeValue(metadata),
     };
 
-    thread.putCheckpoint(line);
-    await appendLines(thread.path, [...fresh, line]);
+    file.putCheckpoint(line);
+    await appendLines(file.path, [...fresh, line]);
 
     return {
       configurable: {
@@ -210,7 +210,7 @@ export class JsonlSaver extends BaseCheckpointSaver {
       throw new Error("cannot put writes without a checkpoint_id in configurable");
     }
     const ns = namespaceOf(config);
-    const thread = await this.#open(threadId);
+    const file = await this.#open(threadId);
 
     // The stock savers key each write by task and index and let the *first*
     // write to a slot win, so a retried task cannot overwrite what landed.
@@ -222,19 +222,19 @@ export class JsonlSaver extends BaseCheckpointSaver {
     for (const [index, write] of writes.entries()) {
       const [channel, value] = write;
       const slot = `${taskId},${String(WRITES_IDX_MAP[channel] ?? index)}`;
-      if (thread.hasWrite(ns, checkpointId, slot)) continue;
+      if (file.hasWrite(ns, checkpointId, slot)) continue;
       const stored: WriteEntry = {
         slot,
         task: taskId,
         channel,
         value: encodeValue(value),
       };
-      thread.addWrite(ns, checkpointId, stored);
+      file.addWrite(ns, checkpointId, stored);
       kept.push(stored);
     }
     if (kept.length === 0) return;
 
-    await appendLines(thread.path, [
+    await appendLines(file.path, [
       { kind: "writes", checkpoint: checkpointId, ns, entries: kept },
     ]);
   }
@@ -251,7 +251,7 @@ export class JsonlSaver extends BaseCheckpointSaver {
    * declares it abstract.
    */
   async deleteThread(threadId: string): Promise<void> {
-    this.#threads.delete(threadId);
+    this.#files.delete(threadId);
     await removeFile(this.#pathFor(threadId));
     // ⚠️ A session has a second file: `<threadId>.tools.jsonl`, the tool journal
     // (`checkpoint/journal.ts`). It is deliberately not removed from here — this
@@ -260,14 +260,14 @@ export class JsonlSaver extends BaseCheckpointSaver {
     // owns deleting both, and `ToolJournal.remove()` is the other half.
   }
 
-  async #open(threadId: string): Promise<Thread> {
-    const cached = this.#threads.get(threadId);
+  async #open(threadId: string): Promise<SessionFile> {
+    const cached = this.#files.get(threadId);
     if (cached !== undefined) return cached;
 
     const path = this.#pathFor(threadId);
-    const thread = Thread.replay(path, await readLines(path));
-    this.#threads.set(threadId, thread);
-    return thread;
+    const file = SessionFile.replay(path, await readLines(path));
+    this.#files.set(threadId, file);
+    return file;
   }
 
   #pathFor(threadId: string): string {
@@ -282,8 +282,8 @@ export class JsonlSaver extends BaseCheckpointSaver {
   }
 }
 
-/** One thread's file, decoded. Everything here is memory; nothing touches disk. */
-class Thread {
+/** One session's file, decoded. Everything here is memory; nothing touches disk. */
+class SessionFile {
   readonly messages = new Map<string, StoredMessage>();
   readonly #checkpoints = new Map<string, CheckpointLine>();
   /** Keyed by namespace + checkpoint id, then by slot. */
@@ -293,25 +293,25 @@ class Thread {
 
   private constructor(readonly path: string) {}
 
-  static replay(path: string, lines: Line[]): Thread {
-    const thread = new Thread(path);
+  static replay(path: string, lines: Line[]): SessionFile {
+    const file = new SessionFile(path);
     for (const line of lines) {
       switch (line.kind) {
         case "header":
           break;
         case "message":
-          thread.messages.set(line.id, line.data as StoredMessage);
+          file.messages.set(line.id, line.data as StoredMessage);
           break;
         case "checkpoint":
-          thread.putCheckpoint(line);
+          file.putCheckpoint(line);
           break;
         case "writes":
           for (const entry of line.entries)
-            thread.addWrite(line.ns, line.checkpoint, entry);
+            file.addWrite(line.ns, line.checkpoint, entry);
           break;
       }
     }
-    return thread;
+    return file;
   }
 
   putCheckpoint(line: CheckpointLine): void {
@@ -342,7 +342,7 @@ class Thread {
   /**
    * The full id list for one channel of one checkpoint, following `base` links.
    *
-   * Memoised, so a thread of N checkpoints resolves in N steps overall rather
+   * Memoised, so a session of N checkpoints resolves in N steps overall rather
    * than N per lookup — the walk is only ever from a checkpoint to its parent,
    * whose list is already resolved.
    */
@@ -384,7 +384,7 @@ class Thread {
   }
 
   *newestFirst(): Generator<CheckpointLine> {
-    // Sorted, not reverse-insertion: a resumed thread can append a checkpoint
+    // Sorted, not reverse-insertion: a resumed session can append a checkpoint
     // whose id predates ones already in the file (time travel forks do this).
     const sorted = [...this.#checkpoints.values()].sort((a, b) =>
       b.id.localeCompare(a.id),

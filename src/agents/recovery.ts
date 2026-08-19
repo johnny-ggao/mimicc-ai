@@ -46,7 +46,7 @@ import { bothSafe, replayOf } from "../tools";
  */
 
 export interface ToolRecoveryOptions {
-  /** Where thread files live. The journal is a sibling of the thread's own file. */
+  /** Where session files live. The journal is a sibling of the session's own file. */
   directory: string;
 }
 
@@ -69,10 +69,10 @@ export function interruptedText(tool: string): string {
 }
 
 /**
- * Records tool calls to a per-thread journal and recovers them after a crash.
+ * Records tool calls to a per-session journal and recovers them after a crash.
  *
  * Only the main agent gets this. A subagent runs with `checkpointer: false`
- * (`tools/task.ts`), so it has no thread to be a sibling of — and from the
+ * (`tools/task.ts`), so it has no session to be a sibling of — and from the
  * parent's side a dispatch is one call with one intent and one settlement anyway.
  */
 export function toolRecovery(options: ToolRecoveryOptions): AnyAgentMiddleware {
@@ -83,7 +83,7 @@ export function toolRecovery(options: ToolRecoveryOptions): AnyAgentMiddleware {
         request.runtime as { configurable?: { thread_id?: unknown } } | undefined
       )?.configurable?.thread_id;
       const call = request.toolCall;
-      // No thread means no durable anything — the in-process saver, a test, a
+      // No thread id means no durable anything — the in-process saver, a test, a
       // dynamically registered tool with no definition to read. Recovery has
       // nothing to hang on, so it steps out of the way rather than half-working.
       if (typeof threadId !== "string" || request.tool === undefined) {
