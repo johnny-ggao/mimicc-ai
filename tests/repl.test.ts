@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { describeError, fromSubagent, summarizeCall } from "@/console";
+import { describeError, fromSubagent, readDecision, summarizeCall } from "@/console";
+import type { Pending } from "@/console";
 
 /**
  * The console is a debugging shell and mostly out of scope for tests — but this
@@ -112,5 +113,75 @@ describe("turning a thrown error into one line", () => {
 
   test("anything else falls back to the error message", () => {
     expect(describeError(new Error("boom"))).toBe("boom");
+  });
+});
+
+/**
+ * An empty line at the confirmation gate.
+ *
+ * This is the console's one safety property, and it was wrong in shipped code:
+ * `""` shared a branch with `"a"`, so an Enter pressed out of impatience — which
+ * readline buffers during a turn and replays when the gate opens — approved a
+ * `Bash` command the user had never seen (`repro/15-typing-during-a-turn.ts`,
+ * measured on a TTY as well as a pipe).
+ *
+ * Pinned in both directions, because the fix has an obvious wrong version:
+ * deleting `|| input === ""` turns the same keystroke into a rejection carrying
+ * an empty reason, which is a *different* decision rather than none at all.
+ */
+describe("an empty line is not a decision", () => {
+  const gate = (): Pending => ({
+    requests: [{ name: "Bash", args: { command: "rm -rf /" } }],
+    decisions: [],
+    editing: false,
+  });
+
+  /** The gate re-prints itself when it declines a line; that is not the assertion. */
+  const quietly = <T>(body: () => T): T => {
+    const original = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try {
+      return body();
+    } finally {
+      process.stdout.write = original;
+    }
+  };
+
+  test("it neither approves nor rejects — the batch is untouched", () => {
+    const pending = gate();
+    const resumed = quietly(() => readDecision("", pending));
+
+    expect(resumed).toBeNull();
+    expect(pending.decisions).toEqual([]);
+  });
+
+  test("an explicit `a` still approves", () => {
+    const pending = gate();
+    const resumed = quietly(() => readDecision("a", pending));
+
+    expect(resumed).not.toBeNull();
+    expect(pending.decisions).toEqual([{ type: "approve" }]);
+  });
+
+  test("anything else is still a rejection carrying the reason", () => {
+    const pending = gate();
+    quietly(() => readDecision("not on production", pending));
+
+    expect(pending.decisions).toEqual([
+      { type: "reject", message: "not on production" },
+    ]);
+  });
+
+  // The same shape one state along: an empty replacement would have run an empty
+  // command, so `edit` has to decline it too rather than commit it.
+  test("an empty replacement command is declined, and editing stays open", () => {
+    const pending = gate();
+    quietly(() => readDecision("e", pending));
+    expect(pending.editing).toBe(true);
+
+    const resumed = quietly(() => readDecision("", pending));
+    expect(resumed).toBeNull();
+    expect(pending.editing).toBe(true);
+    expect(pending.decisions).toEqual([]);
   });
 });

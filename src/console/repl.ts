@@ -37,6 +37,12 @@ const BANNER = [
   "  Ctrl+C   interrupt the current reply; at an idle prompt, quit",
 ].join("\n");
 
+/**
+ * ⚠️ **`repro/15-typing-during-a-turn.ts` constructs this by hand.** It is outside
+ * `tsconfig.json` by an explicit decision (`repro/README.md`), so adding a
+ * required field here breaks that probe with nothing to report it — which is
+ * exactly what `stateDir` and `start` did on 2026-08-19. Add a field, re-run it.
+ */
 export interface ReplOptions {
   graph: AgentGraph;
   /** The installed skills, for the slash commands. Same registry the agent has. */
@@ -77,7 +83,7 @@ type Decision =
  * "line" events, and running them concurrently makes which one wins a matter of
  * timing. A line is a line — what changes is how the loop reads it.
  */
-interface Pending {
+export interface Pending {
   requests: ActionRequest[];
   decisions: Decision[];
   /** True once the user chose "edit" and the next line is the replacement. */
@@ -371,9 +377,33 @@ function ask(pending: Pending): void {
  * Folds one line into the pending batch. Returns a Command once every request in
  * the batch has a decision, and null while more input is needed.
  */
-function readDecision(input: string, pending: Pending): Command | null {
+export function readDecision(input: string, pending: Pending): Command | null {
   const request = pending.requests[pending.decisions.length];
   if (request === undefined) return null;
+
+  // ⚠️ **An empty line is not a decision.** It used to share a branch with
+  // `"a"`, and that was a shipping bug rather than a rough edge: measured on a
+  // TTY as well as a pipe (`repro/15-typing-during-a-turn.ts`), a line typed
+  // while a turn is running is buffered by readline and replayed when the loop
+  // comes back — so the Enter somebody presses out of impatience **approved a
+  // Bash command they had never seen**.
+  //
+  // The trap is the other direction, and it is why this is a branch of its own
+  // rather than a deletion: dropping `|| input === ""` alone turns the same
+  // keystroke into `reject{ message: "" }`, which is a *different* decision, not
+  // the absence of one. Both states that read a line are covered — an empty
+  // replacement command would otherwise run an empty command, the same shape
+  // again.
+  //
+  // ⚠️ This does **not** fix the neighbouring case: a sentence typed during the
+  // turn still lands as a rejection reason. That one needs the gate to stop
+  // consuming lines typed before it opened, which is a rewrite of how the loop
+  // reads input — see the session line's ticket 04.
+  if (input === "") {
+    if (pending.editing) process.stdout.write(`${DIM}  replacement command:${RESET}\n`);
+    else ask(pending);
+    return null;
+  }
 
   if (pending.editing) {
     pending.editing = false;
@@ -381,7 +411,7 @@ function readDecision(input: string, pending: Pending): Command | null {
       type: "edit",
       editedAction: { name: request.name, args: { ...request.args, command: input } },
     });
-  } else if (input === "a" || input === "") {
+  } else if (input === "a") {
     pending.decisions.push({ type: "approve" });
   } else if (input === "e") {
     pending.editing = true;

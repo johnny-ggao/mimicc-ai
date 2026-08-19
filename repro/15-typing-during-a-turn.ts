@@ -32,8 +32,13 @@
  * `[[GRAPH]]` 标记，父进程收到标记才写第二行——这样「这一行确实是在回合进行中
  * 敲的」是被证过的，不是被赌的。
  *
- * 假图只实现 `AgentGraph` 那一个方法（`src/agents/loop.ts:175`）。**没有模型、
- * 没有 checkpointer、没有工具**：这个探针问的是控制台读不读输入，那三样都是噪声。
+ * 假图只实现 `AgentGraph` 的 `stream`。**没有模型、没有 checkpointer、没有工具**：
+ * 这个探针问的是控制台读不读输入，那三样都是噪声。
+ *
+ * ⚠️ 2026-08-19：`AgentGraph` 长出了第二个方法（`getState`），`ReplOptions` 多了
+ * `stateDir` 与 `start` —— 这个探针**当场就跑不起来了，而 `repro/` 在 tsconfig 之外，
+ * 没有任何东西会替你发现**。补法见下面的 `child`：`start` 传 `{ kind: "new" }`，
+ * `getState` 留一个会抛的桩，因为走「新 session」这条路它永远不该被调用。
  */
 import { Command } from "@langchain/langgraph";
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
@@ -56,6 +61,11 @@ function fakeGraph(scenario: string): AgentGraph {
   let turns = 0;
 
   return {
+    getState() {
+      // 走 `start: { kind: "new" }` 时永远不该被调用。抛出去而不是返回空对象：
+      // 一个假装成功的桩会把「探针测的东西变了」伪装成「探针还是绿的」。
+      throw new Error("fakeGraph.getState should not be reached in this probe");
+    },
     stream(input, _options) {
       turns += 1;
       const n = turns;
@@ -99,7 +109,13 @@ function fakeGraph(scenario: string): AgentGraph {
 }
 
 async function child(scenario: string): Promise<void> {
-  await runRepl({ graph: fakeGraph(scenario) });
+  await runRepl({
+    graph: fakeGraph(scenario),
+    skills: { all: () => [] } as unknown as Parameters<typeof runRepl>[0]["skills"],
+    // 不会被碰到：`start` 是 new，而 `/resume` 在这两个场景里没人敲。
+    stateDir: "/nonexistent-probe-15",
+    start: { kind: "new" },
+  });
 }
 
 // ---------------------------------------------------------------- 父进程那一侧
@@ -243,10 +259,14 @@ async function probe(tty: boolean): Promise<Verdict> {
   const gate = await run("gate", TYPED, tty);
   for (const turn of gate.turns) process.stdout.write(`   图收到：${turn}\n`);
 
-  // ③ 才是真正要命的那一种。②里那句话变成的是**拒绝**——方向偏安全，
-  // 用户损失的只是一次工具调用。但 `readDecision` 的第一个分支是
-  // `input === "a" || input === ""`（`src/console/repl.ts:195-196`），
-  // **空串也是批准**。而「等得不耐烦随手敲个回车」是终端里最常见的动作。
+  // ③ 曾经是真正要命的那一种。②里那句话变成的是**拒绝**——方向偏安全，
+  // 用户损失的只是一次工具调用；而 ③ 的方向相反：`readDecision` 的第一个分支
+  // 曾是 `input === "a" || input === ""`，**空串也是批准**，而「等得不耐烦
+  // 随手敲个回车」是终端里最常见的动作。
+  //
+  // ✅ **2026-08-19 修了**：空行在两个读行的状态里都不再是一个决定（门上重新问一遍，
+  // 改写命令时再要一次）。这一格从此**不是证据，是回归护栏**——它要证明的从
+  // 「这个 bug 存在」翻成了「这个 bug 没有回来」。②仍然成立，见 session 线的票 04。
   process.stdout.write(`\n=== ③ 同上，但敲的是一个空回车 · ${where} ===\n\n`);
   const blank = await run("gate", "", tty);
   for (const turn of blank.turns) process.stdout.write(`   图收到：${turn}\n`);
@@ -295,13 +315,14 @@ async function main(): Promise<void> {
   );
 
   check(
-    "🔴 一个空回车被确认门吃成了对 Bash 的**批准**",
-    pipe.approved && tty.approved,
-    `管道 ${pipe.approved ? "是" : "否"} / TTY ${tty.approved ? "是" : "否"} —— ` +
-      (pipe.approved && tty.approved
-        ? "等得不耐烦敲的那个回车，替用户批准了一条它从没见过的 Bash 命令。" +
-          "②偏安全（变成拒绝），这一条偏危险，方向相反。**门的整个意义在这里失效。**"
-        : "只在一种模式下成立——看上面的 RESUME 行确认它变成了什么。"),
+    "回归护栏：空回车**不是**一个决定（2026-08-19 修）",
+    !pipe.approved && !tty.approved,
+    `管道 ${pipe.approved ? "🔴 又被吃成批准" : "没被吃"} / ` +
+      `TTY ${tty.approved ? "🔴 又被吃成批准" : "没被吃"} —— ` +
+      (!pipe.approved && !tty.approved
+        ? "那个回车既没有批准也没有拒绝，门原样再问一遍。修之前它替用户批准了一条" +
+          "从没见过的 Bash 命令；②偏安全（变成拒绝），这一条方向相反，门的整个意义在那里失效。"
+        : "**这个 bug 回来了。** 看上面的 RESUME 行——空行又变成了一个决定。"),
   );
 
   // 控制组：①②③里第一行 `first` 都是在**空闲时**敲的，六次都进了 turn=1 的 PROMPT。

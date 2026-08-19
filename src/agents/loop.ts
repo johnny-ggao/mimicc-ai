@@ -220,6 +220,12 @@ export interface AgentOptions {
  *
  * The payload stays `unknown`: the tuple shape depends on streamMode, and repl.ts
  * is the one place that asserts it.
+ *
+ * ⚠️ **`repro/15-typing-during-a-turn.ts` implements this interface by hand**, and
+ * `repro/` is outside `tsconfig.json` by an explicit decision (`repro/README.md`).
+ * So adding a method here breaks that probe **and nothing reports it** — measured
+ * on 2026-08-19, when `getState` was added and `bun run check` stayed green while
+ * the probe threw on its first line. Change this signature, re-run that probe.
  */
 export interface AgentGraph {
   stream(

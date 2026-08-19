@@ -25,6 +25,10 @@ export { runRepl, type ReplOptions, type Start } from "./repl";
 // fail. `describeError` is pinned so the turn-ending wording the user reads
 // does not drift (ticket 08).
 export { describeError, fromSubagent, summarizeCall } from "./repl";
+// Same reason, and the sharpest case of it: `readDecision` decides whether a
+// keystroke approves a shell command. That an empty line is *not* a decision was
+// a shipping bug once (`repro/15`), so it is pinned where a change fails.
+export { readDecision, type Pending } from "./repl";
 export { parseArgs, type Invocation } from "./args";
 export {
   describeSession,

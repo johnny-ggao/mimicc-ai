@@ -256,8 +256,13 @@ export class JsonlSaver extends BaseCheckpointSaver {
     // ⚠️ A session has a second file: `<threadId>.tools.jsonl`, the tool journal
     // (`checkpoint/journal.ts`). It is deliberately not removed from here — this
     // saver implements a langchain interface and has no business owning a sidecar
-    // it never writes. Nothing calls this method today; whoever gives it a caller
-    // owns deleting both, and `ToolJournal.remove()` is the other half.
+    // it never writes. `ToolJournal.remove()` is the other half.
+    //
+    // **Nothing calls this method, and that is now a decision rather than a gap**
+    // (2026-08-19). Deleting a session is `rm .mimicc/<id>.jsonl*` — both files,
+    // one glob — and the session repository was built without a `delete` for the
+    // same reason: a method with no caller is what this comment was warning about
+    // in the first place. Whoever does give it one still owns deleting both.
   }
 
   async #open(threadId: string): Promise<SessionFile> {
