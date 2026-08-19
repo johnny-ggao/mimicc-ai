@@ -23,7 +23,22 @@ import {
 import { decodeMessage, decodeValue, encodeMessage, encodeValue } from "./messages";
 
 /**
- * A checkpointer that keeps each thread in its own append-only JSONL file.
+ * A checkpointer that keeps each session in its own append-only JSONL file.
+ *
+ * ## Why the names here say `thread` when a file holds a session
+ *
+ * `thread_id` is LangGraph's key and it addresses **the whole tree** — which is
+ * what `CONTEXT.md` calls a *session*; a *thread* is one branch inside it, of
+ * which there is exactly one today. The two vocabularies cannot be reconciled by
+ * renaming: `deleteThread` is an abstract method on `BaseCheckpointSaver`
+ * (`langgraph-checkpoint/dist/base.d.ts:77`) and `thread_id` is a config key, so
+ * both are load-bearing spellings rather than our choices.
+ *
+ * The rule is therefore positional, not a translation: **anything holding the
+ * value of `thread_id` is called `threadId`**, and prose describing what is *in*
+ * a file says session. Rename the first group and the interface breaks; believe
+ * the second group when it says "thread" and you learn the wrong model, which is
+ * what it used to say and why this paragraph exists.
  *
  * ## Why this is written by hand
  *
@@ -43,8 +58,8 @@ import { decodeMessage, decodeValue, encodeMessage, encodeValue } from "./messag
  * `{"lc":1,"type":"constructor",…}`.
  *
  * The performance objection does not survive the design: the file is replayed
- * into memory **once**, when a thread is first touched, and every read after that
- * is a map lookup. One process, one thread, one replay.
+ * into memory **once**, when a session is first touched, and every read after
+ * that is a map lookup. One process, one session, one replay.
  *
  * ## Why messages are stored by id
  *
@@ -225,16 +240,20 @@ export class JsonlSaver extends BaseCheckpointSaver {
   }
 
   /**
-   * Deletes the thread's file outright.
+   * Deletes the session's file outright.
    *
-   * The unit of deletion is a file, which is the point of one thread per file:
-   * `/clear` mints a new thread, so a session boundary is visible in a directory
-   * listing and removing one thread cannot disturb another.
+   * The unit of deletion is a file, which is the point of one session per file:
+   * `/clear` mints a new one, so a session boundary is visible in a directory
+   * listing and removing one session cannot disturb another.
+   *
+   * ⚠️ The name is LangGraph's — see the note at the top of this file. Renaming
+   * it to match the vocabulary was proposed and is impossible: the base class
+   * declares it abstract.
    */
   async deleteThread(threadId: string): Promise<void> {
     this.#threads.delete(threadId);
     await removeFile(this.#pathFor(threadId));
-    // ⚠️ A thread has a second file: `<threadId>.tools.jsonl`, the tool journal
+    // ⚠️ A session has a second file: `<threadId>.tools.jsonl`, the tool journal
     // (`checkpoint/journal.ts`). It is deliberately not removed from here — this
     // saver implements a langchain interface and has no business owning a sidecar
     // it never writes. Nothing calls this method today; whoever gives it a caller
@@ -252,8 +271,10 @@ export class JsonlSaver extends BaseCheckpointSaver {
   }
 
   #pathFor(threadId: string): string {
-    // A thread id is a uuid we minted, but it arrives through config, so it is
-    // still caller input and must not be able to name a path.
+    // The id is a uuid we minted, but it arrives through config, so it is still
+    // caller input and must not be able to name a path. `src/session/repo.ts`
+    // checks the same shape before it builds a path of its own: one rule in two
+    // places beats one rule with a hole, and neither module can reach the other's.
     if (!/^[\w-]{1,128}$/.test(threadId)) {
       throw new Error(`thread_id is not usable as a file name: ${threadId}`);
     }

@@ -215,7 +215,7 @@ export interface AgentOptions {
  * Stated outright rather than derived as `ReturnType<typeof
  * createUniversalAgent>`. That alias would drag langchain's whole compiled graph
  * type into the console's signature, so every change to what middleware is
- * installed would ripple into repl.ts — which uses exactly one method. Naming the
+ * installed would ripple into repl.ts — which uses two of them. Naming the
  * surface the caller actually uses is what keeps that seam a seam.
  *
  * The payload stays `unknown`: the tuple shape depends on streamMode, and repl.ts

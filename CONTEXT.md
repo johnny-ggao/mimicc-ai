@@ -181,8 +181,11 @@ _Avoid_: 中止（那是 Ctrl+C 的有序停止）
 一次可恢复的工作单位。**盘上一个文件就是一条 session**（`<id>.jsonl`），外加一个旁挂的
 `<id>.tools.jsonl` 工具日志——**所以删一条 session 要删两个文件**，这是 `checkpoint/saver.ts`
 里那条长期没有主人的 ⚠️ 说的同一件事。由 LangGraph 的 `thread_id` 寻址：⚠️ **那是外来词，
-它寻址的是 session，不是下面那条 thread**——两套词表的接缝只有一处，`src/console/repl.ts`
-交给 `configurable` 的那一行。`/clear` 开一条新 session，旧的仍然可寻址。
+它寻址的是 session，不是下面那条 thread**——值只在一处交接（`src/console/repl.ts` 交给
+`configurable` 的那一行），但**名字不止一处**：`thread_id` 是配置键、`deleteThread` 是
+`BaseCheckpointSaver` 的抽象方法，两个都改不动。所以规矩是**按位置**而不是按翻译：
+**凡是装着 `thread_id` 的值的东西就叫 `threadId`**，而描述「文件里装的是什么」的散文说
+session。`/clear` 开一条新 session，旧的仍然可寻址。
 
 概念取自 pi（`packages/agent/docs/harness.md:86-99`），它把一条 session 定义成四个部分：
 **entry 树**、**facts**（session 的名字、entry 的标签）、**lanes**（树上的命名游标）、
