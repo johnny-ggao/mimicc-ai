@@ -126,18 +126,24 @@ try {
 
 server.stop(true);
 
-/** 一条带 tool_calls 的 assistant 消息，后面缺了对应的 tool 结果。 */
+/**
+ * 一条带 tool_calls 的 assistant 消息，后面**紧跟着**的不是它的结果。
+ *
+ * ⚠️ 「紧跟着」不是讲究，是实测：`repro/19` 的第四格把结果补在用户那句话**后面**，
+ * 同样 400。provider 的检查是**按位置**的，所以这里也必须按位置查——只数
+ * `tool_call_id` 出现过没有，会把一个仍然会被拒的形状判成绿的。
+ */
 function orphansIn(body: Body): string[] {
-  const answered = new Set(
-    body.messages.flatMap((message) =>
-      message.role === "tool"
-        ? [(message as unknown as { tool_call_id?: string }).tool_call_id ?? ""]
-        : [],
-    ),
-  );
-  return body.messages.flatMap((message) =>
-    (message.tool_calls ?? []).flatMap((call) => (answered.has(call.id) ? [] : [call.id])),
-  );
+  const bad: string[] = [];
+  for (const [index, message] of body.messages.entries()) {
+    const calls = message.tool_calls ?? [];
+    for (const [offset, call] of calls.entries()) {
+      const answer = body.messages[index + 1 + offset];
+      const id = (answer as unknown as { tool_call_id?: string } | undefined)?.tool_call_id;
+      if (answer?.role !== "tool" || id !== call.id) bad.push(call.id);
+    }
+  }
+  return bad;
 }
 
 process.stdout.write("=== 发给 provider 的每一次请求 ===\n");
@@ -164,7 +170,9 @@ if (after.length === 0) {
   );
 } else {
   process.stdout.write(
-    "  ✅ 造不出。中止之后那次请求里没有悬空的 tool_call —— 有东西补了这一刀，\n" +
-      "     去把它找出来写进结论（候选：toolRecovery、失败 marker、门的重放）。\n",
+    "  ✅ **回归护栏（2026-08-19 修）**：中止之后那次请求里，那个调用的结果紧跟在它后面。\n" +
+      "     补刀的是 `context/projection.ts` 的 `closeDangling` —— 在**投影**里补，不动历史：\n" +
+      "     检查按位置做，而 `beforeAgent` 的状态更新只能追加（那时用户那句话已经在 state 里了），\n" +
+      "     所以历史侧补不出正确的位置，除非把只追加的存储重写成可插入的。\n",
   );
 }

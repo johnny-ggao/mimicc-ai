@@ -131,12 +131,108 @@ export function markPinned<T extends BaseMessage>(message: T): T {
  * help; only rebuilding the view can.
  */
 export function project(history: BaseMessage[], cut: Cut): BaseMessage[] {
-  if (cut.at <= 0 || cut.summary === undefined) return history;
+  const view =
+    cut.at <= 0 || cut.summary === undefined
+      ? history
+      : [
+          ...history.filter((message, index) => index < cut.at && isPinned(message)),
+          cut.summary,
+          ...history.slice(cut.at),
+        ];
+  // Last, and it has to be last: it inserts messages, which would move `cut.at`
+  // out from under the arithmetic above if it ran first.
+  return closeDangling(view);
+}
 
-  const pinned = history.filter(
-    (message, index) => index < cut.at && isPinned(message),
+/**
+ * What a tool call is told when nobody is going to answer it any more.
+ *
+ * Deliberately does **not** say why the run stopped, because the view cannot
+ * tell: a Ctrl+C and a crash leave the identical shape behind — one assistant
+ * message with `tool_calls` and no results — and only the console knows which
+ * happened. Naming one would be a guess printed as a fact, and the model reads
+ * this as a fact.
+ *
+ * What it does say is the part that changes the next move: **the call is kept
+ * and its result is given up** (the decided semantics, 2026-08-19), so repeating
+ * it is a decision rather than a formality — and if a person stopped it,
+ * repeating it is probably the opposite of what they wanted.
+ */
+export function abandonedText(tool: string): string {
+  return [
+    `[abandoned: this ${tool} call was issued, and no result was ever recorded]`,
+    "The run stopped between the two — a Ctrl+C, or the process dying. It may",
+    "have taken effect, may have taken effect partly, or may never have started.",
+    "It was not run again and it will not be: the call is kept in the history,",
+    "its result is given up. If a person stopped it, do not simply repeat it.",
+    "Check the current state before doing anything that assumes either outcome.",
+  ].join("\n");
+}
+
+/**
+ * Gives every unanswered tool call a result, **in the view only**.
+ *
+ * ## Why this has to exist
+ *
+ * A provider rejects an assistant message whose `tool_calls` are not answered —
+ * measured against the real one (`repro/19-orphan-tool-call.ts`): HTTP 400,
+ * *an assistant message with 'tool_calls' must be followed by tool messages
+ * responding to each 'tool_call_id'*. And the shape is reachable from the
+ * shipping path (`repro/20-abort-mid-tool-then-type.ts`): Ctrl+C a turn while a
+ * tool is running, then type an ordinary sentence — langgraph opens a **new run
+ * from START** instead of finishing the batch, so the results never arrive.
+ * History only grows, so that is not one failed turn: **every later request
+ * carries it and the session is finished**, `/clear` being the only way out.
+ *
+ * ## Why here rather than in the history
+ *
+ * Two facts decided it, and both were measured rather than argued.
+ *
+ * The check is **positional**: a fourth case in `repro/19` sent the same call
+ * with its result appended *after* the following user message — the same 400.
+ * So the repair has to control *where* the result goes, and a `beforeAgent` hook
+ * cannot: state updates append, and by then the user's new message is already in
+ * state. Repairing the history would mean rewriting the message list to insert
+ * in the middle — a store that only ever appends, rewritten to reorder.
+ *
+ * The view, meanwhile, already differs from the history by design — that is what
+ * a cut is — and {@link pairSafe} is here for exactly the same reason: **the
+ * projection is not allowed to emit an illegal shape**. This is that rule, one
+ * case wider.
+ *
+ * ⚠️ The consequence is deliberate: the history keeps the unanswered call
+ * forever, because that is what happened. The model is simply never shown a
+ * request that cannot be sent.
+ */
+export function closeDangling(messages: BaseMessage[]): BaseMessage[] {
+  const answered = new Set(
+    messages.flatMap((message) =>
+      ToolMessage.isInstance(message) ? [message.tool_call_id] : [],
+    ),
   );
-  return [...pinned, cut.summary, ...history.slice(cut.at)];
+
+  const repaired: BaseMessage[] = [];
+  let inserted = false;
+  for (const message of messages) {
+    repaired.push(message);
+    if (!AIMessage.isInstance(message)) continue;
+    for (const call of message.tool_calls ?? []) {
+      if (call.id === undefined || answered.has(call.id)) continue;
+      inserted = true;
+      repaired.push(
+        new ToolMessage({
+          tool_call_id: call.id,
+          name: call.name,
+          content: abandonedText(call.name),
+          status: "error",
+        }),
+      );
+    }
+  }
+
+  // The common case by far, and worth keeping cheap: an untouched view is the
+  // same array, not a copy of it.
+  return inserted ? repaired : messages;
 }
 
 /**

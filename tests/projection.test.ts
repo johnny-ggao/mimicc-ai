@@ -4,6 +4,7 @@ import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
 
 import {
+  closeDangling,
   estimate,
   PINNED,
   planCut,
@@ -242,5 +243,97 @@ describe("the shared ruler", () => {
     const withCalls = calls(["c1"]);
 
     expect(estimate([withCalls])).toBeGreaterThan(estimate([bare]));
+  });
+});
+
+/**
+ * Unanswered tool calls, and why the view repairs them instead of the history.
+ *
+ * A provider rejects an assistant message whose `tool_calls` have no results —
+ * HTTP 400, measured (`repro/19-orphan-tool-call.ts`) — and the shape is
+ * reachable by pressing Ctrl+C while a tool runs and then typing
+ * (`repro/20-abort-mid-tool-then-type.ts`). History only grows, so one of those
+ * left behind ends the session rather than one turn.
+ *
+ * The **position** assertions are the ones that matter: the same probe measured
+ * that a result appended after the following user message is rejected too, which
+ * is what ruled out repairing this from a `beforeAgent` hook (state updates
+ * append) and left the projection as the only place that can put it right.
+ */
+describe("closing unanswered tool calls", () => {
+  const calling = (id: string, name = "Bash") =>
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id, name, args: { command: "echo hi" }, type: "tool_call" }],
+    });
+
+  test("an unanswered call gets a result immediately after it", () => {
+    const view = closeDangling([
+      new HumanMessage("跑一下"),
+      calling("call_1"),
+      new HumanMessage("接着聊"),
+    ]);
+
+    expect(view.map((message) => message.getType())).toEqual([
+      "human",
+      "ai",
+      "tool",
+      "human",
+    ]);
+    expect((view[2] as ToolMessage).tool_call_id).toBe("call_1");
+    expect(view[2]?.content).toContain("abandoned");
+  });
+
+  test("a call that already has its result is left exactly as it was", () => {
+    const messages: BaseMessage[] = [
+      calling("call_1"),
+      new ToolMessage({ content: "hi", tool_call_id: "call_1" }),
+    ];
+
+    // The same array, not a copy: this runs on every single request.
+    expect(closeDangling(messages)).toBe(messages);
+  });
+
+  test("each call of a batch gets its own result, in order", () => {
+    const batch = new AIMessage({
+      content: "",
+      tool_calls: [
+        { id: "a", name: "Read", args: {}, type: "tool_call" },
+        { id: "b", name: "Grep", args: {}, type: "tool_call" },
+      ],
+    });
+    const view = closeDangling([batch, new HumanMessage("接着聊")]);
+
+    expect(view.map((message) => message.getType())).toEqual([
+      "ai",
+      "tool",
+      "tool",
+      "human",
+    ]);
+    expect((view[1] as ToolMessage).tool_call_id).toBe("a");
+    expect((view[2] as ToolMessage).tool_call_id).toBe("b");
+    // Named, because the text tells the model which call it is reading about.
+    expect(view[1]?.content).toContain("Read");
+    expect(view[2]?.content).toContain("Grep");
+  });
+
+  test("project() closes them, and does it after the cut arithmetic", () => {
+    const history: BaseMessage[] = [
+      new HumanMessage("一"),
+      new HumanMessage("二"),
+      calling("call_1"),
+      new HumanMessage("接着聊"),
+    ];
+    // A cut at 2 keeps the tail from `calling` onwards. Repairing before the cut
+    // would have moved that index out from under it.
+    const view = project(history, { at: 2, summary: new AIMessage("提要") });
+
+    expect(view.map((message) => message.getType())).toEqual([
+      "ai",
+      "ai",
+      "tool",
+      "human",
+    ]);
+    expect((view[2] as ToolMessage).tool_call_id).toBe("call_1");
   });
 });

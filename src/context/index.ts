@@ -17,6 +17,8 @@
  * and a request is the resident segment plus the view.
  */
 export {
+  abandonedText,
+  closeDangling,
   estimate,
   isPinned,
   markPinned,

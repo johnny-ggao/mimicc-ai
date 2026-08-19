@@ -66,6 +66,19 @@ const CASES = [
       new HumanMessage("接着聊"),
     ],
   },
+  {
+    // ④ 是修法产出的形状，不是假想的：`closeDanglingCalls` 是一个 `beforeAgent`，
+    // 而状态更新是**追加**——用户那句话已经在 state 里了，所以补上的 tool 消息落在
+    // 它后面。规矩逐字是 *must be **followed by** tool messages*，那到底是按位置查
+    // 还是按 `tool_call_id` 集合查？**这一格决定那个修法成不成立。**
+    name: "④ 补上了，但落在用户那句话后面（`closeDanglingCalls` 产出的形状）",
+    messages: () => [
+      new HumanMessage("跑一下"),
+      new AIMessage({ content: "", tool_calls: [toolCall] }),
+      new HumanMessage("接着聊"),
+      new ToolMessage({ content: "[abandoned]", tool_call_id: CALL_ID }),
+    ],
+  },
 ];
 
 const config = loadConfig();
@@ -121,7 +134,7 @@ for (const result of results) {
   );
 }
 
-const [flat, whole, orphan] = results;
+const [flat, whole, orphan, appended] = results;
 process.stdout.write("=== 判据 ===\n");
 if (flat?.ok !== true) {
   process.stdout.write("  ⚠️ 连①都没过 —— key / endpoint / 余额的问题，这次什么都没答上。\n");
@@ -138,7 +151,13 @@ if (flat?.ok !== true) {
 } else {
   process.stdout.write(
     "  🔴 orphan **被拒**，而完整的工具轮被接受 —— 悬空的 tool_call 是**硬错误**。\n" +
-      "     任何一条造出它的路都是当场崩，不是难看。恢复路径「永远先摆门」那条不变式\n" +
-      "     从此是承重的，且需要一道防线兜住它（例如恢复时发现悬空调用就先收口）。\n",
+      "     任何一条造出它的路都是当场崩，不是难看。\n",
+  );
+  process.stdout.write(
+    appended?.ok === true
+      ? "  ✅ ④ 被接受：检查是按 `tool_call_id` 集合做的，**不按位置**。\n" +
+          "     所以 `beforeAgent` 追加式的收口是成立的，不必去重排历史。\n"
+      : "  🔴 ④ 也被拒：检查是**按位置**的。追加式收口不成立——\n" +
+          "     补上的结果必须紧跟在那条 assistant 消息后面，得改成重排历史或改在投影层。\n",
   );
 }
