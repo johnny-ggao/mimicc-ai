@@ -24,6 +24,7 @@
 | `14-recovery-end-to-end.ts` | 崩溃打断**我们自己的 agent** 之后重启：跑完的调用会不会再跑一次（**不会**） | 否（stub） |
 | `18-resume-at-an-open-gate.ts` | 门**还开着**时被 kill，重启后那道门还在不在：**在**（`getState` 里 `tasks=1 interrupts=1`），且冷启动的 `Command({resume})` 能答它；**但拿旧 id 直接敲一句话会把它吃掉** | 否（stub） |
 | `19-orphan-tool-call.ts` | 悬空的 `tool_calls`（后面没有 tool 结果）真 provider 认不认：**400，硬错误**；完整工具轮与平的历史都被接受，所以原因就是悬空本身 | **是 ≈ $0.001** |
+| `20-abort-mid-tool-then-type.ts` | 出货路径造不造得出那个形状：**造得出**——Ctrl+C 打断跑着工具的回合、再敲一句话，下一次请求就带着悬空的 `tool_call` | 否（stub） |
 
 **两个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）与 `19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
