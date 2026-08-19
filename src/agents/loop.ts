@@ -229,7 +229,15 @@ export interface AgentOptions {
  */
 export interface AgentGraph {
   stream(
-    input: { messages: BaseMessage[] } | Command,
+    /**
+     * `null` means "carry on with what is already parked", and it is the only
+     * input that does: measured (`repro/14`, `repro/23`), **any** non-null input
+     * starts a new run from START instead of finishing the batch of tool calls
+     * the graph is sitting on. That is what a session adopted after a crash
+     * needs — the calls are on disk with their intents, and resuming closes them
+     * without repeating a side effect that already happened.
+     */
+    input: { messages: BaseMessage[] } | Command | null,
     options: {
       streamMode: ["messages", "values"];
       recursionLimit: number;
@@ -262,6 +270,17 @@ export interface AgentGraph {
   getState(config: { configurable: { thread_id: string } }): Promise<{
     values: { messages?: BaseMessage[] };
     tasks?: readonly { interrupts?: readonly { value?: unknown }[] }[];
+    /**
+     * Which nodes the graph would run next, empty when it has finished.
+     *
+     * Read alongside `tasks` because the two answer different questions and the
+     * console needs both: a session parked **at a gate** shows an interrupt,
+     * while one parked **mid-batch** — the process died after the calls were
+     * approved and started — shows `next: ["tools"]` with no interrupt at all
+     * (measured, `repro/23`). Looking only at interrupts is how that batch used
+     * to be dropped without a word.
+     */
+    next?: readonly string[];
   }>;
 }
 

@@ -28,7 +28,11 @@ export { runRepl, type ReplOptions, type Start } from "./repl";
 // `"messages"` stream carries node output as well as model tokens, so a message
 // injected by a `beforeAgent` was rendered as the model's own prose on the first
 // turn of every session (`repro/22`).
-export { describeError, fromModel, fromSubagent, summarizeCall } from "./repl";
+// `parked` is the same kind again: it reads a resumed session's snapshot and
+// decides whether the console asks a question or finishes a job. Reading only
+// half of it — the half that was there first — is how a batch of tool calls
+// interrupted by a crash used to vanish without a word (`repro/23`).
+export { describeError, fromModel, fromSubagent, parked, summarizeCall } from "./repl";
 // Same reason, and the sharpest case of it: `readDecision` decides whether a
 // keystroke approves a shell command. That an empty line is *not* a decision was
 // a shipping bug once (`repro/15`), so it is pinned where a change fails.

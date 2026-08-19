@@ -137,6 +137,10 @@ export async function runRepl({
   // tool line would be reprinted each lap.
   let rendered = 0;
   let pending: Pending | null = null;
+  // How many nodes the adopted session was parked on, or 0. Set by `adopt` and
+  // consumed once at the top of the loop — the three places that adopt a session
+  // all return there, so the pick-up happens in one place rather than three.
+  let unfinished = 0;
   // The sessions on offer while the picker is up. Non-null puts the loop in the
   // same shape `pending` does: the next line read is an answer, not a prompt.
   let picking: Session[] | null = null;
@@ -179,14 +183,11 @@ export async function runRepl({
       Object.entries(chosen.byModel).map(([model, cost]) => [model, { ...cost }]),
     );
 
-    const requests = (state.tasks ?? []).flatMap((task) =>
-      (task.interrupts ?? []).flatMap(
-        (stop) =>
-          (stop.value as { actionRequests?: ActionRequest[] } | undefined)
-            ?.actionRequests ?? [],
-      ),
-    );
-    if (requests.length === 0) return null;
+    const { requests, unfinished: parkedNodes } = parked(state);
+    if (requests.length === 0) {
+      unfinished = parkedNodes;
+      return null;
+    }
 
     const gate: Pending = { requests, decisions: [], editing: false };
     ask(gate);
@@ -280,6 +281,33 @@ export async function runRepl({
   rl.prompt();
 
   for (;;) {
+    // Picked up before the prompt is honoured, because the alternative is a
+    // prompt: the user types, and a typed message starts a **new run from
+    // START** (measured, `repro/14`) — the parked calls stay parked forever and
+    // the history keeps a `tool_calls` that nothing answers.
+    //
+    // Automatic rather than asking first, and the reason is what resuming does:
+    // it marks calls that have an intent but no result as interrupted and lets
+    // the model speak to the wreckage. **It executes nothing** — measured across
+    // a two-call batch, the side effects stayed at the count the crash left them
+    // (`repro/23`). Asking permission for that would be a gate on a risk that
+    // does not exist. It is announced, not silent, because a turn the user did
+    // not type is exactly the kind of thing that must say where it came from.
+    if (unfinished > 0) {
+      unfinished = 0;
+      process.stdout.write(
+        `${DIM}(picking up where the crash left off — closing the tool calls that never finished)${RESET}\n`,
+      );
+      inFlight = new AbortController();
+      const turn = await runTurn(graph, null, session, rendered, inFlight.signal);
+      inFlight = null;
+      account(turn);
+      pending = finish(turn);
+      rendered = turn.rendered;
+      rl.prompt();
+      continue;
+    }
+
     const line = await take();
     if (line === null) break;
     const input = line.text;
@@ -581,7 +609,7 @@ interface TurnResult {
  */
 async function runTurn(
   graph: AgentGraph,
-  input: { messages: BaseMessage[] } | Command,
+  input: { messages: BaseMessage[] } | Command | null,
   session: string,
   rendered: number,
   signal: AbortSignal,
@@ -734,6 +762,37 @@ export function summarizeCall(name: string, args: unknown): string {
 
 function clip(text: string, width: number): string {
   return text.length > width ? `${text.slice(0, width - 3)}...` : text;
+}
+
+/**
+ * What an adopted session is parked on: a question to answer, or work to finish.
+ *
+ * Two different parked states, and reading only the first is how a crashed batch
+ * used to disappear. A session stopped **at a gate** carries an interrupt with
+ * the commands in it. A session stopped **mid-batch** — the process died after
+ * the calls were approved and started — carries no interrupt at all; it shows up
+ * only as `next: ["tools"]` with a task per call (measured, `repro/23`).
+ *
+ * The two are reported separately rather than collapsed because the console does
+ * opposite things with them: a gate must be *asked*, and unfinished work must be
+ * *resumed* — and resuming past an unanswered gate would answer it on the user's
+ * behalf. So a gate wins when somehow both are present.
+ */
+export function parked(snapshot: {
+  tasks?: readonly { interrupts?: readonly { value?: unknown }[] }[];
+  next?: readonly string[];
+}): { requests: ActionRequest[]; unfinished: number } {
+  const requests = (snapshot.tasks ?? []).flatMap((task) =>
+    (task.interrupts ?? []).flatMap(
+      (stop) =>
+        (stop.value as { actionRequests?: ActionRequest[] } | undefined)
+          ?.actionRequests ?? [],
+    ),
+  );
+  return {
+    requests,
+    unfinished: requests.length > 0 ? 0 : (snapshot.next ?? []).length,
+  };
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   fromModel,
   fromSubagent,
   InputQueue,
+  parked,
   readDecision,
   summarizeCall,
 } from "@/console";
@@ -324,5 +325,42 @@ describe("the input queue", () => {
     expect(queue.take("input")?.text).toBe("/exit");
     expect(queue.take("input")?.text).toBe("y");
     expect(describeDrops(queue.sweep(() => false))).toEqual([]);
+  });
+});
+
+/**
+ * What a resumed session is parked on. Both halves were measured on a real
+ * crash (`repro/23-crash-mid-approved-tools.ts`): a gate parks with an
+ * interrupt, a batch of approved-and-started tool calls parks with `next` and
+ * **no interrupt at all**. Reading only the first half is how that batch used to
+ * be dropped in silence, so both shapes are pinned here.
+ */
+describe("what a resumed session is parked on", () => {
+  const gateStop = {
+    interrupts: [
+      { value: { actionRequests: [{ name: "Bash", args: { command: "ls" } }] } },
+    ],
+  };
+
+  test("a session stopped at a gate reports the question", () => {
+    const { requests, unfinished } = parked({ tasks: [gateStop], next: ["tools"] });
+    expect(requests).toHaveLength(1);
+    // A gate wins: resuming past an unanswered question would answer it for the user.
+    expect(unfinished).toBe(0);
+  });
+
+  test("a session stopped mid-batch reports work, not a question", () => {
+    const { requests, unfinished } = parked({ tasks: [{}], next: ["tools"] });
+    expect(requests).toEqual([]);
+    expect(unfinished).toBe(1);
+  });
+
+  test("a batch of two parks as two", () => {
+    expect(parked({ tasks: [{}, {}], next: ["tools", "tools"] }).unfinished).toBe(2);
+  });
+
+  test("a session that finished cleanly is parked on nothing", () => {
+    expect(parked({ tasks: [], next: [] })).toEqual({ requests: [], unfinished: 0 });
+    expect(parked({})).toEqual({ requests: [], unfinished: 0 });
   });
 });
