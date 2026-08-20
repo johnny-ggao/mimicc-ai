@@ -6,7 +6,7 @@ import {
   SKILL_ACTIVATION_PREFIX,
   SUMMARY_SOURCE,
 } from "../context";
-import { TASK_TOOL_NAME } from "../tools";
+import { CLARIFY_TOOL_NAME, TASK_TOOL_NAME } from "../tools";
 import { markdownStream } from "./markdown";
 
 /**
@@ -41,11 +41,28 @@ const CALL_WIDTH = 76;
  * the whole point of showing them.
  */
 export function summarizeCall(name: string, args: unknown): string {
-  const fields = (args ?? {}) as { description?: unknown; subagent_type?: unknown };
+  const fields = (args ?? {}) as {
+    description?: unknown;
+    subagent_type?: unknown;
+    questions?: unknown;
+  };
 
   if (name === TASK_TOOL_NAME && typeof fields.description === "string") {
     const kind = typeof fields.subagent_type === "string" ? fields.subagent_type : "?";
     return `${name}[${kind}] ${clip(fields.description, CALL_WIDTH)}`;
+  }
+
+  // `Clarify` is singled out for the opposite reason to `Task`. Its default
+  // rendering is not indistinguishable, it is **redundant**: the questions it
+  // serialises are about to be printed in full, one screen down, with their
+  // options. Naming the decisions is the part that is still worth a line — it is
+  // what the transcript shows later, when the questions themselves have scrolled.
+  if (name === CLARIFY_TOOL_NAME) {
+    const asked = (fields.questions ?? []) as { header?: unknown }[];
+    const headers = asked
+      .map((one) => (typeof one.header === "string" ? one.header : "?"))
+      .join(", ");
+    return `${name} ${clip(headers === "" ? "(no questions)" : headers, CALL_WIDTH)}`;
   }
 
   return `${name} ${clip(JSON.stringify(args), CALL_WIDTH)}`;

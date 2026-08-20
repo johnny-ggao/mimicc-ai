@@ -17,7 +17,7 @@ import {
 
 import { MemoryStore } from "@/memory";
 import { SKILL_TOOL_NAME, SkillRegistry } from "@/skills";
-import { TASK_TOOL_NAME, TOOLS } from "@/tools";
+import { CLARIFY_TOOL_NAME, TASK_TOOL_NAME, TOOLS } from "@/tools";
 import type { ModelUsage } from "@/usage";
 
 // A stubbed model endpoint, so the loop can be exercised without a network or a
@@ -149,7 +149,9 @@ describe("createAgent", () => {
         .tools;
       // Order is pinned because tools are serialised ahead of messages, so a
       // reshuffle breaks the cached prefix for every request that follows. Task
-      // is last for that reason: it was added after the other six existed.
+      // was added after the other six and went last for that reason; Clarify was
+      // added after Task and goes after it for the same one. **A new tool
+      // appends** — that is the whole rule this list exists to hold.
       expect(tools?.map((tool) => tool.function.name)).toEqual([
         "Read",
         "Write",
@@ -158,6 +160,7 @@ describe("createAgent", () => {
         "Glob",
         "Grep",
         TASK_TOOL_NAME,
+        CLARIFY_TOOL_NAME,
       ]);
     }
   });
@@ -239,6 +242,9 @@ test("the Skill tool is registered when a registry exists, after Task", () => {
     ...TOOLS.map((tool) => tool.name),
     TASK_TOOL_NAME,
     SKILL_TOOL_NAME,
+    // Appended after the optional ones, so adding a tool never shifts an
+    // existing tail — see the note beside `clarifyTool` in `registeredTools`.
+    CLARIFY_TOOL_NAME,
   ]);
 });
 
@@ -254,7 +260,11 @@ test("the registered set is the six plus the dispatch tool", () => {
     model: new FakeListChatModel({ responses: ["unused"] }),
   }).map((tool) => tool.name);
 
-  expect(registered).toEqual([...TOOLS.map((tool) => tool.name), TASK_TOOL_NAME]);
+  expect(registered).toEqual([
+    ...TOOLS.map((tool) => tool.name),
+    TASK_TOOL_NAME,
+    CLARIFY_TOOL_NAME,
+  ]);
 });
 
 // Bash is the one that cannot be contained by path guards, so it is the one that

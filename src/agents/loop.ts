@@ -22,7 +22,14 @@ import {
   SKILL_TOOL_NAME,
   type SkillRegistry,
 } from "../skills";
-import { createTaskTool, TASK_TOOL_NAME, TOOLS } from "../tools";
+import {
+  CLARIFY_TOOL_NAME,
+  TASK_TOOL_NAME,
+  TOOLS,
+  clarifyGate,
+  clarifyTool,
+  createTaskTool,
+} from "../tools";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
 import { classify, failureMarker } from "./outcome";
@@ -346,6 +353,12 @@ export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
   MemoryAdd: false,
   MemoryUpdate: false,
   MemoryDelete: false,
+  // Never gated, and not because asking a question is harmless — because this
+  // tool **is** the asking. `clarifyGate` answers the call in `afterModel`,
+  // before the gate is reached, so a decision here can never fire; it is written
+  // down because an unlisted tool is auto-approved and this map is the place the
+  // program records that it thought about each one.
+  [CLARIFY_TOOL_NAME]: false,
   Bash: {
     allowedDecisions: ["approve", "edit", "reject"],
     description: "Bash runs with your shell. Approve, edit the command, or reject.",
@@ -474,6 +487,19 @@ export function registeredTools(
     // order and, with them, the cached prefix. Absent when the program was
     // started without a memory directory, which is the honest default — a tool
     // that always fails is worse than a capability the model was never offered.
+    // After the optional Skill and **before** the optional memory tools. Tools are
+    // serialised ahead of messages, so position is a cache decision: a new tool
+    // appends to the *unconditional* set rather than being inserted among the six,
+    // which is the same move Task and Skill each made. Memory keeps the tail it
+    // documents below — two things cannot both be last, and putting this after
+    // them would have made the claim there false.
+    //
+    // Unconditional, and it needs no condition to be main-agent-only: a
+    // subagent's tools come from `EXPLORE_TOOLS` (`agents/kinds.ts`), never from
+    // here. That is the confirmation gate's property for the gate's reason — a
+    // kind that cannot `interrupt()` cannot ask (docs/adr/0003), and a tool that
+    // can only fail is worse than a capability the model was never offered.
+    clarifyTool,
     ...(environment.memory !== undefined
       ? createMemoryTools({ store: environment.memory })
       : []),
@@ -695,6 +721,13 @@ export function createUniversalAgent(options: AgentOptions) {
       : []),
     stallGuard(),
     emptyReplyGuard(),
+    // Before the gate, and that ordering is load-bearing. `clarifyGate` narrows
+    // the message's `tool_calls` to the `Clarify` call alone (in place, the same
+    // way langchain's HITL does it at `hitl.js:498`), so a turn that asked a
+    // question *and* wanted to run a command leaves the gate nothing to stop.
+    // The reverse order produces two interrupts in one turn — a confirmation and
+    // a question — and the console can only hold one.
+    clarifyGate(),
     confirmationGate(),
   ];
 

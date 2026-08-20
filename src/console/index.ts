@@ -71,6 +71,14 @@ export {
   PAGE,
   type Choice,
 } from "./picker";
+// The `Clarify` tool's half of the console, exported for the same reason
+// `readDecision` is: `readAnswer` decides what a keystroke means when the model
+// has asked a question, and getting it wrong is silent. An empty line must not
+// become an answer — the identical rule the gate learned the hard way — and a
+// line that is not one of the numbers must become the user's own words rather
+// than an error, because the case this tool exists for is the one where none of
+// the options the model thought of is right.
+export { readAnswer, renderQuestion, type Quiz } from "./clarify";
 export {
   markdownStream,
   renderLine,

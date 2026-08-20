@@ -7,7 +7,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import { renderHistory, summarizeResult } from "@/console";
+import { renderHistory, summarizeCall, summarizeResult } from "@/console";
 import { PINNED, SUMMARY_SOURCE } from "@/context";
 import { SKILL_CATALOG_ID, skillActivationMessage } from "@/skills";
 
@@ -144,6 +144,28 @@ describe("replaying a resumed session", () => {
  * it is a function: a tool call must not read one way while you watch it and
  * another way when you come back to it.
  */
+/**
+ * `Clarify` is singled out in the opposite direction to `Task`: its arguments are
+ * about to be printed in full, one screen down. What the line is still for is the
+ * transcript later, once the questions have scrolled — so it names the decisions.
+ */
+describe("naming a Clarify call", () => {
+  test("the headers, not the serialised questions", () => {
+    const line = summarizeCall("Clarify", {
+      questions: [
+        { header: "持仓周期", question: "very long question text", options: [] },
+        { header: "资金规模", question: "another long one", options: [] },
+      ],
+    });
+    expect(line).toBe("Clarify 持仓周期, 资金规模");
+    expect(line).not.toContain("question");
+  });
+
+  test("a call with nothing in it still says so rather than rendering blank", () => {
+    expect(summarizeCall("Clarify", {})).toContain("no questions");
+  });
+});
+
 describe("standing in for a tool's output", () => {
   const result = (content: string): ToolMessage =>
     new ToolMessage({ content, tool_call_id: "x" });

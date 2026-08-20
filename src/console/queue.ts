@@ -39,8 +39,16 @@
  * being streamed.
  */
 
-/** Which question a line was answering when it arrived. */
-export type Tag = "input" | "gate" | "picker";
+/**
+ * Which question a line was answering when it arrived.
+ *
+ * `"question"` is the `Clarify` tool's: the model asked something and the console
+ * is holding a numbered list open. It is its own tag rather than sharing
+ * `"gate"` because the two are answered by different readers and mean opposite
+ * things — a gate decides whether a command runs, a question decides what gets
+ * built — and a line tagged for the wrong one is answered by the wrong reader.
+ */
+export type Tag = "input" | "gate" | "picker" | "question";
 
 /** One line, and what it was an answer to. */
 export interface Arrived {

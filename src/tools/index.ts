@@ -12,6 +12,28 @@ export {
   type Replay,
 } from "./replay";
 export { bashTool, editTool, writeTool } from "./mutating";
+// `Clarify` is a schema declaration whose body never runs — `clarifyGate` answers
+// the call in `afterModel` instead. Both are exported because the assembling
+// caller wires them as a pair; installing one without the other is either a tool
+// that throws or a middleware with nothing to intercept. The note at the top of
+// clarify.ts says why the obvious design (interrupt inside the body) is measured
+// broken here (`repro/25`).
+export {
+  clarifyGate,
+  clarifySchema,
+  clarifyTool,
+  CLARIFY_TOOL_NAME,
+  isClarifyRequest,
+  MAX_OPTIONS,
+  MAX_QUESTIONS,
+  MIN_OPTIONS,
+  readRequest,
+  renderAnswers,
+  type ClarifyAnswer,
+  type ClarifyOption,
+  type ClarifyQuestion,
+  type ClarifyRequest,
+} from "./clarify";
 
 /**
  * The six the system prompt advertises. Order is the order the model sees them

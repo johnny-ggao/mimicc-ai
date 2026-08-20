@@ -360,7 +360,41 @@ describe("what a resumed session is parked on", () => {
   });
 
   test("a session that finished cleanly is parked on nothing", () => {
-    expect(parked({ tasks: [], next: [] })).toEqual({ requests: [], unfinished: 0 });
-    expect(parked({})).toEqual({ requests: [], unfinished: 0 });
+    expect(parked({ tasks: [], next: [] })).toEqual({
+      requests: [],
+      questions: [],
+      unfinished: 0,
+    });
+    expect(parked({})).toEqual({ requests: [], questions: [], unfinished: 0 });
+  });
+
+  /**
+   * The third parked state, and the one that fails **open** if it is missed: an
+   * unanswered `Clarify` question carries no `actionRequests`, so a reader that
+   * only knows about gates sees "no gate" and falls through to `unfinished` —
+   * which the console resumes automatically, answering the model's question with
+   * nothing and orphaning its tool call (`repro/19`: a 400 from the provider).
+   */
+  test("a session parked on a question is not mistaken for unfinished work", () => {
+    const asked = parked({
+      tasks: [
+        {
+          interrupts: [
+            {
+              value: {
+                kind: "clarify",
+                questions: [{ header: "h", question: "q?", options: [] }],
+              },
+            },
+          ],
+        },
+      ],
+      next: ["tools"],
+    });
+
+    expect(asked.questions.map((one) => one.header)).toEqual(["h"]);
+    expect(asked.requests).toEqual([]);
+    // Not 1 — there is a human to ask, so nothing gets picked up automatically.
+    expect(asked.unfinished).toBe(0);
   });
 });

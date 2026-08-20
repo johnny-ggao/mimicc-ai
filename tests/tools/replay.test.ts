@@ -58,6 +58,11 @@ test("the classification is the one the criterion produces", () => {
     // Never although an Explore agent only reads — a second dispatch buys the
     // same report at uncached prices. "Unchanged" includes money.
     Task: "never",
+    // Never, and moot: the body is unreachable (`clarifyGate` answers the call in
+    // `afterModel`), so no `wrapToolCall` ever classifies it. The declaration is
+    // the answer that stays right if that interception is removed — a crash can
+    // land *after* the user answered, and replaying would discard their answer.
+    Clarify: "never",
   });
 });
 

@@ -14,6 +14,8 @@ import { markdownStream } from "./markdown";
 import { renderHistory, summarizeCall, summarizeResult } from "./transcript";
 import { describeDrops, InputQueue, type Arrived, type Tag } from "./queue";
 import { describeSession, readChoice, renderSessionList } from "./picker";
+import { readAnswer, renderQuestion, type Quiz } from "./clarify";
+import { isClarifyRequest, type ClarifyQuestion } from "../tools";
 import { spendBreakdown, spendLine } from "./spend";
 import { addSpend, creditsOf, noSpend, type Spend } from "../usage";
 import { listSessions, resolveSession, type Session } from "../session";
@@ -137,6 +139,9 @@ export async function runRepl({
   // tool line would be reprinted each lap.
   let rendered = 0;
   let pending: Pending | null = null;
+  // The other thing the console can be holding open. Never both: a turn stops at
+  // one interrupt, and `finish` sets exactly one of these.
+  let quiz: Quiz | null = null;
   // How many nodes the adopted session was parked on, or 0. Set by `adopt` and
   // consumed once at the top of the loop — the three places that adopt a session
   // all return there, so the pick-up happens in one place rather than three.
@@ -188,7 +193,19 @@ export async function runRepl({
       Object.entries(chosen.byModel).map(([model, cost]) => [model, { ...cost }]),
     );
 
-    const { requests, unfinished: parkedNodes } = parked(state);
+    const { requests, questions, unfinished: parkedNodes } = parked(state);
+
+    // A question survives a crash the same way a gate does — it is a pending
+    // write on the newest checkpoint (`repro/18`) — so resuming has to show it
+    // rather than prompt. Prompting would invite a line that starts a new run
+    // from START (`repro/14`) and orphans the model's tool call.
+    if (questions.length > 0) {
+      const waiting: Quiz = { questions, answers: [] };
+      quiz = waiting;
+      process.stdout.write(renderQuestion(waiting));
+      return null;
+    }
+
     if (requests.length === 0) {
       unfinished = parkedNodes;
       return null;
@@ -210,6 +227,20 @@ export async function runRepl({
    * called no model has nothing to report, and printing zeroes would teach the
    * eye to skip the line that matters.
    */
+  /**
+   * Folds what a turn left waiting into the two slots the loop reads.
+   *
+   * One helper rather than the same three lines at four call sites, and the
+   * reason is the failure it prevents: forgetting to clear the *other* slot
+   * leaves the console asking a question it has already been answered, or
+   * holding a gate the turn resolved.
+   */
+  const settle = (turn: TurnResult): void => {
+    const waiting = finish(turn);
+    pending = waiting?.kind === "gate" ? waiting.pending : null;
+    quiz = waiting?.kind === "question" ? waiting.quiz : null;
+  };
+
   const account = (turn: TurnResult): void => {
     if (turn.credits.length === 0) return;
     for (const [model, cost] of turn.credits) {
@@ -237,7 +268,13 @@ export async function runRepl({
   let wake: (() => void) | null = null;
 
   const asking = (): Tag =>
-    pending !== null ? "gate" : picking !== null ? "picker" : "input";
+    pending !== null
+      ? "gate"
+      : quiz !== null
+        ? "question"
+        : picking !== null
+          ? "picker"
+          : "input";
 
   // `inFlight !== null` is the whole of "was this typed over a running reply",
   // and it is only true at the moment the line lands — which is why it is read
@@ -307,7 +344,7 @@ export async function runRepl({
       const turn = await runTurn(graph, null, session, rendered, inFlight.signal);
       inFlight = null;
       account(turn);
-      pending = finish(turn);
+      settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -347,6 +384,41 @@ export async function runRepl({
       continue;
     }
 
+    // Before the gate's branch only because they are exclusive; the order says
+    // nothing. What matters is that both sit above the ordinary-input path, so a
+    // line typed while either is open is never mistaken for a new turn.
+    if (quiz) {
+      const answers = readAnswer(input, quiz);
+      if (answers === null) {
+        // Either an empty line, which is not an answer, or one question down and
+        // more to go. Both want the same thing on screen: the question now
+        // waiting.
+        process.stdout.write(renderQuestion(quiz));
+        rl.prompt();
+        continue;
+      }
+      // Cleared **before** the turn runs, for the gate's reason (see below): while
+      // the resumed turn is in flight `asking()` must already say "input", or a
+      // line typed during it is tagged for a question that is gone and dropped as
+      // stale instead of becoming the next turn.
+      quiz = null;
+      process.stdout.write("\n");
+      inFlight = new AbortController();
+      const turn = await runTurn(
+        graph,
+        new Command({ resume: answers }),
+        session,
+        rendered,
+        inFlight.signal,
+      );
+      inFlight = null;
+      account(turn);
+      settle(turn);
+      rendered = turn.rendered;
+      rl.prompt();
+      continue;
+    }
+
     if (pending) {
       const resume = readDecision(input, pending);
       if (resume === null) {
@@ -366,7 +438,7 @@ export async function runRepl({
       const turn = await runTurn(graph, resume, session, rendered, inFlight.signal);
       inFlight = null;
       account(turn);
-      pending = finish(turn);
+      settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -468,7 +540,7 @@ export async function runRepl({
       );
       inFlight = null;
       account(turn);
-      pending = finish(turn);
+      settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -489,7 +561,7 @@ export async function runRepl({
     inFlight = null;
 
     account(turn);
-    pending = finish(turn);
+    settle(turn);
     rendered = turn.rendered;
     rl.prompt();
   }
@@ -498,9 +570,25 @@ export async function runRepl({
   process.stdout.write("\nbye\n");
 }
 
-/** Prints whatever the turn produced, and returns the batch still waiting. */
-function finish(turn: TurnResult): Pending | null {
+/**
+ * What the turn left waiting for a human, if anything.
+ *
+ * A union rather than two nullable fields because the two are exclusive — a turn
+ * stops at one interrupt — and a shape that can hold both is a shape somebody
+ * will eventually fill both halves of.
+ */
+type Waiting = { kind: "gate"; pending: Pending } | { kind: "question"; quiz: Quiz };
+
+/** Prints whatever the turn produced, and returns what is still waiting. */
+function finish(turn: TurnResult): Waiting | null {
   if (turn.error !== null) process.stdout.write(`${describeError(turn.error)}\n`);
+
+  if (turn.questions !== null) {
+    const quiz: Quiz = { questions: turn.questions, answers: [] };
+    process.stdout.write(renderQuestion(quiz));
+    return { kind: "question", quiz };
+  }
+
   if (turn.requests === null) {
     process.stdout.write("\n");
     return null;
@@ -508,7 +596,7 @@ function finish(turn: TurnResult): Pending | null {
 
   const pending: Pending = { requests: turn.requests, decisions: [], editing: false };
   ask(pending);
-  return pending;
+  return { kind: "gate", pending };
 }
 
 /** Prints the request now awaiting a decision. */
@@ -595,6 +683,15 @@ export function readDecision(input: string, pending: Pending): Command | null {
 interface TurnResult {
   /** Tool calls the gate stopped, or null when the turn ran to completion. */
   requests: ActionRequest[] | null;
+  /**
+   * Questions the model asked, or null when it asked none.
+   *
+   * Separate from `requests` rather than folded in, because the two interrupts
+   * mean opposite things to the loop: a gate must be **answered before** a
+   * command runs, and a question must be answered before the model can carry on.
+   * Sharing one field would make `finish` guess which kind it is holding.
+   */
+  questions: ClarifyQuestion[] | null;
   /** What this turn's new messages cost, keyed by the model that was paid. */
   credits: [string, Spend][];
   /** New watermark for how much of the thread has been printed. */
@@ -620,6 +717,7 @@ async function runTurn(
   signal: AbortSignal,
 ): Promise<TurnResult> {
   let requests: ActionRequest[] | null = null;
+  let questions: ClarifyQuestion[] | null = null;
   const credits: [string, Spend][] = [];
   let dimmed = false;
   // When the last activity dot was printed; see the subagent branch below.
@@ -666,11 +764,20 @@ async function runTurn(
         // crash, not a missing feature.
         const state = payload as {
           messages?: BaseMessage[];
-          __interrupt__?: { value?: { actionRequests?: ActionRequest[] } }[];
+          // `unknown`, because two middlewares raise interrupts with different
+          // payloads and narrowing is each reader's own job below.
+          __interrupt__?: { value?: unknown }[];
         };
 
-        const stopped = state.__interrupt__?.[0]?.value?.actionRequests;
+        const value = state.__interrupt__?.[0]?.value;
+        const stopped = (value as { actionRequests?: ActionRequest[] } | undefined)
+          ?.actionRequests;
         if (stopped !== undefined) requests = stopped;
+        // The other interrupt source. Told apart by its own tag rather than by
+        // "has no actionRequests", because absence is what an unrelated third
+        // source would also look like — and reading this one as a gate with an
+        // empty batch would auto-approve it.
+        if (isClarifyRequest(value)) questions = value.questions;
         if (state.messages !== undefined) {
           // Flushed first, and not as a precaution. A held partial line would
           // otherwise be printed *after* the tool-call line below it, which
@@ -738,7 +845,7 @@ async function runTurn(
     process.stdout.write("\n");
   }
 
-  return { requests, credits, rendered, error };
+  return { requests, questions, credits, rendered, error };
 }
 
 /**
@@ -758,17 +865,29 @@ async function runTurn(
 export function parked(snapshot: {
   tasks?: readonly { interrupts?: readonly { value?: unknown }[] }[];
   next?: readonly string[];
-}): { requests: ActionRequest[]; unfinished: number } {
-  const requests = (snapshot.tasks ?? []).flatMap((task) =>
-    (task.interrupts ?? []).flatMap(
-      (stop) =>
-        (stop.value as { actionRequests?: ActionRequest[] } | undefined)
-          ?.actionRequests ?? [],
-    ),
+}): { requests: ActionRequest[]; questions: ClarifyQuestion[]; unfinished: number } {
+  const waiting = (snapshot.tasks ?? []).flatMap((task) => task.interrupts ?? []);
+
+  const requests = waiting.flatMap(
+    (stop) =>
+      (stop.value as { actionRequests?: ActionRequest[] } | undefined)
+        ?.actionRequests ?? [],
   );
+
+  // The third state, and leaving it out is not a cosmetic gap: an unanswered
+  // question has no `actionRequests`, so the old reading saw "no gate" and fell
+  // through to `unfinished`, which the console **resumes automatically**. That
+  // would answer the model's question with nothing and orphan its tool call —
+  // and `repro/19` measured what a provider does with an orphaned call: a 400.
+  const questions = waiting.flatMap((stop) =>
+    isClarifyRequest(stop.value) ? stop.value.questions : [],
+  );
+
+  const asking = requests.length > 0 || questions.length > 0;
   return {
     requests,
-    unfinished: requests.length > 0 ? 0 : (snapshot.next ?? []).length,
+    questions,
+    unfinished: asking ? 0 : (snapshot.next ?? []).length,
   };
 }
 
