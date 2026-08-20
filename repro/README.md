@@ -51,6 +51,8 @@
 | `22-injected-messages-hit-the-message-stream.ts` | `beforeAgent` 注入的消息会不会被 `streamMode: "messages"` 当成模型的话流出来：**会，而且只在第一个回合**（后面的回合它已经在节点输入里，被 langgraph 的 dedup 挡掉）；skill 目录与项目 instructions **两个都漏** | 否（stub） |
 | `23-crash-mid-approved-tools.ts` | 门批准之后、工具跑到一半断电，冷启动还剩什么：**`next=["tools"] tasks=1` 但 `interrupts=0`**——盘上看得见，而 `adopt` 只看 interrupts 所以看不见；`invoke(null)` 在冷进程里能收完（合成结果、**副作用不重复**）并拿到最终回答 | 否（stub） |
 | `24-what-a-failed-turn-leaves.ts` | 一个回合**失败**之后历史里留下什么：**`human → ai`，那条 ai 是 harness 写的失败标记**（`FAILURE_PREFIX`），不是「一条没人回答的 user 消息」——旧 `README.md` 记的那条**已经不成立**，撤它之前核出来的 | 否（stub） |
+| `25-interrupt-inside-a-tool-body.ts` | 工具体里 `interrupt()` 能不能问：**堵死，被我们自己两个中间件堵的**——`stallGuard` 把 `GraphInterrupt` 当异常吞成报错 ToolMessage，`toolRecovery` 把「停下来问人」判成「进程死在半路」；另外裸场景下**体会整个重跑**（`kinds.ts:228` 那条反证对工具体成立）。结论：问题工具走 `afterModel`，不走工具体 | 否（stub） |
+| `26-handing-stdin-to-raw-mode.ts` | 方向键选单要把 stdin 从 readline 手里接过来：**`rl.pause()` 是错的**——选单里的 Enter 被两边各收一份，readline 那份变成空行进队列（`readDecision` 专门防的就是空行）；**`rl.close()` + 重建是干净的**，四项全过。硬边：交接后要自己 `stdin.resume()`；`rl.close()` 会触发 `repl.ts:249` 的 `ended = true` | 否 |
 
 **两个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）与 `19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
