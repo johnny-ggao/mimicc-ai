@@ -23,6 +23,11 @@ export default tseslint.config(
       "bench-work/**",
       "bench/**",
       "repro/**",
+      // Background tasks get their own git worktree under here. It is a second
+      // checkout of this repository — its files are not this checkout's source,
+      // and linting them makes `bun run check` fail on work that is not in this
+      // tree (observed 2026-08-20: a worktree's own test file failed the gate).
+      ".claude/**",
     ],
   },
   js.configs.recommended,
