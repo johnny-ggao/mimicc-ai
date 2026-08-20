@@ -1,4 +1,5 @@
 import { ToolMessage } from "@langchain/core/messages";
+import { isGraphBubbleUp } from "@langchain/langgraph";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
 import { hintInjector } from "./hint";
@@ -14,6 +15,21 @@ import { hintInjector } from "./hint";
  * present, ToolNode hands the raw throw to the middleware and lets it decide;
  * re-throwing would be fatal, so the throw is converted to the same error
  * ToolMessage ToolNode would have produced on its own (see nodes/ToolNode.js).
+ *
+ * ⚠️ **Unless the throw is not a failure.** LangGraph implements `interrupt()`
+ * as a throw — `GraphInterrupt extends GraphBubbleUp` (`langgraph/errors.js`) —
+ * and its other control-flow signals travel the same way: a cooperative drain,
+ * a subgraph's `Command` on its way up to the parent. Turning one of those into
+ * an error ToolMessage does not report a failure, it *cancels a question the
+ * human was supposed to answer*: measured in `repro/25`, a tool body that
+ * called `interrupt()` never stopped the graph, and the model read back
+ * `"GraphInterrupt: […] Please fix your mistakes."` — the payload of the
+ * question, addressed to the wrong reader, with an apology attached.
+ *
+ * So a bubble-up is re-thrown and does not count against the streak. This is
+ * what langchain's own error middleware does with the same class of throw
+ * (`agents/middleware/toolError.js:51`), and the predicate is theirs too, so
+ * a signal added in a later release is covered without this file being told.
  */
 
 const BAD_STREAK_LIMIT = 3;
@@ -45,6 +61,10 @@ export function stallGuard(): AnyAgentMiddleware {
         record(ToolMessage.isInstance(result) && result.status === "error");
         return result;
       } catch (error) {
+        // Before `record`, not after: a paused call has not failed, and letting
+        // it move the streak would mean three questions in a row nag the model
+        // to change approach.
+        if (isGraphBubbleUp(error)) throw error;
         record(true);
         return new ToolMessage({
           tool_call_id: request.toolCall.id ?? "",

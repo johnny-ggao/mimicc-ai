@@ -82,6 +82,56 @@ test("writing the same intent twice keeps the first declaration", async () => {
 });
 
 /**
+ * The other way an intent stops being in doubt.
+ *
+ * `interrupt()` is a throw, so the code after it never ran: the call got exactly
+ * as far as its question and no further. Nothing is unknown, which is the one
+ * thing an intent with no settlement is there to say — so the suspension takes
+ * it back rather than adding to it.
+ */
+test("a suspension voids the intent before it", async () => {
+  const log = journal();
+  await log.recordIntent(intent("c1", "never"));
+  await log.recordSuspension("c1");
+
+  expect((await log.lookup("c1")).kind).toBe("unrecorded");
+});
+
+/** The resume runs the body again and settles it, and that settlement is the one. */
+test("a suspension does not stop the answer from landing", async () => {
+  const log = journal();
+  await log.recordIntent(intent("c1", "never"));
+  await log.recordSuspension("c1");
+  await log.recordIntent(intent("c1", "never"));
+  await log.recordSettlement({
+    toolCallId: "c1",
+    content: "the human said 2",
+    isError: false,
+  });
+
+  const state = await log.lookup("c1");
+  if (state.kind !== "settled") throw new Error("expected the resumed result");
+  expect(state.settlement.content).toBe("the human said 2");
+});
+
+/**
+ * …and it voids **only** that attempt. The resume is a fresh one with a fresh
+ * intent, so a process that dies during *it* still reads as a crash and still
+ * fails closed. A suspension that voided everything after it would be a hole in
+ * the mechanism opened for the convenience of the case above.
+ */
+test("a crash after a resume is still a crash", async () => {
+  const log = journal();
+  await log.recordIntent(intent("c1", "never"));
+  await log.recordSuspension("c1");
+  await log.recordIntent(intent("c1", "never"));
+
+  const state = await log.lookup("c1");
+  if (state.kind !== "interrupted") throw new Error("expected it to be in doubt");
+  expect(state.intent.replay).toBe("never");
+});
+
+/**
  * A half-written last line is the ordinary shape of a file whose writer was
  * killed — which is the whole situation this file is about, so it cannot be an
  * error case.

@@ -63,13 +63,19 @@ export interface Settlement {
  * `interrupted` is the state the whole design exists for: an intent is durable
  * and a settlement is not, so the call either ran, or partly ran, or never
  * started — and nothing on disk can say which.
+ *
+ * A call that {@link ToolJournal.recordSuspension | suspended} reads as
+ * `unrecorded`, and that is not a gap — see the method.
  */
 export type CallState =
   | { kind: "unrecorded" }
   | { kind: "interrupted"; intent: Intent }
   | { kind: "settled"; settlement: Settlement };
 
-type Line = ({ kind: "intent" } & Intent) | ({ kind: "settlement" } & Settlement);
+type Line =
+  | ({ kind: "intent" } & Intent)
+  | ({ kind: "settlement" } & Settlement)
+  | { kind: "suspended"; toolCallId: string };
 
 /**
  * One session's tool journal.
@@ -106,7 +112,46 @@ export class ToolJournal {
     await this.#append({ kind: "settlement", ...settlement });
   }
 
-  /** Where this call stands. Reads the file, because after a crash it is the truth. */
+  /**
+   * Records that the call stopped on purpose — it asked for a human and threw a
+   * `GraphInterrupt` (or another of LangGraph's bubble-up signals) instead of
+   * returning.
+   *
+   * ## Why this voids the intent rather than settling it
+   *
+   * An intent with nothing after it means *nothing on disk can say* how far the
+   * call got. A suspension says the opposite: the call got exactly as far as its
+   * `interrupt()` and no further, because `interrupt()` is a throw and the code
+   * after it never ran. That is a **known** state, so the one thing the intent
+   * was there to signal is no longer true, and {@link lookup} reports the call
+   * as `unrecorded` from here on.
+   *
+   * Voiding is also the only reading that leaves the call working. LangGraph
+   * replays a suspended task's body from the top on resume — measured in
+   * `repro/25`, `body-entered` appears twice — so an interrupt inside a tool
+   * body *already* requires that body to be idempotent up to its `interrupt()`,
+   * whatever this file says. What a stale intent adds is not protection but a
+   * lie: the resume refuses to re-run, synthesizes an "interrupted, unsafe to
+   * repeat" result, and the human's answer never reaches the model.
+   *
+   * Appended rather than rewritten, for the reason spelled out under
+   * {@link prune}: a crash-recovery file has to survive being killed mid-write,
+   * and a rewrite that voids one intent could take the others with it. It is a
+   * fresh attempt after this, so the resume records a fresh intent — a crash
+   * during *that* run reads as `interrupted` again, fail-closed as ever.
+   */
+  async recordSuspension(toolCallId: string): Promise<void> {
+    await this.#append({ kind: "suspended", toolCallId });
+  }
+
+  /**
+   * Where this call stands. Reads the file, because after a crash it is the truth.
+   *
+   * A fold rather than a scan for the first line, because three kinds compose:
+   * a settlement ends the story, a suspension closes the attempt before it and
+   * opens a fresh one, and within one attempt the first intent is the one that
+   * counts.
+   */
   async lookup(toolCallId: string): Promise<CallState> {
     let intent: Intent | undefined;
     for (const line of await this.#read()) {
@@ -115,6 +160,12 @@ export class ToolJournal {
         const { kind, ...settlement } = line;
         void kind;
         return { kind: "settled", settlement };
+      }
+      if (line.kind === "suspended") {
+        // The attempt ended in a way that leaves nothing in doubt, so there is
+        // nothing to recover and the next intent starts clean.
+        intent = undefined;
+        continue;
       }
       const { kind, ...rest } = line;
       void kind;

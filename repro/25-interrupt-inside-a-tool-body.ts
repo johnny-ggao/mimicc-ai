@@ -32,20 +32,21 @@
  * 另外印出最终历史里那条 ToolMessage 的内容：模型看不看得到答案，是这条路能不能用的
  * 第二个判据（问出去了但答案回不到模型手里，等于没问）。
  *
- * ## 两个场景
+ * ## 四个场景
  *
- * - `bare`  —— 裸 `createAgent` + checkpointer。langgraph 自己的语义。
+ * - `bare`  —— 裸 `createAgent` + checkpointer。langgraph 自己的语义，作对照。
  * - `stack` —— 加上**真的会包住工具体的那两个中间件**：`toolRecovery` 与 `stallGuard`
  *   都用 `wrapToolCall`，一个记「要跑了 / 已 settle」的旁挂日志，一个把 throw 变成
  *   ToolMessage。一个从体中间抛出去的 interrupt 长得很像一次异常，**这里是最可能出事的地方**。
+ * - `recovery` / `stall` —— 两个中间件各装一个。`stack` 出事的时候，要认得出是谁干的。
  *
  * ⚠️ 确认门不在场景里，是判过的不是漏的：它是 `afterModel` 钩子、只对 `Bash` 生效
  * （`CONFIRMATION_POLICY`），不包别的工具的体。它和这道题的交互是另一个问题——
  * 「两个 interrupt 源同时在场时控制台怎么分辨」——那要等这条路先成立才谈得上。
  *
- * ## 答案（2026-08-20 实测）
+ * ## 答案（2026-08-20 初测）
  *
- * **这条路今天堵死了，而且是被我们自己的两个中间件堵的。**
+ * **这条路当时堵死了，而且是被我们自己的两个中间件堵的。**
  *
  * | 场景 | 停下来问 | 模型最后拿到 | body-entered |
  * | --- | --- | --- | --- |
@@ -63,18 +64,39 @@
  *
  * 2. **`stallGuard` 把 `GraphInterrupt` 当异常吞了。** 它的活是「把 throw 变成模型读得懂的
  *    ToolMessage」，而 langgraph 的 interrupt 就是一个 throw。于是门根本没开，模型收到
- *    `"GraphInterrupt: … Please fix your mistakes."`。⚠️ **这是出货代码里的一个潜在缺陷**，
- *    今天不发作只因为仓库里没有任何工具体调 `interrupt()`（确认门在 `afterModel`）。
+ *    `"GraphInterrupt: … Please fix your mistakes."`。
  *
  * 3. **`toolRecovery` 分不清「停下来问人」和「进程死在半路」。** 单独装它时门是开的，
  *    但恢复之后它把这次调用判成「中断且不可重复」，合成 `interruptedText` 顶掉了真答案——
  *    人答了，模型收到的却是崩溃恢复的套话。
  *
- * **所以问题工具走 `afterModel` 中间件，不走工具体**（和确认门同一条路：模型发出调用，
+ * ## 后两条是缺陷，已修（2026-08-20 复测）
+ *
+ * 结论 2、3 是出货代码里的缺陷，不是 langgraph 的语义，所以是去改而不是去绕：
+ *
+ * - `stallGuard` 遇到 `isGraphBubbleUp(error)` 原样再抛，也不计进坏运（`stallguard.ts`）。
+ *   langchain 自己的 `toolErrorMiddleware` 就是这么干的（`toolError.js:51`），谓词也用它的，
+ *   所以以后新增的控制流信号不用回来改这里。
+ * - `toolRecovery` 遇到 bubble-up 先记一条 **suspension** 再抛。这条记录**作废它前面那条
+ *   intent**（`checkpoint/journal.ts`）：intent 的语义是「盘上说不清跑到哪了」，而暂停的
+ *   状态是**说得清**的——体停在 `interrupt()` 那一行，后面的代码没跑。恢复是新的一次尝试，
+ *   记新的 intent，所以**那一次跑到一半崩掉，照样 fail closed**。
+ *
+ * 复测：四个场景全部与 `bare` 一致——都停下来问、都拿到 `用户选了："2. 严格不隔夜"`、
+ * `body-entered` 都是 **×2**。回归钉在 `tests/stallguard.test.ts`、`tests/recovery.test.ts`、
+ * `tests/journal.test.ts`（三处都验过：撤掉修复就红）。
+ *
+ * ## 选路的结论没变
+ *
+ * 结论 1 没被修掉，也修不掉——**体重放是 langgraph 的语义**。所以
+ * **问题工具仍然走 `afterModel` 中间件，不走工具体**（和确认门同一条路：模型发出调用，
  * 中间件拦下来 interrupt，恢复时合成 ToolMessage 顶掉这次调用，工具体从不执行）。
- * 那条路上这三条全部不适用：没有体可重跑，两个 `wrapToolCall` 中间件都看不到它。
+ * 那条路上「体必须幂等」根本不适用：没有体可重跑。
  * langchain 自己的 HITL 拒绝路径就是这么干的（`agents/middleware/hitl.js:399`
  * 建 ToolMessage，`:501` 放进 afterModel 的 state update），仓库里已经在跑。
+ *
+ * 变的是**这条路不再是「堵死的」**：真要有工具想在体里 interrupt，门是开的，
+ * 代价只剩那一条契约——体必须幂等到 `interrupt()` 为止。
  */
 import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";

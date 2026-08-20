@@ -1,4 +1,5 @@
 import { ToolMessage } from "@langchain/core/messages";
+import { isGraphBubbleUp } from "@langchain/langgraph";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
 import { ToolJournal } from "../checkpoint";
@@ -34,6 +35,21 @@ import { bothSafe, replayOf } from "../tools";
  *   is already done and already paid for; discarding it to report a bookkeeping
  *   failure would be the more destructive choice. The cost is that a later resume
  *   treats a call that succeeded as interrupted, which is the safe direction.
+ *
+ * ## A pause is not a crash
+ *
+ * The one throw this must not read as a death is `interrupt()`, because
+ * LangGraph implements it as one (`GraphInterrupt extends GraphBubbleUp`). Both
+ * endings look identical from here — an intent on disk, no settlement after it —
+ * and the difference is everything: the process is alive, the call stopped
+ * exactly at its `interrupt()`, and a human is being asked. Read as a crash it
+ * fails closed on the resume and hands the model
+ * {@link interruptedText} in place of the answer the human just gave. Measured
+ * in `repro/25` before the fix; the `recovery` case is the one that shows it.
+ *
+ * So a bubble-up records a suspension (which voids the intent — see
+ * `ToolJournal.recordSuspension` for why that is the honest reading rather than
+ * the lenient one) and is re-thrown untouched.
  *
  * ## What it does not protect
  *
@@ -169,7 +185,21 @@ export function toolRecovery(options: ToolRecoveryOptions): AnyAgentMiddleware {
         });
       }
 
-      const result = await handler(request);
+      let result: Awaited<ReturnType<typeof handler>>;
+      try {
+        result = await handler(request);
+      } catch (error) {
+        // Not a death — a pause, on its way out to the console. See the header.
+        if (isGraphBubbleUp(error)) {
+          await forgive(journal.recordSuspension(call.id ?? ""));
+        }
+        // Everything else keeps travelling as it did: a tool that throws is
+        // stallGuard's business, and this middleware sits outside it, so what
+        // arrives here has already been turned into an error ToolMessage. A
+        // throw reaching this line means the guard is not installed, and then
+        // no settlement is the right record — the call did not produce one.
+        throw error;
+      }
 
       if (ToolMessage.isInstance(result)) {
         await forgive(

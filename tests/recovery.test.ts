@@ -1,11 +1,15 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { HumanMessage } from "@langchain/core/messages";
+import { Command, interrupt } from "@langchain/langgraph";
+import { ChatOpenAI } from "@langchain/openai";
+import { createAgent, tool } from "langchain";
+import { z } from "zod";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
+import { createUniversalAgent, RECURSION_LIMIT, toolRecovery } from "@/agents";
 import { JsonlSaver, ToolJournal } from "@/checkpoint";
 import type { Replay } from "@/tools";
 
@@ -336,6 +340,103 @@ test("with no state directory the middleware is not installed at all", async () 
   // turn still ran, which is what tells this apart from journalling that failed.
   expect(existsSync(join(state, "no-dir.tools.jsonl"))).toBe(false);
   expect(existsSync(join(state, "no-dir.jsonl"))).toBe(true);
+});
+
+/**
+ * The ending that looks exactly like a crash and is not one.
+ *
+ * A tool that calls `interrupt()` leaves the same marks a kill does — an intent
+ * on disk, no settlement after it — so recovery used to fail closed on the
+ * resume and hand the model {@link interruptedText} in place of the answer the
+ * human had just given. Measured in `repro/25`; this is the regression pin.
+ *
+ * `createAgent` rather than `agentOn`, because the case needs a tool body that
+ * interrupts and none of the shipped tools do. The gate test above covers the
+ * other interrupt source, the one that never reaches a `wrapToolCall`.
+ */
+test("a call that paused for a human is not recovered as a crash", async () => {
+  const { state } = workspace();
+  const stub = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const answered = body.messages.some((message) => message.role === "tool");
+      return Response.json({
+        id: `chatcmpl-paused-${answered ? "2" : "1"}`,
+        object: "chat.completion",
+        created: 0,
+        model: "stub",
+        choices: [
+          {
+            index: 0,
+            message: answered
+              ? { role: "assistant", content: "noted" }
+              : {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "call_ask",
+                      type: "function",
+                      function: {
+                        name: "Ask",
+                        arguments: JSON.stringify({ q: "which?" }),
+                      },
+                    },
+                  ],
+                },
+            finish_reason: answered ? "stop" : "tool_calls",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    },
+  });
+
+  // No `replay` metadata, so `replayOf` reads it as `never` — the declaration
+  // that made the old behaviour refuse to run it again.
+  const ask = tool(
+    (args: { q: string }) => `answered ${args.q}: ${String(interrupt(args.q))}`,
+    {
+      name: "Ask",
+      description: "asks the human",
+      schema: z.object({ q: z.string() }),
+    },
+  );
+
+  const graph = createAgent({
+    model: new ChatOpenAI({
+      model: "stub",
+      apiKey: "sk-stub",
+      configuration: { baseURL: `http://localhost:${String(stub.port)}` },
+    }),
+    tools: [ask],
+    checkpointer: new JsonlSaver(state),
+    middleware: [toolRecovery({ directory: state })],
+  });
+  const config = { configurable: { thread_id: "paused" }, durability: "sync" as const };
+
+  try {
+    await graph.invoke({ messages: [new HumanMessage("go")] }, config);
+
+    // Mid-pause: the intent is void, so the resume sees a call with nothing owed
+    // rather than one whose fate is unknown.
+    const journal = new ToolJournal(state, "paused");
+    expect(readFileSync(journal.path, "utf8")).toContain('"kind":"suspended"');
+    expect((await journal.lookup("call_ask")).kind).toBe("unrecorded");
+
+    const done = (await graph.invoke(
+      new Command({ resume: "the second one" }),
+      config,
+    )) as {
+      messages: { content: unknown; getType: () => string }[];
+    };
+
+    expect(toolText(done)).toBe("answered which?: the second one");
+    expect(toolText(done)).not.toContain("interrupted");
+  } finally {
+    await stub.stop(true);
+  }
 });
 
 afterAll(() => {
