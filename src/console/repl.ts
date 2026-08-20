@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { emitKeypressEvents } from "node:readline";
 
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
@@ -15,7 +16,8 @@ import { renderHistory, summarizeCall, summarizeResult } from "./transcript";
 import { describeDrops, InputQueue, type Arrived, type Tag } from "./queue";
 import { describeSession, readChoice, renderSessionList } from "./picker";
 import { readAnswer, renderQuestion, type Quiz } from "./clarify";
-import { isClarifyRequest, type ClarifyQuestion } from "../tools";
+import { runSelector, type Key } from "./selector";
+import { isClarifyRequest, type ClarifyAnswer, type ClarifyQuestion } from "../tools";
 import { spendBreakdown, spendLine } from "./spend";
 import { addSpend, creditsOf, noSpend, type Spend } from "../usage";
 import { listSessions, resolveSession, type Session } from "../session";
@@ -102,31 +104,31 @@ export async function runRepl({
   stateDir,
   start,
 }: ReplOptions): Promise<void> {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    // Piped stdin (tests, here-docs) must not be forced into terminal mode.
-    terminal: process.stdin.isTTY === true,
-    historySize: 200,
-  });
+  const openReadline = (): ReturnType<typeof createInterface> =>
+    createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      // Piped stdin (tests, here-docs) must not be forced into terminal mode.
+      terminal: process.stdin.isTTY === true,
+      historySize: 200,
+    });
+
+  // `let`, because the arrow-key selector has to take stdin away from readline
+  // and give it back — and the only handoff that does not leak keys is closing
+  // this interface and building a new one (`repro/26`; `rl.pause()` leaves both
+  // consumers on the stream and the selector's Enter arrives a second time as an
+  // empty line, into the queue whose empty-line handling was a shipping bug).
+  let rl = openReadline();
+
+  // True only while that handoff is in progress, and read by the `close`
+  // handler. ⚠️ Without it the handoff quits the program: `rl.close()` fires
+  // `close`, which sets `ended` and ends the loop — measured as the second hard
+  // edge in `repro/26`.
+  let handingOff = false;
 
   // Non-null exactly while a turn is in flight. That is also how the SIGINT
   // handler tells "interrupt the reply" apart from "quit the repl".
   let inFlight: AbortController | null = null;
-
-  rl.on("SIGINT", () => {
-    if (inFlight) {
-      inFlight.abort();
-      // Emptied too, and that is the point of ticket 09 rather than a tidy-up.
-      // Stopping the turn while letting the line typed over it start the next
-      // one is the console carrying on after being told to stop; what the queue
-      // held is reported by the loop, one flush later, so it does not land in the
-      // middle of the interrupted reply.
-      queue.clear();
-      return;
-    }
-    rl.close();
-  });
 
   // History lives in the checkpointer now, keyed by this. `/clear` mints a new
   // one rather than deleting anything: the old session stays addressable, which
@@ -202,7 +204,7 @@ export async function runRepl({
     if (questions.length > 0) {
       const waiting: Quiz = { questions, answers: [] };
       quiz = waiting;
-      process.stdout.write(renderQuestion(waiting));
+      if (!selectable()) process.stdout.write(renderQuestion(waiting));
       return null;
     }
 
@@ -228,6 +230,78 @@ export async function runRepl({
    * eye to skip the line that matters.
    */
   /**
+   * Whether the arrow-key selector can be shown at all.
+   *
+   * The same condition readline itself is configured with. Piped stdin has no
+   * cursor to move and nothing to redraw, and the numbered list is not a
+   * fallback there — it is the reachable half of a pair.
+   */
+  const selectable = (): boolean => process.stdin.isTTY === true;
+
+  /**
+   * Opens the selector on stdin, and gives stdin back however it ends.
+   *
+   * Not called `ask` — that name belongs to the confirmation gate's prompt, and
+   * shadowing it inside this scope silently pointed `adopt`'s gate at the
+   * selector instead (the compiler caught it; the two take different arguments).
+   */
+  const openSelector = (
+    questions: readonly ClarifyQuestion[],
+  ): Promise<ClarifyAnswer[] | null> =>
+    borrowStdin((input) =>
+      runSelector(questions, {
+        write: (text) => void process.stdout.write(text),
+        // Re-read every frame rather than captured once: a window resized while
+        // the selector is open would otherwise clip to the old width and wrap,
+        // and a wrapped line is a line the redraw miscounts.
+        columns: () => process.stdout.columns ?? 80,
+        onKey: (handler) => {
+          const listener = (_chunk: string, key: Key): void => {
+            handler(key);
+          };
+          input.on("keypress", listener);
+          return () => void input.off("keypress", listener);
+        },
+      }),
+    );
+
+  /**
+   * Answers whatever question is being held, through the selector, until the
+   * model stops asking.
+   *
+   * A loop because an answer can produce another question. Resuming is not
+   * optional on any path through here — including a dismissal, which resumes
+   * with no answers and which `clarifyGate` reads as "proceed on an assumption".
+   * Leaving without resuming would park the graph on an interrupt nobody can
+   * reach, and the next thing typed would start a new run and orphan the model's
+   * tool call (`repro/14`, `repro/19`).
+   */
+  const throughSelector = async (): Promise<void> => {
+    while (quiz !== null && selectable()) {
+      const answers = await openSelector(quiz.questions);
+      quiz = null;
+      inFlight = new AbortController();
+      const turn = await runTurn(
+        graph,
+        new Command({ resume: answers ?? [] }),
+        session,
+        rendered,
+        inFlight.signal,
+      );
+      inFlight = null;
+      account(turn);
+      rendered = turn.rendered;
+      hold(finish(turn, !selectable()));
+    }
+  };
+
+  /** Puts what a turn left waiting into the two slots the loop reads. */
+  const hold = (waiting: Waiting | null): void => {
+    pending = waiting?.kind === "gate" ? waiting.pending : null;
+    quiz = waiting?.kind === "question" ? waiting.quiz : null;
+  };
+
+  /**
    * Folds what a turn left waiting into the two slots the loop reads.
    *
    * One helper rather than the same three lines at four call sites, and the
@@ -235,10 +309,9 @@ export async function runRepl({
    * leaves the console asking a question it has already been answered, or
    * holding a gate the turn resolved.
    */
-  const settle = (turn: TurnResult): void => {
-    const waiting = finish(turn);
-    pending = waiting?.kind === "gate" ? waiting.pending : null;
-    quiz = waiting?.kind === "question" ? waiting.quiz : null;
+  const settle = async (turn: TurnResult): Promise<void> => {
+    hold(finish(turn, !selectable()));
+    await throughSelector();
   };
 
   const account = (turn: TurnResult): void => {
@@ -279,14 +352,70 @@ export async function runRepl({
   // `inFlight !== null` is the whole of "was this typed over a running reply",
   // and it is only true at the moment the line lands — which is why it is read
   // here rather than reconstructed later.
-  rl.on("line", (raw) => {
-    queue.push(asking(), raw.trim(), inFlight !== null);
-    wake?.();
-  });
-  rl.on("close", () => {
-    ended = true;
-    wake?.();
-  });
+  /**
+   * Attaches the three listeners this console lives on.
+   *
+   * A function because the interface is rebuilt around the selector, and a
+   * rebuilt interface with no listeners is a console that has stopped reading.
+   * They are attached together rather than where each was first needed so that
+   * "what is on `rl`" has one answer.
+   */
+  const attach = (target: ReturnType<typeof createInterface>): void => {
+    target.on("SIGINT", () => {
+      if (inFlight) {
+        inFlight.abort();
+        // Emptied too, and that is the point of ticket 09 rather than a tidy-up.
+        // Stopping the turn while letting the line typed over it start the next
+        // one is the console carrying on after being told to stop; what the queue
+        // held is reported by the loop, one flush later, so it does not land in the
+        // middle of the interrupted reply.
+        queue.clear();
+        return;
+      }
+      rl.close();
+    });
+    target.on("line", (raw) => {
+      queue.push(asking(), raw.trim(), inFlight !== null);
+      wake?.();
+    });
+    target.on("close", () => {
+      // The handoff closes this interface on purpose. Treating that as end of
+      // input would quit the program every time the model asked a question.
+      if (handingOff) return;
+      ended = true;
+      wake?.();
+    });
+  };
+  attach(rl);
+
+  /**
+   * Lends stdin to something that reads keys instead of lines, and takes it back.
+   *
+   * Every step here is one `repro/26` measured rather than reasoned:
+   * `rl.close()` because pausing leaks the keys to both consumers;
+   * `process.stdin.resume()` because closing stops the stream and a `keypress`
+   * listener on a paused stream never fires; and the rebuild because a closed
+   * interface does not come back. Lines typed *before* the handoff stay in the
+   * queue untouched — measured, and the reason this is safe at all.
+   */
+  const borrowStdin = async <T>(
+    fn: (input: NodeJS.ReadStream) => Promise<T>,
+  ): Promise<T> => {
+    handingOff = true;
+    rl.close();
+    emitKeypressEvents(process.stdin);
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    try {
+      return await fn(process.stdin);
+    } finally {
+      process.stdin.setRawMode(false);
+      rl = openReadline();
+      attach(rl);
+      rl.setPrompt("> ");
+      handingOff = false;
+    }
+  };
 
   /**
    * The next line this console is allowed to act on, or null once input ends.
@@ -344,7 +473,7 @@ export async function runRepl({
       const turn = await runTurn(graph, null, session, rendered, inFlight.signal);
       inFlight = null;
       account(turn);
-      settle(turn);
+      await settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -379,7 +508,13 @@ export async function runRepl({
       const chosen = choice.kind === "pick" ? choice.session : null;
       picking = null;
       if (chosen === null) process.stdout.write("(new session)\n\n");
-      else pending = await adopt(chosen);
+      else {
+        pending = await adopt(chosen);
+        // A session resumed onto an unanswered question: the selector opens now
+        // rather than after the next prompt, for `adopt`'s own reason — a prompt
+        // here invites the line that starts a new run and orphans the call.
+        await throughSelector();
+      }
       rl.prompt();
       continue;
     }
@@ -413,7 +548,7 @@ export async function runRepl({
       );
       inFlight = null;
       account(turn);
-      settle(turn);
+      await settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -438,7 +573,7 @@ export async function runRepl({
       const turn = await runTurn(graph, resume, session, rendered, inFlight.signal);
       inFlight = null;
       account(turn);
-      settle(turn);
+      await settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -540,7 +675,7 @@ export async function runRepl({
       );
       inFlight = null;
       account(turn);
-      settle(turn);
+      await settle(turn);
       rendered = turn.rendered;
       rl.prompt();
       continue;
@@ -561,7 +696,7 @@ export async function runRepl({
     inFlight = null;
 
     account(turn);
-    settle(turn);
+    await settle(turn);
     rendered = turn.rendered;
     rl.prompt();
   }
@@ -579,13 +714,19 @@ export async function runRepl({
  */
 type Waiting = { kind: "gate"; pending: Pending } | { kind: "question"; quiz: Quiz };
 
-/** Prints whatever the turn produced, and returns what is still waiting. */
-function finish(turn: TurnResult): Waiting | null {
+/**
+ * Prints whatever the turn produced, and returns what is still waiting.
+ *
+ * `onScreen` is false when the caller is about to open the arrow-key selector,
+ * which draws the same questions itself — printing the list first would leave a
+ * copy of it scrolled above the frame.
+ */
+function finish(turn: TurnResult, onScreen: boolean): Waiting | null {
   if (turn.error !== null) process.stdout.write(`${describeError(turn.error)}\n`);
 
   if (turn.questions !== null) {
     const quiz: Quiz = { questions: turn.questions, answers: [] };
-    process.stdout.write(renderQuestion(quiz));
+    if (onScreen) process.stdout.write(renderQuestion(quiz));
     return { kind: "question", quiz };
   }
 

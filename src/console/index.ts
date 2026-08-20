@@ -79,6 +79,22 @@ export {
 // than an error, because the case this tool exists for is the one where none of
 // the options the model thought of is right.
 export { readAnswer, renderQuestion, type Quiz } from "./clarify";
+// The arrow-key half of the same question. `frame` and `press` are pure — the
+// whole argument `picker.ts` made against a selector was that one could not be
+// tested without a terminal, and the half of that argument which survived
+// `repro/26` is this one. What they encode is what a keystroke means while a
+// decision is on screen, which is exactly as silent to get wrong as `readAnswer`.
+export {
+  frame,
+  initial,
+  press,
+  runSelector,
+  width,
+  type Key,
+  type SelectorIO,
+  type SelectorState,
+  type Step,
+} from "./selector";
 export {
   markdownStream,
   renderLine,
