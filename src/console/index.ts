@@ -11,6 +11,11 @@
  * exactly one readline interface and everything reads through it, so nothing
  * else here is allowed to consume input.
  *
+ * `transcript.ts` is the third pure one, and it is pure for a different reason:
+ * it renders messages that have already happened. The live loop and a resumed
+ * session both go through it, which is what stops the same tool call from
+ * printing two ways depending on whether you were watching when it ran.
+ *
  * The seam to the rest of the program is one interface, `AgentGraph`, declared
  * in `agents/loop.ts` and deliberately narrow: the console uses two of its
  * methods — one to drive a turn, one to ask what is parked on a thread — so
@@ -32,7 +37,14 @@ export { runRepl, type ReplOptions, type Start } from "./repl";
 // decides whether the console asks a question or finishes a job. Reading only
 // half of it — the half that was there first — is how a batch of tool calls
 // interrupted by a crash used to vanish without a word (`repro/23`).
-export { describeError, fromModel, fromSubagent, parked, summarizeCall } from "./repl";
+export { describeError, fromModel, fromSubagent, parked } from "./repl";
+// `transcript.ts` holds the vocabulary both render paths share, and
+// `renderHistory` is the one thing here whose output nobody watches being
+// produced: it is printed once, at resume, before the user can type. What it
+// leaves out is a judgement about somebody else's conversation — the four
+// injected `HumanMessage`s that no human typed — so which messages survive
+// the filter is pinned in tests rather than left to the terminal to reveal.
+export { renderHistory, summarizeCall, summarizeResult } from "./transcript";
 // Same reason, and the sharpest case of it: `readDecision` decides whether a
 // keystroke approves a shell command. That an empty line is *not* a decision was
 // a shipping bug once (`repro/15`), so it is pinned where a change fails.

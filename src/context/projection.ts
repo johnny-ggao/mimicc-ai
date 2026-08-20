@@ -83,6 +83,67 @@ export function isPinned(message: BaseMessage): boolean {
   return message.additional_kwargs[PINNED_KEY] === true;
 }
 
+/** Marks the message that stands in for everything before the cut. */
+export const SUMMARY_SOURCE = "context-window";
+
+/**
+ * The id prefix `skills/registry.ts` mints for a slash command's activation.
+ *
+ * A literal rather than an import, and deliberately: `skills/` already imports
+ * {@link PINNED} from here, so reaching the other way would close a cycle over a
+ * six-character string. This is the one copy — `session/read.ts` and
+ * `console/transcript.ts` both used to keep their own.
+ */
+export const SKILL_ACTIVATION_PREFIX = "skill:";
+
+/**
+ * The shape both readers of a message's provenance can supply.
+ *
+ * A hydrated `BaseMessage` satisfies it, and so does the object `checkpoint/
+ * messages.ts` writes to disk — which is what lets the session lister answer
+ * this question **without hydrating anything**. It parses jsonl and must not
+ * instantiate langchain classes to do its job (`session/read.ts` says why).
+ */
+export interface Attributed {
+  id?: string | undefined;
+  additional_kwargs?: Record<string, unknown> | undefined;
+}
+
+/**
+ * Whether this message is the harness talking to itself.
+ *
+ * Four middlewares put a `HumanMessage` into the conversation that no human
+ * typed — project instructions, memory, the skill catalogue, a skill activation
+ * — and everything downstream that shows a conversation to a person has to tell
+ * those apart from the person's own words. Counting them makes an empty session
+ * look like it has content; printing them buries what was actually said under
+ * three thousand characters of tool descriptions.
+ *
+ * The judgement is the {@link PINNED} marker their producers already set, not
+ * the message's text: **the marker is a promise and the content is a payload.**
+ *
+ * Two pinned messages are *not* injections, and both exceptions are about who
+ * caused them:
+ *
+ * - A **skill activation** is pinned, but a person typed `/name` to get it. What
+ *   should not be replayed is the skill's body, and that is a rendering decision
+ *   rather than a reason to pretend the turn never happened.
+ * - A **summary** stands in for messages that are no longer in the history at
+ *   all. Filtering it leaves a conversation with a hole in it and nothing saying
+ *   so — the opposite of what this function is for.
+ */
+export function isInjected(message: Attributed): boolean {
+  const kwargs = message.additional_kwargs;
+  if (kwargs?.["lc_source"] === SUMMARY_SOURCE) return false;
+  if (isSkillActivation(message)) return false;
+  return kwargs?.[PINNED_KEY] === true;
+}
+
+/** Whether this message is the instruction a `/name` command loaded. */
+export function isSkillActivation(message: Attributed): boolean {
+  return (message.id ?? "").startsWith(SKILL_ACTIVATION_PREFIX);
+}
+
 /**
  * Pins a message that somebody else built.
  *

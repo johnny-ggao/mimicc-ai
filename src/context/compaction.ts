@@ -10,7 +10,14 @@ import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 import { z } from "zod";
 
 import { downgrade } from "./downgrade";
-import { planCut, project, requestTokens, tailWithin, type Cut } from "./projection";
+import {
+  planCut,
+  project,
+  requestTokens,
+  SUMMARY_SOURCE,
+  tailWithin,
+  type Cut,
+} from "./projection";
 import { cacheReadOf, usageOf, type ModelUsage } from "../usage";
 
 /**
@@ -89,9 +96,6 @@ Do not include pleasantries, and do not address the user. Write only the summary
 <conversation>
 {conversation}
 </conversation>`;
-
-/** Marks the message that stands in for everything before the cut. */
-export const SUMMARY_SOURCE = "context-window";
 
 export interface ContextWindowOptions {
   /**

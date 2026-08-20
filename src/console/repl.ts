@@ -11,12 +11,12 @@ import {
   type AgentGraph,
 } from "../agents";
 import { markdownStream } from "./markdown";
+import { renderHistory, summarizeCall, summarizeResult } from "./transcript";
 import { describeDrops, InputQueue, type Arrived, type Tag } from "./queue";
 import { describeSession, readChoice, renderSessionList } from "./picker";
 import { spendBreakdown, spendLine } from "./spend";
 import { addSpend, creditsOf, noSpend, type Spend } from "../usage";
 import { listSessions, resolveSession, type Session } from "../session";
-import { TASK_TOOL_NAME } from "../tools";
 import {
   parseSkillCommand,
   renderSkillList,
@@ -172,10 +172,15 @@ export async function runRepl({
     process.stdout.write(`${describeSession(chosen)}\n\n`);
 
     const state = await graph.getState({ configurable: { thread_id: session } });
+    const history = state.values.messages ?? [];
+    // Printed, not skipped. The messages are all back in state either way — this
+    // is for the person, who otherwise decides what to type next against an
+    // empty terminal. `transcript.ts` says what it leaves out and why.
+    process.stdout.write(renderHistory(history));
     // The watermark comes from the graph, not from the row's message count: the
     // row counts bodies stored in the file, the renderer counts the branch it is
     // printing, and the two part ways the moment history is rewritten or forked.
-    rendered = state.values.messages?.length ?? 0;
+    rendered = history.length;
     // Seeded from the row rather than recomputed: the lister already summed this
     // file, and the running total has to continue the session, not restart it.
     spent = { ...chosen.spent };
@@ -736,34 +741,6 @@ async function runTurn(
   return { requests, credits, rendered, error };
 }
 
-/** How much of a tool call's arguments fits on one line of the transcript. */
-const CALL_WIDTH = 76;
-
-/**
- * One line naming a tool call, short enough to read at a glance.
- *
- * `Task` is singled out, and it earns it: dispatches are the one call that comes
- * in threes, and the serialised arguments of three of them are identical for the
- * first sixty characters — `{"description":"Read /Users/…/src` — so the default
- * rendering printed three indistinguishable lines. Leading with the kind and
- * then the objective is what makes concurrent explore agents tellable apart, which is
- * the whole point of showing them.
- */
-export function summarizeCall(name: string, args: unknown): string {
-  const fields = (args ?? {}) as { description?: unknown; subagent_type?: unknown };
-
-  if (name === TASK_TOOL_NAME && typeof fields.description === "string") {
-    const kind = typeof fields.subagent_type === "string" ? fields.subagent_type : "?";
-    return `${name}[${kind}] ${clip(fields.description, CALL_WIDTH)}`;
-  }
-
-  return `${name} ${clip(JSON.stringify(args), CALL_WIDTH)}`;
-}
-
-function clip(text: string, width: number): string {
-  return text.length > width ? `${text.slice(0, width - 3)}...` : text;
-}
-
 /**
  * What an adopted session is parked on: a question to answer, or work to finish.
  *
@@ -874,18 +851,7 @@ function renderStructure(
     }
 
     if (type === "tool") {
-      // MessageContent is a string or an array of content blocks; tools only ever
-      // produce the former, but the type has to be narrowed anyway.
-      const body =
-        typeof message.content === "string"
-          ? message.content
-          : JSON.stringify(message.content);
-      const lines = body.split("\n");
-      const failed = body.startsWith("Error:") || body.startsWith("error:");
-      const summary = failed
-        ? (lines[0] ?? "failed")
-        : `${String(lines.length)} line${lines.length === 1 ? "" : "s"}`;
-      process.stdout.write(`${DIM} → ${summary}${RESET}\n`);
+      process.stdout.write(`${DIM} → ${summarizeResult(message)}${RESET}\n`);
     }
   }
 
