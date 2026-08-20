@@ -16,25 +16,23 @@ import { NEVER_REPLAY } from "./replay";
  * `ToolMessage` — the tool is a **schema declaration**, nothing more.
  *
  * That is not the design anyone reaches for first. The obvious one is to
- * `interrupt()` inside the body, and it is measured broken here
- * (`repro/25-interrupt-inside-a-tool-body.ts`), by our own code:
+ * `interrupt()` inside the body, and `repro/25-interrupt-inside-a-tool-body.ts`
+ * measured three things wrong with it. Two were **our own defects and have since
+ * been fixed** (`stallGuard` swallowed the `GraphInterrupt` because langgraph
+ * implements `interrupt()` as a throw; `toolRecovery` could not tell a pause from
+ * a crash) — so they are history rather than reasons, and the probe carries both
+ * the original table and the re-measurement.
  *
- * - `stallGuard` turns a throwing tool into a readable `ToolMessage`, and
- *   langgraph implements `interrupt()` **as a throw** — so the question never
- *   reaches the user and the model reads `"GraphInterrupt: … Please fix your
- *   mistakes."`.
- * - `toolRecovery` cannot tell "paused to ask a human" from "the process died
- *   mid-call": the gate opens, but on resume the call is journaled as
- *   interrupted-and-unsafe-to-repeat and `interruptedText` replaces the answer.
- * - Even with neither installed, **the body re-runs from the top on resume**
- *   (`body-entered` twice), which would make idempotence a contract requirement
- *   nobody can enforce.
+ * The third is not a defect and cannot be fixed: **the body re-runs from the top
+ * on resume** — `interrupt()` replays the call rather than suspending it
+ * (`body-entered` twice, in every scenario, before and after the fix). That is
+ * langgraph's semantics, and it would make idempotence a contract requirement
+ * nobody can enforce.
  *
- * `afterModel` has none of those problems: there is no body to re-run, and
- * neither `wrapToolCall` middleware ever sees it. deer-flow arrived at the same
- * place from the product side rather than from a probe — its `ask_clarification`
- * body is a one-line placeholder reading *"The actual logic is handled by
- * ClarificationMiddleware which intercepts this tool call"*
+ * `afterModel` does not have it: there is no body to re-run. deer-flow arrived at
+ * the same place from the product side rather than from a probe — its
+ * `ask_clarification` body is a one-line placeholder reading *"The actual logic
+ * is handled by ClarificationMiddleware which intercepts this tool call"*
  * (`backend/packages/harness/deerflow/tools/builtins/clarification_tool.py:22`).
  *
  * ## Why the arguments are validated twice

@@ -20,11 +20,15 @@ import {
  *
  * Two halves, and the second one is why this file exists at all. The pure half —
  * what the model is allowed to ask, and how the answer reads coming back — is
- * ordinary. The wired half proves the thing `repro/25-interrupt-inside-a-tool-body.ts`
- * measured **broken** for the obvious design: an `interrupt()` raised from inside
- * a tool body is eaten by `stallGuard` (it looks like a throw) and mis-journaled
- * by `toolRecovery` (it looks like a crash). Both of those middlewares are in the
- * stack `createUniversalAgent` builds, so a test that skips them would pass while
+ * ordinary. The wired half runs the question through **the real middleware stack**,
+ * which is where this mechanism has already been broken once: an `interrupt()`
+ * raised from a tool body was eaten by `stallGuard` (it looks like a throw) and
+ * mis-journaled by `toolRecovery` (it looks like a crash), measured in
+ * `repro/25-interrupt-inside-a-tool-body.ts` and fixed since (d9406c9).
+ *
+ * That history is the argument for testing here rather than against a bare
+ * `createAgent`: this path does not break in the tool, it breaks in whatever else
+ * is installed around it — and a test that skips the stack would stay green while
  * the shipping program asked nobody anything.
  */
 
@@ -235,7 +239,9 @@ describe("asking, through the stack that broke the obvious design", () => {
     };
 
     // ③ The model got the answer as this call's own result — not `interruptedText`,
-    //    which is what `toolRecovery` substituted on the tool-body path (repro/25).
+    //    which is what `toolRecovery` used to substitute on the tool-body path
+    //    (repro/25, before d9406c9). Still asserted: it is the shape a regression
+    //    would take, whichever middleware caused it.
     const result = done.messages.find(
       (message): message is ToolMessage =>
         ToolMessage.isInstance(message) && message.tool_call_id === "call_clarify_1",
