@@ -1,6 +1,7 @@
 import type { UsageMetadata } from "@langchain/core/messages";
 import { readFile, stat } from "node:fs/promises";
 
+import { isInjected, isSkillActivation, SKILL_ACTIVATION_PREFIX } from "../context";
 import { addSpend, bucketsOf, noSpend, type Spend } from "../usage";
 import { basename } from "node:path";
 
@@ -42,7 +43,21 @@ export interface Session {
    * the text, because the id is a contract and the text is a payload.
    */
   title: string;
-  /** Message bodies stored in this file. One per line, so this is a line count. */
+  /**
+   * Messages a person would recognise as part of the conversation.
+   *
+   * **Not** the number of bodies in the file, and the gap is not small. Four
+   * middlewares inject a `HumanMessage` that nobody typed — project
+   * instructions, memory, the skill catalogue, a skill activation — so every
+   * session carried a constant three or so of them, and the one measured here
+   * read `5 msg` for a conversation of one question and one answer. A count that
+   * inflates every row by the same amount is worse than no count: it makes an
+   * abandoned session and a real one look the same size.
+   *
+   * The same verdict decides what `console/transcript.ts` replays, and that is
+   * the point — a row that promises five messages and a resume that prints three
+   * are two numbers about one conversation.
+   */
   messages: number;
   /** File mtime. The `header` line that would carry a real timestamp is never written yet. */
   lastActive: Date;
@@ -99,9 +114,6 @@ export interface Session {
 /** How much of the first message becomes the title. */
 const TITLE_WIDTH = 72;
 
-/** The id prefix `skills/registry.ts` mints for a slash command's activation. */
-const SKILL_ID = "skill:";
-
 export async function readSession(path: string): Promise<Session | undefined> {
   let raw: string;
   let lastActive: Date;
@@ -115,6 +127,11 @@ export async function readSession(path: string): Promise<Session | undefined> {
   }
 
   let messages = 0;
+  // Bodies on disk, injections included. Kept apart from `messages` because the
+  // two answer different questions: this one decides whether the file is a
+  // session at all, and filtering it would hide a run that died before its first
+  // reply instead of listing it as the stub it is.
+  let bodies = 0;
   let title = "";
   const spent: Spend = noSpend();
   const byModel: Record<string, Spend> = {};
@@ -152,14 +169,23 @@ export async function readSession(path: string): Promise<Session | undefined> {
     };
 
     if (record.kind === "message") {
-      messages += 1;
+      bodies += 1;
+      // Tokens are summed off every body, injected or not: the question that
+      // column answers is what the session *cost*, and a catalogue nobody typed
+      // was still paid for on every request that carried it.
       collect(spent, byModel, record.data);
+
+      const stored = attributed(record);
+      if (isInjected(stored)) continue;
+      messages += 1;
+
       if (title === "") {
-        const id = typeof record.id === "string" ? record.id : "";
-        if (id.startsWith(SKILL_ID)) {
+        if (isSkillActivation(stored)) {
           // A session that is *only* a slash command still deserves a name, and
           // `/wayfinder` is a better one than the body of the skill it loaded.
-          if (fallback === "") fallback = `/${id.slice(SKILL_ID.length)}`;
+          if (fallback === "") {
+            fallback = `/${(stored.id ?? "").slice(SKILL_ACTIVATION_PREFIX.length)}`;
+          }
         } else {
           title = titleOf(record.data);
         }
@@ -195,7 +221,10 @@ export async function readSession(path: string): Promise<Session | undefined> {
 
   // A file with no message line is not a session anyone can resume into. It is
   // also not damage: a run that died before its first super-step lands here.
-  if (messages === 0) return undefined;
+  // Deliberately `bodies` rather than `messages`: a session whose only stored
+  // message is an injection is still a file on disk with a thread behind it, and
+  // dropping it from the list would be this reader deciding it never happened.
+  if (bodies === 0) return undefined;
 
   return {
     id: basename(path, ".jsonl"),
@@ -206,6 +235,41 @@ export async function readSession(path: string): Promise<Session | undefined> {
     atGate: newest !== undefined && gated.has(newest),
     spent,
     byModel,
+  };
+}
+
+/**
+ * The provenance fields of a stored message, in the shape `isInjected` reads.
+ *
+ * ⚠️ **The id is read from two places, and that is the whole subtlety.** A body
+ * on disk is `{ kind, id, data: { type, data: { content, additional_kwargs, … } } }`
+ * — langchain's serialisation nested inside this file's own envelope — and the
+ * id appears in both, matching, on every message this version writes. It is
+ * taken from the envelope when the inner one is absent, because this reader
+ * exists for **files somebody else wrote, possibly a while ago**: an older line
+ * carries the envelope id and nothing inside. Reading only the inner one turned
+ * `/wayfinder` back into a title of `<skill name="wayfinder">`, which is the
+ * exact failure the id was made a contract to prevent (`tests/session.test.ts`).
+ *
+ * Reading the fields rather than rehydrating the message is the other half.
+ * This lister must not instantiate langchain classes from a file it did not
+ * write — `repro/08-load-trust-boundary.ts` measured what `load()` will
+ * construct from a hand-edited line — and a list would do it once per session.
+ */
+function attributed(record: { id?: unknown; data?: unknown }): {
+  id?: string;
+  additional_kwargs?: Record<string, unknown>;
+} {
+  const stored = record.data as { data?: unknown } | null;
+  const inner = stored?.data as
+    { id?: unknown; additional_kwargs?: unknown } | null | undefined;
+  const id = typeof inner?.id === "string" ? inner.id : record.id;
+  const kwargs = inner?.additional_kwargs;
+  return {
+    ...(typeof id === "string" ? { id } : {}),
+    ...(kwargs !== null && typeof kwargs === "object"
+      ? { additional_kwargs: kwargs as Record<string, unknown> }
+      : {}),
   };
 }
 

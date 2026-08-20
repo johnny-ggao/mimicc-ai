@@ -298,3 +298,87 @@ test("an id that could name a path is refused rather than followed", async () =>
 test("a state directory that was never created is empty history, not a failure", async () => {
   expect(await listSessions(join(tmpdir(), "mimicc-does-not-exist-9d3f"))).toEqual([]);
 });
+
+/**
+ * What the `N msg` column counts.
+ *
+ * The number is read by a person choosing which session to carry on, and four
+ * middlewares put a `HumanMessage` into every conversation that nobody typed.
+ * Measured on this repository's own history: a session of one question and one
+ * answer read `5 msg`, of which the loudest was 3019 characters of skill
+ * catalogue. A count that adds the same constant to every row cannot be used
+ * for the one thing it is for — telling a real session from an abandoned one.
+ *
+ * The marker is asserted as the literal on disk rather than through `PINNED_KEY`
+ * on purpose: this file's whole seam is *files somebody else wrote*, and if that
+ * string ever changes, every session file already written is the thing that
+ * breaks.
+ */
+const INJECTED = (id: string, content: string) =>
+  JSON.stringify({
+    kind: "message",
+    id,
+    data: {
+      type: "human",
+      data: { content, additional_kwargs: { mimicc_pinned: true } },
+    },
+  });
+
+test("what the harness injected is not counted as something a human said", async () => {
+  const dir = fixture([
+    [
+      "cccc1111-1111-4111-8111-111111111111.jsonl",
+      INJECTED("instructions", "<project-instructions>…</project-instructions>"),
+      INJECTED("memory", "<memory>…</memory>"),
+      INJECTED("skill-catalog", "<skill-catalog>…</skill-catalog>"),
+      HUMAN("a", "我问的问题"),
+      AI("b", "我的回答"),
+    ],
+  ]);
+
+  const [session] = await listSessions(dir);
+  expect(session?.messages).toBe(2);
+  // And the title comes from the question, not from whichever injection is first.
+  expect(session?.title).toBe("我问的问题");
+});
+
+test("a slash command counts: a person typed it, even though it is pinned", async () => {
+  const SKILL = JSON.stringify({
+    kind: "message",
+    id: "skill:wayfinder",
+    data: {
+      type: "human",
+      data: {
+        content: '<skill name="wayfinder">…</skill>',
+        additional_kwargs: { mimicc_pinned: true },
+      },
+    },
+  });
+  const dir = fixture([
+    ["cccc2222-2222-4222-8222-222222222222.jsonl", SKILL, AI("b", "好")],
+  ]);
+
+  const [session] = await listSessions(dir);
+  expect(session?.messages).toBe(2);
+  expect(session?.title).toBe("/wayfinder");
+});
+
+/**
+ * The guard that decides whether a file is a session at all stayed on the raw
+ * body count. A run that died between injecting the catalogue and getting a
+ * reply is a thread with a checkpoint behind it — resumable, and listing it as
+ * the stub it is beats this reader deciding it never happened.
+ */
+test("a session whose only body is an injection is still listed", async () => {
+  const dir = fixture([
+    [
+      "cccc3333-3333-4333-8333-333333333333.jsonl",
+      INJECTED("skill-catalog", "<skill-catalog>…</skill-catalog>"),
+    ],
+  ]);
+
+  const [session] = await listSessions(dir);
+  expect(session).toBeDefined();
+  expect(session?.messages).toBe(0);
+  expect(session?.title).toBe("(无标题)");
+});
