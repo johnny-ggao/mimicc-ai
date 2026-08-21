@@ -42,3 +42,47 @@ test("reports a non-repository directory as such", () => {
     "Inside a git repository: no",
   );
 });
+
+/**
+ * The `Clarify` gate is written twice on purpose, and this pins that both copies
+ * still say it.
+ *
+ * The technique is deer-flow's: its complexity gate for `write_todos` appears in
+ * the system prompt (*"DO NOT use this tool for simple tasks (< 3 steps)"*) **and**
+ * in the tool's own description (*"Only use for complex tasks (3+ steps)"*), with
+ * a test asserting the two agree (`backend/tests/test_subagent_routing_prompt.py::
+ * test_general_purpose_and_task_descriptions_match_routing_policy`). The model
+ * reads both places, and a rule that survives in only one of them is a rule that
+ * fires half the time.
+ *
+ * ⚠️ **This asserts the words are there, not that the model obeys them.** That is
+ * the whole limitation of deer-flow's suite and the reason `repro/27` exists:
+ * measured 2026-08-21, the prompt *before* this section said "ask" in one place
+ * and the model asked in **0 of 12 runs**. Green here means nothing about
+ * behaviour — it means the next edit cannot silently delete half the rule.
+ */
+test("the Clarify gate is stated in both places the model reads", () => {
+  // The workflow's first step: the judgement happens before the first tool call.
+  expect(STATIC_PROMPT).toContain("Decide whether you can start");
+  expect(STATIC_PROMPT).toContain("Clarify first, before any Bash, Write or Edit");
+
+  // The tool list: same gate, in the entry the model reads when choosing a tool.
+  expect(STATIC_PROMPT).toContain(
+    "put a decision to the user as numbered options, **before you start working**",
+  );
+});
+
+/**
+ * Both directions, because over-asking and under-asking are two failures and a
+ * prompt that only guards one gets pushed into the other. `repro/27`'s `trivial`
+ * case is the behavioural half of this; these are the words it depends on.
+ */
+test("the ask rule keeps its brake as well as its trigger", () => {
+  expect(STATIC_PROMPT).toContain("Asking costs one round-trip");
+  // The trigger that targets the failure this tool was built for: an answer that
+  // ends by listing decisions instead of putting them on screen.
+  expect(STATIC_PROMPT).toContain("would otherwise end with a list of things");
+  // The brakes.
+  expect(STATIC_PROMPT).toContain("Read, Glob or Grep would settle it");
+  expect(STATIC_PROMPT).toContain("picking wrong costs one small edit");
+});
