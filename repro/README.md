@@ -54,10 +54,19 @@
 | `25-interrupt-inside-a-tool-body.ts` | 工具体里 `interrupt()` 能不能问：初测**堵死**，两个原因都是我们自己的缺陷（`stallGuard` 把 `GraphInterrupt` 当异常吞掉，`toolRecovery` 把「停下来问人」判成「进程死在半路」）——**已修，d9406c9**，复测四个场景全部与 `bare` 一致。剩下一条修不掉：**体会整个重放**（`kinds.ts:228` 那条反证对工具体成立），所以问题工具仍然走 `afterModel`——那条路上没有体可重跑 | 否（stub） |
 | `26-handing-stdin-to-raw-mode.ts` | 方向键选单要把 stdin 从 readline 手里接过来：**`rl.pause()` 是错的**——选单里的 Enter 被两边各收一份，readline 那份变成空行进队列（`readDecision` 专门防的就是空行）；**`rl.close()` + 重建是干净的**，四项全过。硬边：交接后要自己 `stdin.resume()`；`rl.close()` 会触发 `repl.ts:249` 的 `ended = true` | 否 |
 | `27-does-the-model-reach-for-clarify.ts` | 给了它 `Clarify`，它会不会**先问再动手**：基线 12 跑 **0 次**；判断挂进工作流第一步 + 工具描述里再写一遍 + cost/benefit 之后 `build` **0/5 → 5/5**、反向断言 `trivial` 仍 0/2。⚠️ 又试三版去攻 `analysis` 全部没成，**而最大的收获是方法上的：n=5 分不出这几版**（`build` 四版 5/4/3/4 全在噪声里）——`analysis` 已降为观察项，判据只落在 `build` 与 `trivial` | **是**（一轮约 60k in / 20k out） |
+| `28-what-reasoning-costs-the-screen.ts` | 终端上那段灰字：**一个回合的灰字段数 == 模型调用次数**（1 + 工具跳数），所以「段数太多」不是「一段太长」；`reasoning_content` **落盘且冷读回得来**（图里标着「读代码读不出来」的那条前提，核掉了）；**活着那条印它、`renderHistory` 不印**——两条渲染路径不一致，量出来的 | 否（stub） |
+| `29-what-reasoning-really-costs.ts` | 屏幕上思维链与正文各占多少行、真模型是不是每一跳都想、单段峰值。**用出货那套装配量**（真提示词、真工具），只把 `maxTokens` 压到 2048 | **是**（3 个回合，约 50k in / 15k out） |
 
-**两个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
-2026-08-13 用户批准）与 `19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
-合计 < $0.001，2026-08-19 用户批准）。其余要么打本地 stub server，要么纯算术，要么小请求。
+**三个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
+2026-08-13 用户批准）、`19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
+合计 < $0.001，2026-08-19 用户批准），与 `29-what-reasoning-really-costs.ts`
+（3 个回合，约 50k in / 15k out，2026-08-21 用户批准）。其余要么打本地 stub server，
+要么纯算术，要么小请求。
+
+⚠️ **花钱的探针必须同时登记两处**：这张表里的「花钱」栏，**以及 `scripts/probe-smoke.ts`
+的 `PAID`**。只登记前者的后果是：`bun run probes:smoke` 会拿真 provider 去跑它，
+然后在 `TIMEOUT_MS` 上限被杀掉——**跑一次守卫就花一次钱，而且它永远报红**。
+2026-08-21 在 `27-does-the-model-reach-for-clarify.ts` 上实际发生过。
 
 ⚠️ **别用 `expect -ex {中文}`**：这台机器上的 expect 匹配 CJK 模式会**直接被信号 10 打死**
 （2026-08-20 实测，`/bin/echo 明白了` + `expect -ex {明白了}` 就复现，退出码 138）。

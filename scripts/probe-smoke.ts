@@ -43,6 +43,8 @@ const PAID: Record<string, string> = {
   "05-write-lost-update.ts": "3 次采样，小额",
   "08-overflow.ts": "一次约 1.1M token 的未命中输入，实测 $0.09",
   "19-orphan-tool-call.ts": "三次小请求，合计 < $0.001",
+  "29-what-reasoning-really-costs.ts":
+    "3 个回合，约 50k in / 15k out，maxTokens 压到 2048",
 };
 
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */
