@@ -46,7 +46,7 @@ import { isAIMessage, HumanMessage, type BaseMessage } from "@langchain/core/mes
 
 import { createUniversalAgent, DURABILITY, RECURSION_LIMIT } from "../src/agents";
 import { JsonlSaver } from "../src/checkpoint";
-import { fromModel, renderHistory } from "../src/console";
+import { fromModel, renderHistory, statusRow, summarizeReasoning } from "../src/console";
 
 const DIR = join(import.meta.dir, "..", ".mimicc", "probe-28");
 const THREAD = "probe-28";
@@ -244,9 +244,49 @@ const restoredReasoning = restored
 
 // ── 两条渲染路径那一问 ────────────────────────────────────────────────────────
 
+/**
+ * ⚠️ **这一节 2026-08-21 换过量法，因为原来那个已经答错了。**
+ *
+ * 原来问的是「流里有没有 reasoning」——在控制台把它逐字裸写进 stdout 的那个年代，
+ * 「流里有」等于「屏幕上有」，所以那个观测面是对的。**票 05 落地之后不再等价**：
+ * 流一个字没变（模型照样发），变的是渲染——`src/console/reasoning.ts` 把它折成一行。
+ *
+ * 所以原来的判据会一直报「活着那条印、恢复那条不印」，**而这句话现在是假的**。
+ * 这正是 `repro/README.md` 顶上警告的那种腐烂：跑得起来，答错。
+ *
+ * 换成量**两条路径各自产出的那一行**，用的是出货的那两个函数，不抄。
+ */
 const replayed = renderHistory(restored);
-const liveShows = segments.some((one) => one.includes(MARK));
-const replayShows = replayed.includes(MARK);
+
+/**
+ * 活着那条：**一段一收**，与 `repl.ts` 同一条路（它在正文到达或结构行出现时收口）。
+ *
+ * ⚠️ 一开始写成把所有段一起推进去、只收一次，得到「思考 86 字」——那是**假对账**：
+ * 比对的两侧都从同一份消息推出来，怎么写都会过。判据必须是
+ * **屏幕上那几行 与 恢复出来那几行逐行相等**。
+ */
+const liveTrace = segments.map((one) => {
+  const row = statusRow({
+    write: () => undefined,
+    columns: () => 80,
+    isTTY: false,
+    styled: false,
+  });
+  row.push(one);
+  return `· ${summarizeReasoning(row.settle() ?? "")}`;
+});
+
+/** 恢复那条：`renderHistory` 自己印的那一行。 */
+const replayTrace = restored
+  .map((one) => one.additional_kwargs["reasoning_content"])
+  .filter((one): one is string => typeof one === "string" && one.length > 0)
+  .map((one) => `· ${summarizeReasoning(one)}`);
+
+const sameShape =
+  liveTrace.length === replayTrace.length &&
+  liveTrace.every((line, index) => line === replayTrace[index]) &&
+  replayTrace.every((line) => replayed.includes(line));
+const rawInReplay = replayed.includes(MARK);
 
 // ── 报告 ─────────────────────────────────────────────────────────────────────
 
@@ -276,9 +316,9 @@ out(
 out("  ⚠️ 两问都要看：在盘上但读不回来、读得回来但没写盘，是两种不同的坏法。");
 
 out("");
-out("=== 判据 ③：两条渲染路径印不印它？（本图判据 2）===");
-out(`  活着那条（repl.ts 的 messages 流）：  ${liveShows ? "🔴 印" : "✅ 不印"}`);
-out(`  恢复那条（renderHistory）：           ${replayShows ? "🔴 印" : "✅ 不印"}`);
-out(
-  `  → ${liveShows !== replayShows ? "🔴 两条路径不一致——这正是本图判据 2 要治的" : "✅ 一致"}`,
-);
+out("=== 判据 ③：两条渲染路径长得一样吗？（本图判据 2）===");
+out(`  活着那条折出来的：  ${liveTrace.join("  ")}`);
+out(`  恢复那条印出来的：  ${replayTrace.join("  ")}`);
+out(`  ${sameShape ? "✅" : "🔴"} 两条路径逐行相等，且恢复的转录里确实印了这几行`);
+out(`  ${rawInReplay ? "🔴 恢复的转录里出现了思维链原文" : "✅ 两条路径都不印原文"}`);
+out("  ⚠️ 原来这一节量的是「流里有没有」，票 05 之后那个观测面不再等价——换法的理由写在代码里。");

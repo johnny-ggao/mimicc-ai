@@ -56,6 +56,7 @@
 | `27-does-the-model-reach-for-clarify.ts` | 给了它 `Clarify`，它会不会**先问再动手**：基线 12 跑 **0 次**；判断挂进工作流第一步 + 工具描述里再写一遍 + cost/benefit 之后 `build` **0/5 → 5/5**、反向断言 `trivial` 仍 0/2。⚠️ 又试三版去攻 `analysis` 全部没成，**而最大的收获是方法上的：n=5 分不出这几版**（`build` 四版 5/4/3/4 全在噪声里）——`analysis` 已降为观察项，判据只落在 `build` 与 `trivial` | **是**（一轮约 60k in / 20k out） |
 | `28-what-reasoning-costs-the-screen.ts` | 终端上那段灰字：**一个回合的灰字段数 == 模型调用次数**（1 + 工具跳数），所以「段数太多」不是「一段太长」；`reasoning_content` **落盘且冷读回得来**（图里标着「读代码读不出来」的那条前提，核掉了）；**活着那条印它、`renderHistory` 不印**——两条渲染路径不一致，量出来的 | 否（stub） |
 | `29-what-reasoning-really-costs.ts` | 屏幕上思维链与正文各占多少行、真模型是不是每一跳都想、单段峰值。**用出货那套装配量**（真提示词、真工具），只把 `maxTokens` 压到 2048 | **是**（3 个回合，约 50k in / 15k out） |
+| `30-the-thinking-row-on-a-real-terminal.ts` | 那一行思考在**真 pty** 上印成了什么：把 `\r` 与 `\x1b[2K` 真的执行一遍之后，**屏幕上只剩每段一行痕迹、思考原文一个字不留**；子 agent 的点与状态行不打架（点在痕迹行之后）；正文完整。🔴 **顺带抓到一个出货 bug**：这个 pty 报 0 列，而 `process.stdout.columns ?? 80` 接不住 0，整行会塌成一个省略号 | 否（假图，连模型都没有） |
 
 **三个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）、`19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，
