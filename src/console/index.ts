@@ -44,7 +44,12 @@ export { describeError, fromModel, fromSubagent, parked } from "./repl";
 // leaves out is a judgement about somebody else's conversation — the four
 // injected `HumanMessage`s that no human typed — so which messages survive
 // the filter is pinned in tests rather than left to the terminal to reveal.
-export { renderHistory, summarizeCall, summarizeResult } from "./transcript";
+export {
+  renderHistory,
+  summarizeCall,
+  summarizeReasoning,
+  summarizeResult,
+} from "./transcript";
 // Same reason, and the sharpest case of it: `readDecision` decides whether a
 // keystroke approves a shell command. That an empty line is *not* a decision was
 // a shipping bug once (`repro/15`), so it is pinned where a change fails.
@@ -102,3 +107,19 @@ export {
   STYLES,
   type MarkdownStream,
 } from "./markdown";
+// The chain of thought's one row, exported for its tests for the same reason
+// everything above it is. Three of these encode a fact that was measured rather
+// than reasoned out: `columnsOf` because a truncated row that wraps is two rows
+// and `\x1b[2K` can only take back one; `latestSentence` because which
+// punctuation ends a sentence decides whether the reader sees half of one; and
+// `statusRow`'s contract that the row is erased before anything else prints,
+// which is silent to get wrong — the symptom is output that vanishes.
+export {
+  clipColumns,
+  columnsOf,
+  latestSentence,
+  rowFor,
+  statusRow,
+  type StatusRow,
+  type StatusRowIO,
+} from "./reasoning";

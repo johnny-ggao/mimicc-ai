@@ -69,6 +69,26 @@ export function summarizeCall(name: string, args: unknown): string {
 }
 
 /**
+ * One line standing in for a block of the model's reasoning.
+ *
+ * The block itself is not here, and that is the decision rather than a
+ * shortcut: measured on three real turns, the chain of thought took 76% of the
+ * screen and one block ran 64 rows (`repro/29`). What survives is the fact that
+ * it happened and how much of it there was — enough to know there is something
+ * to go and read, which is the whole job of a line in a transcript.
+ *
+ * ⚠️ It takes the text rather than the message because **both render paths have
+ * to produce this same line**, and only one of them has a message: live, the
+ * block arrives as a run of chunks that no message exists for yet. Anything this
+ * line said that could not be recomputed from `additional_kwargs` later would
+ * make the two transcripts differ — which is the exact defect this whole change
+ * is about.
+ */
+export function summarizeReasoning(reasoning: string): string {
+  return `思考 ${String([...reasoning].length)} 字`;
+}
+
+/**
  * One line standing in for a tool's output.
  *
  * A line count rather than the output, because the output is why this is a
@@ -140,6 +160,15 @@ export function renderHistory(messages: readonly BaseMessage[]): string {
     }
 
     if (type === "ai") {
+      // Before the prose and before the calls, because that is the order it
+      // happened in: the model thinks, then it speaks or reaches for a tool.
+      // Not counted as `printed` — it is an annotation on a message, not a
+      // message, so a history containing nothing else is still an empty one.
+      const reasoning = message.additional_kwargs["reasoning_content"];
+      if (typeof reasoning === "string" && reasoning.length > 0) {
+        out += `${DIM}· ${summarizeReasoning(reasoning)}${RESET}\n`;
+      }
+
       const text = textOf(message);
       if (text !== "") {
         out += "\n";

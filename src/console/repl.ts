@@ -11,8 +11,14 @@ import {
   RECURSION_LIMIT,
   type AgentGraph,
 } from "../agents";
-import { markdownStream } from "./markdown";
-import { renderHistory, summarizeCall, summarizeResult } from "./transcript";
+import { markdownStream, stylingEnabled } from "./markdown";
+import { statusRow } from "./reasoning";
+import {
+  renderHistory,
+  summarizeCall,
+  summarizeReasoning,
+  summarizeResult,
+} from "./transcript";
 import { describeDrops, InputQueue, type Arrived, type Tag } from "./queue";
 import { describeSession, readChoice, renderSessionList } from "./picker";
 import { readAnswer, renderQuestion, type Quiz } from "./clarify";
@@ -883,6 +889,38 @@ async function runTurn(
     }
   };
 
+  // The chain of thought, on one row that gets repainted rather than a block
+  // that gets appended. Why it is one row and not three is in `reasoning.ts`;
+  // the short version is that `\x1b[2K` clears one screen row, so one row is
+  // the only unit this console can take back.
+  const thinking = statusRow({
+    write: (text) => process.stdout.write(text),
+    // Read per repaint, not captured: a window can be resized mid-block.
+    columns: () => process.stdout.columns ?? 80,
+    // Two switches rather than one, because they are about different things:
+    // repainting needs a terminal, dimming needs colour to be wanted at all.
+    isTTY: process.stdout.isTTY === true,
+    styled: stylingEnabled(),
+  });
+
+  /**
+   * Ends the open block of reasoning, if there is one, leaving the one line that
+   * stands for it.
+   *
+   * ⚠️ Called before **everything** else that writes — prose, structure, the
+   * subagent dots — and that is the whole contract. The live row is erased with
+   * `\r`, which clears whatever row the cursor is on: anything printed while the
+   * row is still open lands inside it and then gets wiped.
+   */
+  const settleThinking = (): void => {
+    const block = thinking.settle();
+    if (block === undefined) return;
+    // Before the trace writes its own dim, because that trace ends with RESET
+    // and would otherwise turn off a dim this function does not own.
+    closeDim();
+    process.stdout.write(`${DIM}· ${summarizeReasoning(block)}${RESET}\n`);
+  };
+
   try {
     // The array form of streamMode yields [mode, payload] tuples; the typings do
     // not narrow that, so this is the one place we assert the shape.
@@ -920,6 +958,9 @@ async function runTurn(
         // empty batch would auto-approve it.
         if (isClarifyRequest(value)) questions = value.questions;
         if (state.messages !== undefined) {
+          // The block of reasoning that led to this structure ends here: the
+          // model thought, then it reached for a tool.
+          settleThinking();
           // Flushed first, and not as a precaution. A held partial line would
           // otherwise be printed *after* the tool-call line below it, which
           // arrives on a different event stream — the transcript would show the
@@ -942,6 +983,12 @@ async function runTurn(
         if (now - lastDot < 1000) continue;
         lastDot = now;
 
+        // A dot printed while the live row is open would land inside it. This
+        // cannot be reasoned away by "a subagent only runs inside a tool call,
+        // so the main model is not streaming" — the block is still open until
+        // the values event arrives, and that is later.
+        settleThinking();
+
         // A subagent's tokens are dropped rather than rendered. They arrive on
         // this same stream — inherited through AsyncLocalStorage, so there is
         // nothing to switch off at the call site — and with two explore agents running
@@ -958,24 +1005,30 @@ async function runTurn(
 
       const reasoning = chunk.additional_kwargs["reasoning_content"];
       if (typeof reasoning === "string" && reasoning.length > 0) {
-        openDim();
-        process.stdout.write(reasoning);
+        thinking.push(reasoning);
       }
 
       if (typeof chunk.content === "string" && chunk.content.length > 0) {
+        // The block ends the moment the model starts answering.
+        settleThinking();
         if (dimmed) {
           closeDim();
           process.stdout.write("\n\n");
         }
-        // The reply is markdown and gets read as markdown. The reasoning above
-        // deliberately does not: it is dim by the paragraph and rendering it
-        // would compete with the answer for the eye.
+        // The reply is markdown and gets read as markdown. The reasoning does
+        // not: it is one dim row while it happens and one dim line afterwards,
+        // and rendering either would compete with the answer for the eye.
         markdown.push(chunk.content);
       }
     }
   } catch (caught) {
     error = caught;
   } finally {
+    // Settled on every exit path, and for a sharper reason than the two below:
+    // the live row is a row the terminal is still holding. An interrupt landing
+    // mid-thought would otherwise leave it on screen, and the next thing printed
+    // would overwrite it rather than follow it.
+    settleThinking();
     // Flushed on every exit path for the same reason the dim escape is closed on
     // every exit path: an interrupt or a failure mid-line must not swallow the
     // text the model had already produced.
