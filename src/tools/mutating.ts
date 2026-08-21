@@ -7,7 +7,9 @@ import { z } from "zod";
 import { NEVER_REPLAY } from "./replay";
 
 import { AmbiguousMatch, locate } from "./matching";
-import { ROOT, resolveInside, withPathLock } from "./workspace";
+import { ROOT, withPathLock } from "./workspace";
+
+import { resolvePath } from "./permission";
 
 /** A command that has not produced anything in this long is not going to. */
 const MAX_COMMAND_MS = 120_000;
@@ -41,7 +43,7 @@ const MAX_OUTPUT_BYTES = 32_000;
  */
 export const writeTool = tool(
   async ({ path, content }): Promise<string> => {
-    const full = resolveInside(path);
+    const full = resolvePath(path);
 
     return withPathLock(full, async () => {
       if (await Bun.file(full).exists()) {
@@ -80,7 +82,7 @@ export const editTool = tool(
       throw new Error("oldString is empty: there is nothing to locate");
     }
 
-    const full = resolveInside(path);
+    const full = resolvePath(path);
 
     // The whole read-modify-write is inside the lock. Holding it for only the
     // write would leave exactly the gap that loses one of two concurrent edits.

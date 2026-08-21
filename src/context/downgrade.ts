@@ -38,13 +38,13 @@ import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
 /**
  * Where the full text goes.
  *
- * ⚠️ **The name is load-bearing.** It cannot be `.mimicc`: the tools' `SECRET`
- * pattern blacklists that directory outright (`tools/workspace.ts:28`) because
- * that is where session files live, so a pointer into it is a pointer the model's
- * own `Read` refuses to open. It cannot be `/tmp` either — `resolveInside`
- * confines every read to the working directory. `tests/downgrade.test.ts` reads a
- * pointer back through the real tool, which is the only way to know this stayed
- * true.
+ * ⚠️ **The name is load-bearing.** It cannot be `.mimicc`: the hard floor's
+ * `SECRET` pattern blacklists that directory outright (`tools/permission.ts`)
+ * because that is where session files live, so a pointer into it is a pointer the
+ * model's own `Read` refuses to open. It cannot be `/tmp` either — the hard
+ * floor confines every read to the working directory. `tests/downgrade.test.ts`
+ * reads a pointer back through the real tool, which is the only way to know this
+ * stayed true.
  */
 export const DOWNGRADE_DIR = ".mimicc-outputs";
 

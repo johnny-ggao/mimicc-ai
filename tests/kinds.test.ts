@@ -105,6 +105,7 @@ describe("what a kind is called", () => {
       "ContextWindow",
       "UsageMeter",
       "PinTurnTask",
+      "PermissionGate",
     ]);
   });
 });

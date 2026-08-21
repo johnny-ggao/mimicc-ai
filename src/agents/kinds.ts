@@ -4,6 +4,8 @@ import type { AnyAgentMiddleware } from "langchain";
 import { pinTurnTask, projectInstructions } from "../context";
 import { injectMemory, type MemoryStore } from "../memory";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
+import { type RuleSet } from "../tools/permission";
+import { permissionGate } from "./permissionGate";
 import { usageMeter, type ModelUsage } from "../usage";
 import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
 
@@ -97,6 +99,12 @@ export interface AgentEnvironment {
    * of subagent exists that outlives one dispatch.
    */
   memory?: MemoryStore;
+  /**
+   * The permission rules, already read and merged, or absent for none. Shared by
+   * every kind through `agentStack`, so a subagent's `Read` keeps the hard floor
+   * and obeys the same deny rules.
+   */
+  rules?: RuleSet;
 }
 
 /**
@@ -135,7 +143,7 @@ export function agentStack(
   identity: string,
   environment: AgentEnvironment,
 ): AnyAgentMiddleware[] {
-  const { model, instructions, memory, onUsage, onWindow, window } = environment;
+  const { model, instructions, memory, onUsage, onWindow, window, rules } = environment;
 
   const stack = [
     // Outside the meter, because it decides which messages are sent — and the
@@ -170,6 +178,11 @@ export function agentStack(
     // slot is empty for it. That is decided, not incidental.
     ...(memory !== undefined ? [injectMemory(memory)] : []),
     pinTurnTask(),
+    // The deny half of the permission gate. Unlike the confirmation gate (the
+    // ask half, appended in `loop.ts`), this belongs to every kind: a subagent
+    // cannot `interrupt()` to ask, but it can be denied, and denying needs no
+    // checkpointer. Shared so an Explore's `Read` keeps the hard floor.
+    permissionGate(rules),
   ];
 
   assertMeterInsideWindow(stack);

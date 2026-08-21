@@ -5,13 +5,9 @@ import { z } from "zod";
 
 import { SAFE_TO_REPLAY } from "./replay";
 
-import {
-  MAX_FILE_BYTES,
-  ROOT,
-  isSecret,
-  resolveInside,
-  withPathLock,
-} from "./workspace";
+import { MAX_FILE_BYTES, ROOT, withPathLock } from "./workspace";
+
+import { isSecret, resolvePath } from "./permission";
 
 // Result caps. Same reasoning as MAX_FILE_BYTES: what a tool returns is what the
 // next request pays for.
@@ -26,7 +22,7 @@ function ignored(path: string): boolean {
 
 export const readTool = tool(
   async ({ path }): Promise<string> => {
-    const full = resolveInside(path);
+    const full = resolvePath(path);
 
     // Reading takes the lock too, so a Read batched alongside an Edit of the
     // same file cannot observe a half-written one. Glob and Grep do not — they

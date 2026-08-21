@@ -46,9 +46,9 @@ export const PROJECT_INSTRUCTIONS_ID = "project-instructions";
  * testable against a temp directory, and `log` is one because two of those modes
  * are things the user needs to see and the model's copy of them is not enough.
  * Only that one directory is searched — no
- * walking up. The tools refuse paths outside the working directory
- * (`resolveInside`), and an injection path that reaches above it would be a way
- * around that refusal rather than a convenience.
+ * walking up. The hard floor refuses paths outside the working directory
+ * (`tools/permission.ts`), and an injection path that reaches above it would be
+ * a way around that refusal rather than a convenience.
  *
  * ## The four failure modes
  *
@@ -81,7 +81,7 @@ export const PROJECT_INSTRUCTIONS_ID = "project-instructions";
  *   project; this reads one directory, the one the user started the agent in.
  *   Whoever can write this file can already write the source code the agent
  *   reads anyway. The enforcement points are unchanged: Bash goes through the
- *   confirmation gate, writes are boxed in by `resolveInside`.
+ *   confirmation gate, writes are confined by the hard floor.
  */
 export function readProjectInstructions(root: string, log: Logger): string | undefined {
   const sections = INSTRUCTION_FILES.map((name) => readOne(root, name, log)).filter(

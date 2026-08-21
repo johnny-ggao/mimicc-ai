@@ -11,36 +11,52 @@
  * `bun run chat -- --resume`.
  */
 
-/** What the arguments asked for. */
+/** What the arguments asked for. `auto` is the auto-approve posture switch. */
 export type Invocation =
-  | { kind: "new" }
+  | { kind: "new"; auto: boolean }
   /** `--resume`, bare: show the picker before the first prompt. */
-  | { kind: "pick" }
+  | { kind: "pick"; auto: boolean }
   /** `--resume <id>`: an id, or the front of one. */
-  | { kind: "resume"; prefix: string }
+  | { kind: "resume"; prefix: string; auto: boolean }
   | { kind: "error"; message: string };
 
-const USAGE = "usage: mimicc [--resume [<session-id>]]";
+const USAGE = "usage: mimicc [--auto] [--resume [<session-id>]]";
 
 export function parseArgs(argv: string[]): Invocation {
-  const [first, ...rest] = argv;
+  let auto = false;
+  let resume: { prefix: string } | "bare" | undefined = undefined;
 
-  if (first === undefined) return { kind: "new" };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === undefined) break;
 
-  if (first === "--resume" || first === "-r") {
-    const [prefix, ...extra] = rest;
-    if (extra.length > 0) return { kind: "error", message: USAGE };
-    if (prefix === undefined) return { kind: "pick" };
-    // A second flag where an id belongs is a typo, not a session named `--foo`.
-    if (prefix.startsWith("-")) return { kind: "error", message: USAGE };
-    return { kind: "resume", prefix };
+    if (arg === "--auto") {
+      auto = true;
+      continue;
+    }
+
+    if (arg === "--resume" || arg === "-r") {
+      const next = argv[i + 1];
+      // A flag where an id belongs is a flag, not a session named `--foo`.
+      if (next !== undefined && !next.startsWith("-")) {
+        resume = { prefix: next };
+        i += 1;
+      } else {
+        resume = "bare";
+      }
+      continue;
+    }
+
+    const inline = /^(?:--resume|-r)=(.+)$/.exec(arg);
+    if (inline?.[1] !== undefined) {
+      resume = { prefix: inline[1] };
+      continue;
+    }
+
+    return { kind: "error", message: `unknown argument: ${arg}\n${USAGE}` };
   }
 
-  const inline = /^(?:--resume|-r)=(.+)$/.exec(first);
-  if (inline?.[1] !== undefined) {
-    if (rest.length > 0) return { kind: "error", message: USAGE };
-    return { kind: "resume", prefix: inline[1] };
-  }
-
-  return { kind: "error", message: `unknown argument: ${first}\n${USAGE}` };
+  if (resume === undefined) return { kind: "new", auto };
+  if (resume === "bare") return { kind: "pick", auto };
+  return { kind: "resume", prefix: resume.prefix, auto };
 }

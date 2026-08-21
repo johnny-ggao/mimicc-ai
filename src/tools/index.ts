@@ -39,13 +39,12 @@ export {
  * The six the system prompt advertises. Order is the order the model sees them
  * in, and `tests/agent.test.ts` pins it.
  *
- * Three of these can destroy work, and the guards are split by what can actually
- * be contained. Write and Edit are confined by `resolveInside` — they cannot
- * leave the working directory or touch a credential file — so they run without
- * asking. Bash cannot be confined that way: it can curl, it can rm, it can
- * rewrite git history, and a command classifier is an arms race. It is gated by
- * `humanInTheLoopMiddleware` instead, which is a decision the user made rather
- * than a limitation of the parser we did not write.
+ * Three of these can destroy work, and the permission gate guards them on two
+ * axes. Write and Edit are confined by the hard floor — they cannot leave the
+ * working directory or touch a credential file — but they still ask by default,
+ * the baseline treating a mutating tool as worth a question. Bash asks too, and
+ * it cannot be confined that way: it can curl, it can rm, it can rewrite git
+ * history, and a command classifier is an arms race.
  *
  * Dispatch is not here: `ToolNode` looks tools up by name, validates arguments
  * against the zod schema, runs them in parallel, and turns every failure —

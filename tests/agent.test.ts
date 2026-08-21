@@ -18,6 +18,7 @@ import {
 import { MemoryStore } from "@/memory";
 import { SKILL_TOOL_NAME, SkillRegistry } from "@/skills";
 import { CLARIFY_TOOL_NAME, TASK_TOOL_NAME, TOOLS } from "@/tools";
+import { decide } from "@/tools/permission";
 import type { ModelUsage } from "@/usage";
 
 // A stubbed model endpoint, so the loop can be exercised without a network or a
@@ -267,14 +268,17 @@ test("the registered set is the six plus the dispatch tool", () => {
   ]);
 });
 
-// Bash is the one that cannot be contained by path guards, so it is the one that
-// asks. Changing this line is a security decision, not a refactor.
-test("Bash is the only tool that stops to ask", () => {
-  const asks = Object.entries(CONFIRMATION_POLICY)
-    .filter(([, config]) => config !== false)
-    .map(([name]) => name);
+// Mutating tools ask by default; the read-only and frequent ones do not. The
+// decision lives in the rule engine's baseline, not in a per-tool flag — ask is
+// one of `decide`'s three outcomes, alongside allow and deny.
+test("Write, Edit and Bash ask by default; the rest allow", () => {
+  const asking = registeredTools({
+    model: new FakeListChatModel({ responses: ["unused"] }),
+  })
+    .map((tool) => tool.name)
+    .filter((name) => decide({ tool: name }).decision === "ask");
 
-  expect(asks).toEqual(["Bash"]);
+  expect(asking.sort()).toEqual(["Bash", "Edit", "Write"]);
 });
 
 // One lap is two nodes, so the ceiling has to be read in node executions, not

@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { createUniversalAgent, RECURSION_LIMIT, toolRecovery } from "@/agents";
 import { JsonlSaver, ToolJournal } from "@/checkpoint";
-import type { Replay } from "@/tools";
+import { readTool, writeTool, type Replay } from "@/tools";
 
 /**
  * What a tool call does when it comes back from the dead.
@@ -92,13 +92,11 @@ beforeEach(() => {
  * Somewhere to keep thread files, and somewhere `Write` is actually allowed to
  * write.
  *
- * ⚠️ The two cannot be the same place, and getting that wrong makes the tests
- * below pass for the wrong reason. `Write` goes through `resolveInside`, which
- * confines every path to the process's working directory — so a `Write` aimed at
- * a temp directory is refused before it starts, and "the file is not there" would
- * prove nothing about recovery. The target has to sit inside the repository;
- * `.mimicc-outputs/` is already git-ignored, and the control test below is what
- * proves the path really is writable.
+ * ⚠️ The two cannot be the same place: thread files live in a temp directory,
+ * while the `Write` target has to sit inside the repository — the tools resolve
+ * paths against the working directory — so `.mimicc-outputs/`, already
+ * git-ignored, is the writable spot. The control test below proves the path
+ * really is writable.
  */
 const TARGETS = ".mimicc-outputs";
 
@@ -120,6 +118,33 @@ function agentOn(state: string, thread: string) {
     model: "stub",
     checkpointer: new JsonlSaver(state),
     stateDir: state,
+  });
+  return async () =>
+    (await graph.invoke(
+      { messages: [new HumanMessage("go")] },
+      { recursionLimit: RECURSION_LIMIT, configurable: { thread_id: thread } },
+    )) as { messages: { content: unknown; getType: () => string }[] };
+}
+
+/**
+ * The recovery machinery without the confirmation gate.
+ *
+ * `Write` now asks at the gate (ticket 02), which parks the turn before
+ * `toolRecovery` ever sees the call. The four Write cases below are about
+ * recovery, not the gate, so they build the graph the way the "paused" test does
+ * — `createAgent` plus the tools and `toolRecovery`, no gate — and let `Write`
+ * run straight through.
+ */
+function recoveryRun(state: string, thread: string) {
+  const graph = createAgent({
+    model: new ChatOpenAI({
+      model: "stub",
+      apiKey: "sk-stub",
+      configuration: { baseURL: `http://localhost:${String(server.port)}` },
+    }),
+    tools: [readTool, writeTool],
+    checkpointer: new JsonlSaver(state),
+    middleware: [toolRecovery({ directory: state })],
   });
   return async () =>
     (await graph.invoke(
@@ -178,7 +203,7 @@ test("with nothing recorded, the same call writes the file", async () => {
   rmSync(file.absolute, { force: true });
   ask = { name: "Write", args: { path: file.relative, content: "hello" } };
 
-  await agentOn(state, "control")();
+  await recoveryRun(state, "control")();
 
   expect(existsSync(file.absolute)).toBe(true);
 });
@@ -191,7 +216,7 @@ test("an interrupted unreplayable call is not repeated, and says so", async () =
   ask = { name: "Write", args: { path: file.relative, content: "hello" } };
   await seedIntent(state, "never", "Write", "never");
 
-  const out = await agentOn(state, "never")();
+  const out = await recoveryRun(state, "never")();
 
   // The effect itself, not a proxy for it — and the control above is what makes
   // this line mean "recovery stopped it" rather than "Write never works here".
@@ -220,7 +245,7 @@ test("a closed turn leaves no settled record behind, synthesised or not", async 
   ask = { name: "Write", args: { path: target("twice").relative, content: "hello" } };
   await seedIntent(state, "twice", "Write", "never");
 
-  const out = await agentOn(state, "twice")();
+  const out = await recoveryRun(state, "twice")();
 
   // It did settle as interrupted — that is what the model was handed.
   expect(toolText(out)).toContain("interrupted");
@@ -251,7 +276,7 @@ test("a declaration that was safe and is not any more does not replay", async ()
   // Recorded as safe by a version that thought so; `Write` says never today.
   await seedIntent(state, "was-safe", "Write", "safe");
 
-  const out = await agentOn(state, "was-safe")();
+  const out = await recoveryRun(state, "was-safe")();
 
   expect(existsSync(file.absolute)).toBe(false);
   expect(toolText(out)).toContain("interrupted");

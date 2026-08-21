@@ -30,6 +30,7 @@ import {
   clarifyTool,
   createTaskTool,
 } from "../tools";
+import { decide, toolCallOf, type RuleSet } from "../tools/permission";
 import type { ModelUsage } from "../usage";
 import { markPinned, type WindowEvent, type WindowTuning } from "../context";
 import { classify, failureMarker } from "./outcome";
@@ -212,6 +213,20 @@ export interface AgentOptions {
    * ADR 0005). main.ts logs it as `turn_capped`.
    */
   onCap?: (reason: TurnCapReason) => void;
+  /**
+   * The permission rules, already read and merged, or absent for no rules.
+   *
+   * A `RuleSet` rather than two file paths, for the same reason
+   * `projectInstructions` is a string and `memory` is directories: `main.ts` does
+   * the filesystem read (`loadPermissions`), and the agent builder does not.
+   */
+  rules?: RuleSet;
+  /**
+   * Auto mode: flip the baseline's ask to allow, so the mutating tools stop
+   * asking. Only the "ask or not" axis moves — the hard floor and deny rules
+   * still hold (see `decide` in tools/permission.ts).
+   */
+  auto?: boolean;
 }
 
 /**
@@ -315,55 +330,92 @@ function createModel(options: AgentOptions): ChatOpenAI {
 }
 
 /**
- * Which tools stop and ask before they run.
+ * The ask half of the permission gate: each registered tool's answer vocabulary.
  *
- * A tool that is **absent** from this map is auto-approved — the middleware
- * treats "no config" as "no interrupt", which is fail-open. So every registered
- * tool is listed explicitly, including the ones that do not ask, and
- * `tests/agent.test.ts` fails if a newly registered tool is missing from here.
- * The point is that adding a tool forces a decision rather than inheriting one.
+ * Every registered tool appears here with the choices a human may make when
+ * asked, and the prompt for the choice. What is deliberately NOT here is the ask
+ * decision itself — `confirmationGate` attaches a single `when` predicate that
+ * consults the rule engine, so a tool asks exactly when `decide` says "ask". A
+ * tool **absent** from this map is auto-approved (`humanInTheLoopMiddleware`
+ * treats "no config" as "no interrupt", fail-open), which is why
+ * `tests/agent.test.ts` fails when a newly registered tool is missing — adding a
+ * tool forces a decision rather than inheriting one.
  *
- * Why the split: Write and Edit are contained by `resolveInside` — they cannot
- * leave the working directory and cannot touch a credential file — so the blast
- * radius is bounded by code rather than by judgement. Bash has no such bound. It
- * can curl, it can rm, it can rewrite git history, and telling a safe command
- * from a dangerous one is a parsing arms race (`foo && rm -rf`). Asking every
- * time costs a keypress and needs no parser.
+ * The allow/ask baseline itself lives in `decide` (tools/permission.ts), not
+ * here — this map only answers "when the gate asks, what may the human say".
  */
-export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
-  Read: false,
-  Glob: false,
-  Grep: false,
-  Write: false,
-  Edit: false,
-  // An explore agent carries only the three read-only tools, so dispatching one can do
-  // nothing a Read could not — the decision is already made by EXPLORE_TOOLS.
-  [TASK_TOOL_NAME]: false,
-  // Reading a skill is a read of installed instructions — nothing a Read could
-  // not already reach the text of, and it never mutates. No gate, same reason
-  // Read and Grep have none.
-  [SKILL_TOOL_NAME]: false,
-  // The memory tools do not ask, and this is a decision rather than an omission
-  // (2026-08-17). Not because writing a memory is harmless — it is confined to
-  // `~/.mimicc/memory` and gated on category, size, and duplication, but it is a
-  // write. Because it is **frequent**: a gate that fires constantly stops being
-  // read, and the gate that stops being read is the one guarding Bash. What
-  // makes these observable is the transcript and the files, not a prompt.
-  MemorySearch: false,
-  MemoryAdd: false,
-  MemoryUpdate: false,
-  MemoryDelete: false,
-  // Never gated, and not because asking a question is harmless — because this
+export const CONFIRMATION_POLICY: Record<string, InterruptOnConfig> = {
+  Read: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Read a file. Approve or reject.",
+  },
+  Glob: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Glob files. Approve or reject.",
+  },
+  Grep: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Grep files. Approve or reject.",
+  },
+  Write: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Write creates a new file. Approve or reject.",
+  },
+  Edit: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Edit changes one span of a file. Approve or reject.",
+  },
+  // An explore agent carries only the three read-only tools, so dispatching one
+  // can do nothing a Read could not. The baseline in `decide` allows it; this
+  // entry exists so the exhaustiveness test still sees every registered tool.
+  [TASK_TOOL_NAME]: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Dispatch an explore agent. Approve or reject.",
+  },
+  [SKILL_TOOL_NAME]: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Load a skill. Approve or reject.",
+  },
+  // The memory tools allow by default for the frequency reason, not because
+  // writing a memory is harmless — a gate that fires constantly stops being
+  // read, and the gate that stops being read is the one guarding Bash. The
+  // baseline in `decide` carries that decision; the entries here are for the
+  // exhaustiveness test.
+  MemorySearch: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Search memory. Approve or reject.",
+  },
+  MemoryAdd: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Add a memory. Approve or reject.",
+  },
+  MemoryUpdate: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Update a memory. Approve or reject.",
+  },
+  MemoryDelete: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Delete a memory. Approve or reject.",
+  },
+  // Never asked, and not because asking a question is harmless — because this
   // tool **is** the asking. `clarifyGate` answers the call in `afterModel`,
-  // before the gate is reached, so a decision here can never fire; it is written
-  // down because an unlisted tool is auto-approved and this map is the place the
-  // program records that it thought about each one.
-  [CLARIFY_TOOL_NAME]: false,
+  // before the gate is reached, so `when` here can never fire; the entry exists
+  // because an unlisted tool is auto-approved.
+  [CLARIFY_TOOL_NAME]: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Ask a clarifying question. Approve or reject.",
+  },
   Bash: {
     allowedDecisions: ["approve", "edit", "reject"],
     description: "Bash runs with your shell. Approve, edit the command, or reject.",
   },
 };
+
+/** The `when` predicate: ask exactly when the rule engine says "ask". */
+function asks(rules?: RuleSet, auto = false): NonNullable<InterruptOnConfig["when"]> {
+  return (request) =>
+    decide(toolCallOf(request.toolCall), rules, auto).decision === "ask";
+}
 
 /**
  * Builds the gate, and quarantines one cast.
@@ -380,11 +432,15 @@ export const CONFIRMATION_POLICY: Record<string, false | InterruptOnConfig> = {
  * that flag is on. One quarantined cast is cheaper than that. Try deleting this
  * wrapper on the next langchain bump; verified needed against langchain 1.5.5.
  */
-function confirmationGate(): AnyAgentMiddleware {
-  const options = { interruptOn: CONFIRMATION_POLICY };
-  const gate = humanInTheLoopMiddleware(
-    options as unknown as Parameters<typeof humanInTheLoopMiddleware>[0],
-  ) as AnyAgentMiddleware;
+function confirmationGate(rules?: RuleSet, auto = false): AnyAgentMiddleware {
+  const when = asks(rules, auto);
+  const interruptOn: Record<string, InterruptOnConfig> = {};
+  for (const [name, config] of Object.entries(CONFIRMATION_POLICY)) {
+    interruptOn[name] = { ...config, when };
+  }
+  const gate = humanInTheLoopMiddleware({ interruptOn } as unknown as Parameters<
+    typeof humanInTheLoopMiddleware
+  >[0]) as AnyAgentMiddleware;
 
   return pinRejections(gate);
 }
@@ -530,6 +586,7 @@ function environment(model: ChatOpenAI, options: AgentOptions): AgentEnvironment
     ...(options.memory !== undefined
       ? { memory: new MemoryStore(options.memory) }
       : {}),
+    ...(options.rules !== undefined ? { rules: options.rules } : {}),
   };
 }
 
@@ -728,7 +785,7 @@ export function createUniversalAgent(options: AgentOptions) {
     // The reverse order produces two interrupts in one turn — a confirmation and
     // a question — and the console can only hold one.
     clarifyGate(),
-    confirmationGate(),
+    confirmationGate(options.rules, options.auto ?? false),
   ];
 
   assertLoopGuardBeforeGate(middleware);

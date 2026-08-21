@@ -20,32 +20,6 @@ function rejection(promise: Promise<unknown>): Promise<string> {
   );
 }
 
-/* ---------- 安全护栏：写入侧和只读侧共用同一份实现 ---------- */
-
-// Write and Edit run without a confirmation gate, which is only defensible while
-// resolveInside actually holds. These two tests are what makes that true.
-test("Write refuses to leave the working directory", async () => {
-  expect(
-    await rejection(writeTool.invoke({ path: "../escaped.txt", content: "x" })),
-  ).toContain("escapes the working directory");
-});
-
-test("Write refuses the files whose whole point is to hold secrets", async () => {
-  for (const path of [".env", ".env.local", "keys/deploy.pem"]) {
-    expect(await rejection(writeTool.invoke({ path, content: "x" }))).toContain(
-      "may hold credentials",
-    );
-  }
-});
-
-test("Edit refuses to leave the working directory", async () => {
-  expect(
-    await rejection(
-      editTool.invoke({ path: "../escaped.txt", oldString: "a", newString: "b" }),
-    ),
-  ).toContain("escapes the working directory");
-});
-
 /* ---------- Write ---------- */
 
 test("Write creates intermediate directories", async () => {

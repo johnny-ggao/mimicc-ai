@@ -19,7 +19,6 @@ import { Command } from "@langchain/langgraph";
 
 import { createUniversalAgent, DURABILITY, RECURSION_LIMIT } from "@/agents";
 import { JsonlSaver, resolveStateDir } from "@/checkpoint";
-import { readTool } from "@/tools";
 
 /**
  * The seam is the one the loop tests already use: the real agent behind a stub
@@ -312,15 +311,6 @@ test("a hand-edited line naming a foreign type is refused", async () => {
       new JsonlSaver(directory).getTuple({ configurable: { thread_id: "tamper" } }),
     ),
   ).toMatch(/unexpected type/i);
-});
-
-test("the state directory is out of the tools' reach", async () => {
-  // Not a credential, but the same rule: this is the agent's own past
-  // conversations, and reading them back into itself is a channel nothing in
-  // the design asks for.
-  expect(
-    await failureFrom(readTool.invoke({ path: ".mimicc/some-thread.jsonl" })),
-  ).toMatch(/credentials/);
 });
 
 test("where history lives depends on the environment, and can be overridden", () => {

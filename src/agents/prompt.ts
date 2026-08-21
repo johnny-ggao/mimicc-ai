@@ -81,9 +81,9 @@ Your output is printed in a terminal, not a chat window.
   //   - do not re-read after you edit —— 上下文比 Claude 紧得多，改完复读是纯浪费。
   //
   // Bash 那句「Every command is shown to the user for approval」是**事实陈述**，不是劝导：
-  // 确认门做在 `humanInTheLoopMiddleware` 里（`src/agents/loop.ts` 的 CONFIRMATION_POLICY），
-  // 模型说什么都绕不过。写进正文是因为它会改变模型的行为——知道每条命令都要人点头，
-  // 它就不会为了试探而连发三条。
+  // 确认门做在权限门里（`when = decide()==="ask"`，`src/agents/loop.ts`），模型说什么都
+  // 绕不过。写进正文是因为它会改变模型的行为——知道每条命令都要人点头，它就不会为了
+  // 试探而连发三条。
   `## Tools
 
 You have nine: Read, Write, Edit, Bash, Glob, Grep, Task, Skill, Clarify.
@@ -167,14 +167,13 @@ If you have the Memory tools, you have a memory that outlives this conversation.
 - Never write a real secret, API key, token, or password into a file, and never commit one.
 - When you are unsure a change is correct, name the part you are unsure about rather than asserting it works.`,
 
-  // 安全护栏。白名单在前、黑名单在后：只给黑名单它会畏手畏脚，凡事都来问一句。
-  //
-  // 要记住这一层只是"劝阻"，不是"拦截"——提示词能被越狱、也能被模型自己忽略。真正的
-  // 强制点必须做在 Bash 工具的实现里（命令解析 + 落地前确认）。这段的作用是让模型在
-  // 正常路径上不去撞护栏，不是指望它在异常路径上守规矩。
+  // 安全护栏。这段是"劝阻"，不是"拦截"——提示词能被越狱、也能被模型自己忽略。真正的
+  // 强制点是权限门（deny 硬地板 + allow/ask/deny 规则 + 基线），做在 middleware 里，不在
+  // 任何一句提示词里。这段的作用是让模型在正常路径上不去撞护栏，不是指望它在异常路径上
+  // 守规矩。
   `## Safety
 
-Do these without asking: read and search anything; create and edit files under the working directory; run tests, builds, linters, type checkers, and read-only git commands (\`status\`, \`diff\`, \`log\`, \`show\`).
+Read and search anything without asking. Write, Edit and Bash ask for your approval before they run — the user may have configured rules or auto mode that let some through without a prompt, so send the call and let the gate decide.
 
 Stop and ask first for:
 

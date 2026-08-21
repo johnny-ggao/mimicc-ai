@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { createUniversalAgent } from "./agents";
@@ -12,6 +13,7 @@ import { buildSystemPrompt, type PromptEnvironment } from "./agents";
 import { parseArgs, runRepl, type Start } from "./console";
 import { resolveSession } from "./session";
 import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
+import { loadPermissions } from "./tools/permissionConfig";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -34,6 +36,14 @@ async function main(): Promise<void> {
   // also deliberate and temporary — a mid-session edit to AGENTS.md does not
   // take effect until restart, and making it live is a change to this line.
   const instructions = readProjectInstructions(process.cwd(), log);
+
+  // Read once, here, for the same reason as the instructions above: the agent
+  // builder does not touch the filesystem. A malformed file throws here and
+  // stops the program rather than silently dropping its protection.
+  const rules = loadPermissions({
+    userFile: join(homedir(), ".mimicc", "permissions.json"),
+    repoFile: join(process.cwd(), ".mimicc-permissions.json"),
+  });
 
   // Resolved here for the same reason the prompt environment and the project
   // instructions are: the agent builder does not touch the filesystem, and
@@ -77,6 +87,11 @@ async function main(): Promise<void> {
     skills,
     // The same path, so a tool call's journal lands beside its session's file.
     stateDir,
+    // Already parsed and merged by `loadPermissions` above — rules drive the
+    // permission gate's allow/ask/deny on top of the hard floor.
+    rules,
+    // `--auto` flips the gate's baseline ask to allow (deny still holds).
+    auto: start.auto,
     // One line per request to the provider. This is the scale every
     // context-engineering change is weighed on, so it is wired up before the
     // first such change rather than after.
@@ -136,7 +151,9 @@ async function resolveStart(stateDir: string): Promise<Start> {
   if (invocation.kind !== "resume") return invocation;
 
   const found = await resolveSession(stateDir, invocation.prefix);
-  if (found.kind === "one") return { kind: "session", session: found.session };
+  if (found.kind === "one") {
+    return { kind: "session", session: found.session, auto: invocation.auto };
+  }
   if (found.kind === "none") {
     process.stderr.write(`no session starts with ${invocation.prefix}\n`);
     process.exit(1);

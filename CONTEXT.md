@@ -37,6 +37,34 @@ _Avoid_: 装载、塞入、seed（指注入时）
 **prompt injection**：
 攻击面：进了上下文的内容里夹带指令，诱使模型把它当成操作方的话执行。**永远写全，不译**。
 
+### 权限（工具执行）
+
+**权限门（permission gate）**：
+统一入口——一次工具调用先过它，得出 `allow` / `ask` / `deny` 三判之一。**它替换了此前散在两处的两个
+机制**：确认门（只拦 `Bash`）和写死的路径约束（`resolveInside` + `SECRET`）。判定顺序 deny 恒胜
+（deny > ask > allow），无命中落回内置基线（只读 allow / 改型 ask）。见 `docs/adr/0007`。
+_Avoid_: 权限门限（与「确认门」念起来像一回事、实是两条轴）
+
+**权限规则（permission rules）**：
+权限门里用户可配的条目，三分桶 `allow` / `ask` / `deny`。文件工具按路径 glob（`Read(src/**)`），
+`Bash` 按命令前缀（`Bash(git status:*)`）。两层：用户级 `~/.mimicc/permissions.json` + 仓库级
+`.mimicc-permissions.json`，仓库只能更严。
+_Avoid_: 白名单/黑名单（那是没有 ask 的两分）
+
+**确认门（confirmation gate）**：
+权限门三判里的「ask」那一条——停下问人。**它不再是独立机制，而是权限门的一个出口**；拒绝理由仍
+钉住（见「钉住」）。
+_Avoid_: 权限门（那是三判的总称）
+
+**自动模式（auto mode）**：
+会话级姿态开关，把默认 `ask` 翻成 `allow`。**只动「问不问」轴，不动 deny / 硬地板**——与「绕过」
+是两回事，绕过会吃掉硬地板、明确不做。
+_Avoid_: YOLO 模式、绕过（绕过是另一件事）
+
+**硬地板（hard floor）**：
+权限门里不可放宽的那层 deny：逃出工作目录 + 密钥路径（`.env`、`.git/`、`.mimicc/`、`id_*`、
+`*.pem`、`*.key`）。任何层的规则都不能把它翻成 allow/ask。
+
 ### 上下文的成本
 
 **缓存前缀（cache prefix）**：

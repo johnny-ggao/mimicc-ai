@@ -38,17 +38,34 @@ const session = (id: string, extra: Partial<Session> = {}): Session => ({
 
 describe("the command line", () => {
   test("no arguments is a new session", () => {
-    expect(parseArgs([])).toEqual({ kind: "new" });
+    expect(parseArgs([])).toEqual({ kind: "new", auto: false });
   });
 
   test("bare --resume asks for the picker", () => {
-    expect(parseArgs(["--resume"])).toEqual({ kind: "pick" });
-    expect(parseArgs(["-r"])).toEqual({ kind: "pick" });
+    expect(parseArgs(["--resume"])).toEqual({ kind: "pick", auto: false });
+    expect(parseArgs(["-r"])).toEqual({ kind: "pick", auto: false });
   });
 
   test("--resume <id> carries a prefix, in both spellings", () => {
-    expect(parseArgs(["--resume", "c70b"])).toEqual({ kind: "resume", prefix: "c70b" });
-    expect(parseArgs(["-r=c70b"])).toEqual({ kind: "resume", prefix: "c70b" });
+    expect(parseArgs(["--resume", "c70b"])).toEqual({
+      kind: "resume",
+      prefix: "c70b",
+      auto: false,
+    });
+    expect(parseArgs(["-r=c70b"])).toEqual({
+      kind: "resume",
+      prefix: "c70b",
+      auto: false,
+    });
+  });
+
+  test("--auto flips the posture switch, alone or with --resume", () => {
+    expect(parseArgs(["--auto"])).toEqual({ kind: "new", auto: true });
+    expect(parseArgs(["--auto", "--resume", "c70b"])).toEqual({
+      kind: "resume",
+      prefix: "c70b",
+      auto: true,
+    });
   });
 
   // A flag where an id belongs is a typo. Reading it as a session named `--foo`

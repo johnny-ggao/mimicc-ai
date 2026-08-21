@@ -1,8 +1,5 @@
 import { expect, test } from "bun:test";
 
-import { AIMessage, type ToolMessage } from "@langchain/core/messages";
-import { ToolNode } from "@langchain/langgraph/prebuilt";
-
 import { globTool, grepTool, readTool, TOOLS } from "@/tools";
 
 const read = (path: string) => readTool.invoke({ path });
@@ -19,22 +16,8 @@ function rejection(promise: Promise<unknown>): Promise<string> {
   );
 }
 
-/* ---------- 安全护栏（这部分是我们的责任，不是框架的）---------- */
-
-// Read-only is not risk-free: tool output is sent to the model, so an
-// unconstrained path is an exfiltration channel rather than merely a read.
-test("refuses to read outside the working directory", async () => {
-  expect(await rejection(read("../../../etc/hosts"))).toContain(
-    "escapes the working directory",
-  );
-});
-
-test("refuses files whose whole point is to hold secrets", async () => {
-  for (const path of [".env", ".env.local", "keys/deploy.pem", "certs/server.key"]) {
-    expect(await rejection(read(path))).toContain("may hold credentials");
-  }
-});
-
+// Grep still filters secrets out of search results; the hard-floor *deny* for
+// Read/Write/Edit moved into the permission gate (tests/permission-gate.test.ts).
 test("keeps secrets out of grep results too", async () => {
   // The guard has to cover content search as well, or the same bytes leak by
   // another route.
@@ -92,28 +75,6 @@ test("defaults the grep glob to the whole tree", async () => {
   // recurses — an assertion against a file in `src/` alone would still pass if
   // the default were `src/*`.
   expect(hits).toContain("src/agents/loop.ts:");
-});
-
-/* ---------- 与 ToolNode 的接缝 ---------- */
-
-// The property the hand-written dispatch used to guarantee, now the framework's
-// job — but the seam is ours: a guard that throws has to come back as a tool
-// message, or the provider rejects a history with an unanswered tool_call.
-test("a guard rejection comes back as a tool message, not an exception", async () => {
-  const node = new ToolNode(TOOLS);
-  const call = new AIMessage({
-    content: "",
-    tool_calls: [{ id: "call_1", name: "Read", args: { path: ".env" } }],
-  });
-
-  const out = (await node.invoke({ messages: [call] })) as { messages: ToolMessage[] };
-
-  expect(out.messages).toHaveLength(1);
-  expect(out.messages[0]?.tool_call_id).toBe("call_1");
-  const body = out.messages[0]?.content;
-  expect(typeof body === "string" ? body : JSON.stringify(body)).toContain(
-    "may hold credentials",
-  );
 });
 
 // The system prompt names all six by name and describes what each one does, so
