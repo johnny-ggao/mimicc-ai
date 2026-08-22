@@ -347,34 +347,34 @@ function createModel(options: AgentOptions): ChatOpenAI {
 export const CONFIRMATION_POLICY: Record<string, InterruptOnConfig> = {
   Read: {
     allowedDecisions: ["approve", "reject"],
-    description: "Read a file. Approve or reject.",
+    description: "Read a file",
   },
   Glob: {
     allowedDecisions: ["approve", "reject"],
-    description: "Glob files. Approve or reject.",
+    description: "Glob files",
   },
   Grep: {
     allowedDecisions: ["approve", "reject"],
-    description: "Grep files. Approve or reject.",
+    description: "Grep files",
   },
   Write: {
     allowedDecisions: ["approve", "reject"],
-    description: "Write creates a new file. Approve or reject.",
+    description: "Create a new file",
   },
   Edit: {
     allowedDecisions: ["approve", "reject"],
-    description: "Edit changes one span of a file. Approve or reject.",
+    description: "Change one span of a file",
   },
   // An explore agent carries only the three read-only tools, so dispatching one
   // can do nothing a Read could not. The baseline in `decide` allows it; this
   // entry exists so the exhaustiveness test still sees every registered tool.
   [TASK_TOOL_NAME]: {
     allowedDecisions: ["approve", "reject"],
-    description: "Dispatch an explore agent. Approve or reject.",
+    description: "Dispatch a read-only explore agent",
   },
   [SKILL_TOOL_NAME]: {
     allowedDecisions: ["approve", "reject"],
-    description: "Load a skill. Approve or reject.",
+    description: "Load a skill",
   },
   // The memory tools allow by default for the frequency reason, not because
   // writing a memory is harmless — a gate that fires constantly stops being
@@ -383,19 +383,19 @@ export const CONFIRMATION_POLICY: Record<string, InterruptOnConfig> = {
   // exhaustiveness test.
   MemorySearch: {
     allowedDecisions: ["approve", "reject"],
-    description: "Search memory. Approve or reject.",
+    description: "Search memory",
   },
   MemoryAdd: {
     allowedDecisions: ["approve", "reject"],
-    description: "Add a memory. Approve or reject.",
+    description: "Add a memory",
   },
   MemoryUpdate: {
     allowedDecisions: ["approve", "reject"],
-    description: "Update a memory. Approve or reject.",
+    description: "Update a memory",
   },
   MemoryDelete: {
     allowedDecisions: ["approve", "reject"],
-    description: "Delete a memory. Approve or reject.",
+    description: "Delete a memory",
   },
   // Never asked, and not because asking a question is harmless — because this
   // tool **is** the asking. `clarifyGate` answers the call in `afterModel`,
@@ -403,11 +403,11 @@ export const CONFIRMATION_POLICY: Record<string, InterruptOnConfig> = {
   // because an unlisted tool is auto-approved.
   [CLARIFY_TOOL_NAME]: {
     allowedDecisions: ["approve", "reject"],
-    description: "Ask a clarifying question. Approve or reject.",
+    description: "Ask a clarifying question",
   },
   Bash: {
-    allowedDecisions: ["approve", "edit", "reject"],
-    description: "Bash runs with your shell. Approve, edit the command, or reject.",
+    allowedDecisions: ["approve", "reject"],
+    description: "Run a shell command",
   },
 };
 

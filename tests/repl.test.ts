@@ -184,7 +184,6 @@ describe("an empty line is not a decision", () => {
   const gate = (): Pending => ({
     requests: [{ name: "Bash", args: { command: "rm -rf /" } }],
     decisions: [],
-    editing: false,
   });
 
   /** The gate re-prints itself when it declines a line; that is not the assertion. */
@@ -206,12 +205,20 @@ describe("an empty line is not a decision", () => {
     expect(pending.decisions).toEqual([]);
   });
 
-  test("an explicit `a` still approves", () => {
+  test("`1` approves", () => {
     const pending = gate();
-    const resumed = quietly(() => readDecision("a", pending));
+    const resumed = quietly(() => readDecision("1", pending));
 
     expect(resumed).not.toBeNull();
     expect(pending.decisions).toEqual([{ type: "approve" }]);
+  });
+
+  test("`2` rejects", () => {
+    const pending = gate();
+    const resumed = quietly(() => readDecision("2", pending));
+
+    expect(resumed).not.toBeNull();
+    expect(pending.decisions).toEqual([{ type: "reject" }]);
   });
 
   test("anything else is still a rejection carrying the reason", () => {
@@ -221,19 +228,6 @@ describe("an empty line is not a decision", () => {
     expect(pending.decisions).toEqual([
       { type: "reject", message: "not on production" },
     ]);
-  });
-
-  // The same shape one state along: an empty replacement would have run an empty
-  // command, so `edit` has to decline it too rather than commit it.
-  test("an empty replacement command is declined, and editing stays open", () => {
-    const pending = gate();
-    quietly(() => readDecision("e", pending));
-    expect(pending.editing).toBe(true);
-
-    const resumed = quietly(() => readDecision("", pending));
-    expect(resumed).toBeNull();
-    expect(pending.editing).toBe(true);
-    expect(pending.decisions).toEqual([]);
   });
 });
 

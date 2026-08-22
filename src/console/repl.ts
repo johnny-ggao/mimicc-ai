@@ -86,10 +86,7 @@ interface ActionRequest {
   description?: string;
 }
 
-type Decision =
-  | { type: "approve" }
-  | { type: "edit"; editedAction: { name: string; args: Record<string, unknown> } }
-  | { type: "reject"; message?: string };
+type Decision = { type: "approve" } | { type: "reject"; message?: string };
 
 /**
  * A batch of tool calls the gate stopped, and the decisions collected so far.
@@ -102,8 +99,6 @@ type Decision =
 export interface Pending {
   requests: ActionRequest[];
   decisions: Decision[];
-  /** True once the user chose "edit" and the next line is the replacement. */
-  editing: boolean;
 }
 
 export async function runRepl({
@@ -221,7 +216,7 @@ export async function runRepl({
       return null;
     }
 
-    const gate: Pending = { requests, decisions: [], editing: false };
+    const gate: Pending = { requests, decisions: [] };
     ask(gate);
     return gate;
   };
@@ -743,29 +738,38 @@ function finish(turn: TurnResult, onScreen: boolean): Waiting | null {
     return null;
   }
 
-  const pending: Pending = { requests: turn.requests, decisions: [], editing: false };
+  const pending: Pending = { requests: turn.requests, decisions: [] };
   ask(pending);
   return { kind: "gate", pending };
 }
 
 /** Prints the request now awaiting a decision. */
+/** The thing being approved: the command for Bash, the path for the file tools. */
+function detailOf(request: ActionRequest): string {
+  const args = request.args;
+  if (typeof args["command"] === "string") return args["command"];
+
+  const path = typeof args["path"] === "string" ? args["path"] : JSON.stringify(args);
+  const content = typeof args["content"] === "string" ? args["content"] : undefined;
+  const lines = content === undefined ? undefined : content.split("\n").length;
+  return `${path}${lines === undefined ? "" : ` ${DIM}(${String(lines)} lines)${RESET}`}`;
+}
+
 function ask(pending: Pending): void {
   const request = pending.requests[pending.decisions.length];
   if (request === undefined) return;
 
-  const detail =
-    typeof request.args["command"] === "string"
-      ? request.args["command"]
-      : JSON.stringify(request.args);
-
   const count =
     pending.requests.length > 1
-      ? ` (${String(pending.decisions.length + 1)}/${String(pending.requests.length)})`
+      ? ` ${DIM}(${String(pending.decisions.length + 1)}/${String(pending.requests.length)})${RESET}`
       : "";
 
   process.stdout.write(
-    `\n${DIM}⚠${RESET} ${request.name}${count} wants to run:\n    ${detail}\n` +
-      `${DIM}  [a] approve   [e] edit   [r] reject (any other text becomes the reason)${RESET}\n`,
+    `\n${DIM}?${RESET} ${request.description ?? request.name}${count}  ${DIM}[${request.name}]${RESET}\n\n` +
+      `    ${detailOf(request)}\n\n` +
+      `  1  approve\n` +
+      `  2  reject\n\n` +
+      `${DIM}  a number, or type a rejection reason${RESET}\n`,
   );
 }
 
@@ -778,8 +782,8 @@ export function readDecision(input: string, pending: Pending): Command | null {
   if (request === undefined) return null;
 
   // ⚠️ **An empty line is not a decision.** It used to share a branch with
-  // `"a"`, and that was a shipping bug rather than a rough edge: measured on a
-  // TTY as well as a pipe (`repro/15-typing-during-a-turn.ts`), a line typed
+  // "approve", and that was a shipping bug rather than a rough edge: measured on
+  // a TTY as well as a pipe (`repro/15-typing-during-a-turn.ts`), a line typed
   // while a turn is running is buffered by readline and replayed when the loop
   // comes back — so the Enter somebody presses out of impatience **approved a
   // Bash command they had never seen**.
@@ -787,33 +791,15 @@ export function readDecision(input: string, pending: Pending): Command | null {
   // The trap is the other direction, and it is why this is a branch of its own
   // rather than a deletion: dropping `|| input === ""` alone turns the same
   // keystroke into `reject{ message: "" }`, which is a *different* decision, not
-  // the absence of one. Both states that read a line are covered — an empty
-  // replacement command would otherwise run an empty command, the same shape
-  // again.
-  //
-  // ⚠️ This does **not** fix the neighbouring case: a sentence typed during the
-  // turn still lands as a rejection reason. That one needs the gate to stop
-  // consuming lines typed before it opened, which is a rewrite of how the loop
-  // reads input — see the session line's ticket 04.
+  // the absence of one.
   if (input === "") {
-    if (pending.editing) process.stdout.write(`${DIM}  replacement command:${RESET}\n`);
-    else ask(pending);
+    ask(pending);
     return null;
   }
 
-  if (pending.editing) {
-    pending.editing = false;
-    pending.decisions.push({
-      type: "edit",
-      editedAction: { name: request.name, args: { ...request.args, command: input } },
-    });
-  } else if (input === "a") {
+  if (input === "1") {
     pending.decisions.push({ type: "approve" });
-  } else if (input === "e") {
-    pending.editing = true;
-    process.stdout.write(`${DIM}  replacement command:${RESET}\n`);
-    return null;
-  } else if (input === "r") {
+  } else if (input === "2") {
     pending.decisions.push({ type: "reject" });
   } else {
     // Anything else is a rejection with a reason — the model reads it, so
