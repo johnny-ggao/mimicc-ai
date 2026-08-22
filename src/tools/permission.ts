@@ -146,7 +146,9 @@ export interface Verdict {
  * 2. `deny` rules;
  * 3. `ask` rules;
  * 4. `allow` rules;
- * 5. the baseline — mutating tools ask, read-only and frequent ones allow.
+ * 5. the baseline — mutating tools ask, read-only and frequent ones allow,
+ *    and a curated set of read-only Bash commands (`ls`, `pwd`, `git status`,
+ *    `git branch`) allow without asking.
  *
  * So a deny always beats an allow, and an allow can only loosen the baseline,
  * never the hard floor. The rules are already merged before they reach here —
@@ -180,7 +182,7 @@ export function decide(call: ToolCall, rules?: RuleSet, auto = false): Verdict {
     }
   }
 
-  return { decision: auto ? "allow" : baseline(call.tool) };
+  return { decision: auto ? "allow" : baseline(call.tool, call.command) };
 }
 
 /**
@@ -207,11 +209,30 @@ const ALLOW_BY_DEFAULT = new Set([
 ]);
 
 /**
- * Which tools ask by default. Mutating tools ask; the read-only and frequent
- * ones allow. Fail-closed: a tool not in {@link ALLOW_BY_DEFAULT} asks, so a
- * newly registered mutating tool cannot silently auto-approve — it asks until
- * someone names it an allow-default.
+ * Read-only Bash commands that allow without asking: they list names or status,
+ * never file *content* — the hard floor does not reach Bash, so `cat .env`
+ * would leak the secret's value, which is exactly why content-reading commands
+ * are deliberately not here.
  */
-function baseline(tool: string): "allow" | "ask" {
+const SAFE_COMMANDS = ["ls", "pwd", "git status", "git branch"] as const;
+
+/** Whether a Bash command is one of the read-only, name-listing safe ones. */
+function isSafeCommand(command: string): boolean {
+  const trimmed = command.trim();
+  return SAFE_COMMANDS.some(
+    (prefix) => trimmed === prefix || trimmed.startsWith(`${prefix} `),
+  );
+}
+
+/**
+ * Which tools ask by default. Mutating tools ask; the read-only and frequent
+ * ones allow, and Bash allows its safe read-only commands. Fail-closed: a tool
+ * not in {@link ALLOW_BY_DEFAULT} asks, so a newly registered mutating tool
+ * cannot silently auto-approve — it asks until someone names it an allow-default.
+ */
+function baseline(tool: string, command?: string): "allow" | "ask" {
+  if (tool === "Bash" && command !== undefined && isSafeCommand(command)) {
+    return "allow";
+  }
   return ALLOW_BY_DEFAULT.has(tool) ? "allow" : "ask";
 }

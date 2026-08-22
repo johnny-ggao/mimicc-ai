@@ -164,6 +164,19 @@ test("a Bash deny rule fires end to end", async () => {
   expect(contentOf(tool)).toContain("denied by rule: Bash(rm -rf:*)");
 });
 
+test("a safe Bash command runs without asking", async () => {
+  toolName = "Bash";
+  toolArgs = { command: "ls docs/adr/" };
+  const out = await graph().invoke(
+    { messages: [new HumanMessage("list the adrs")] },
+    { configurable: { thread_id: "test-thread" } },
+  );
+
+  // One tool message = the command ran (its real output), not parked at the gate.
+  const tool = onlyTool(out.messages);
+  expect(contentOf(tool)).toContain("0001-");
+});
+
 test("an allow rule lets a mutating tool run without asking", async () => {
   const target = ".mimicc-outputs/rule-allow.txt";
   rmSync(target, { force: true });

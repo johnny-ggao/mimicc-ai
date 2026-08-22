@@ -49,6 +49,17 @@ describe("the baseline", () => {
   });
 });
 
+describe("safe Bash commands", () => {
+  test("a read-only command like `ls` allows without asking", () => {
+    expect(decide({ tool: "Bash", command: "ls docs/adr/" }).decision).toBe("allow");
+  });
+
+  test("a content-reading or mutating command still asks", () => {
+    expect(decide({ tool: "Bash", command: "cat .env" }).decision).toBe("ask");
+    expect(decide({ tool: "Bash", command: "rm -rf /" }).decision).toBe("ask");
+  });
+});
+
 const allow = (spec: string): Rule => parseRule(spec, "allow");
 const ask = (spec: string): Rule => parseRule(spec, "ask");
 const deny = (spec: string): Rule => parseRule(spec, "deny");
@@ -113,8 +124,7 @@ describe("rules", () => {
       decide({ tool: "Bash", command: "rm -rf /" }, [deny("Bash(rm -rf:*)")]).decision,
     ).toBe("deny");
     expect(
-      decide({ tool: "Bash", command: "git status" }, [deny("Bash(rm -rf:*)")])
-        .decision,
+      decide({ tool: "Bash", command: "git push" }, [deny("Bash(rm -rf:*)")]).decision,
     ).toBe("ask");
   });
 
