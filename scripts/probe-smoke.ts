@@ -53,6 +53,7 @@ const PAID: Record<string, string> = {
   "32-what-the-provider-allows.ts": "不花 token（每发都是 400），列在这里只为不打网络",
   "33-does-output-share-the-window.ts": "两发各约 86 万未命中输入，实测 $0.1 量级",
   "35-how-wrong-is-our-estimate.ts": "六发各约 6k，合计约 3 万 in，$0.01 量级",
+  "37-does-position-change-adherence.ts": "三臂 × 两档 × 5 采样 × 2 面，深档每臂约 31.7 万 in",
 };
 
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */
