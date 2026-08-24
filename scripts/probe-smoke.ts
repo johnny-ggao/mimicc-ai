@@ -49,6 +49,7 @@ const PAID: Record<string, string> = {
     "3 个回合，约 50k in / 15k out，maxTokens 压到 2048",
   // ⚠️ 32 **不花 token**——它每一发都是 400，计费为零。它在这张表里只为借用
   // 「重定向到本地 stub」这个机制：否则冒烟会去打真 provider，需要网络和一把有效的 key。
+  "31-the-cache-bill.ts": "约 20 万 in（三个臂 × 复本 + 相位 2），out 可忽略",
   "32-what-the-provider-allows.ts": "不花 token（每发都是 400），列在这里只为不打网络",
   "33-does-output-share-the-window.ts": "两发各约 86 万未命中输入，实测 $0.1 量级",
   "35-how-wrong-is-our-estimate.ts": "六发各约 6k，合计约 3 万 in，$0.01 量级",
