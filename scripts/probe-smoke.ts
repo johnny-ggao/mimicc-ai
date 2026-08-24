@@ -47,6 +47,9 @@ const PAID: Record<string, string> = {
     "12 次采样打真模型，一轮约 60k in / 20k out",
   "29-what-reasoning-really-costs.ts":
     "3 个回合，约 50k in / 15k out，maxTokens 压到 2048",
+  // ⚠️ 32 **不花 token**——它每一发都是 400，计费为零。它在这张表里只为借用
+  // 「重定向到本地 stub」这个机制：否则冒烟会去打真 provider，需要网络和一把有效的 key。
+  "32-what-the-provider-allows.ts": "不花 token（每发都是 400），列在这里只为不打网络",
 };
 
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */

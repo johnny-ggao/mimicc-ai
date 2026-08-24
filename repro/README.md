@@ -57,6 +57,7 @@
 | `28-what-reasoning-costs-the-screen.ts` | 终端上那段灰字：**一个回合的灰字段数 == 模型调用次数**（1 + 工具跳数），所以「段数太多」不是「一段太长」；`reasoning_content` **落盘且冷读回得来**（图里标着「读代码读不出来」的那条前提，核掉了）；**活着那条印它、`renderHistory` 不印**——两条渲染路径不一致，量出来的 | 否（stub） |
 | `29-what-reasoning-really-costs.ts` | 屏幕上思维链与正文各占多少行、真模型是不是每一跳都想、单段峰值。**用出货那套装配量**（真提示词、真工具），只把 `maxTokens` 压到 2048 | **是**（3 个回合，约 50k in / 15k out） |
 | `30-the-thinking-row-on-a-real-terminal.ts` | 那一行思考在**真 pty** 上印成了什么：把 `\r` 与 `\x1b[2K` 真的执行一遍之后，**屏幕上只剩每段一行痕迹、思考原文一个字不留**；子 agent 的点与状态行不打架（点在痕迹行之后）；正文完整。🔴 **顺带抓到一个出货 bug**：这个 pty 报 0 列，而 `process.stdout.columns ?? 80` 接不住 0，整行会塌成一个省略号 | 否（假图，连模型都没有） |
+| `32-what-the-provider-allows.ts` | 注册表 `maxOutputTokens` 的证据指针：拿一个不可能的 `max_tokens` 去撞，从拒绝文案里读出每个注册型号的真实输出上限，和注册表对表。🔑 **`GET /models` 没有任何上限字段**（2026-08-24 核过，只有 `id`/`object`/`owned_by`），所以「主动通过 API 获取」这条路在 provider 侧不存在——**这也正是它是探针而不是启动步骤的理由**：它挂在错误文案的措辞上，对面改一个字就静默失效 | 否（每发都是 400，零计费） |
 
 **三个花钱**：`08-overflow.ts`（一次约 1.1M token 的未命中输入，标称 $0.15，实测 $0.09，
 2026-08-13 用户批准）、`19-orphan-tool-call.ts`（三次小请求，`maxTokens: 16`，

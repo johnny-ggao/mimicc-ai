@@ -20,13 +20,55 @@ export interface ModelSpec {
   /** The context-window ceiling, in tokens. Measured or documented, never guessed. */
   windowLimit: number;
   /**
-   * The output-token ceiling handed to ChatOpenAI as `maxTokens`. Absent means
-   * "leave it to the provider's own default" — the right answer for a model
-   * whose parameter is not the `max_tokens` that ChatOpenAI emits (see the
-   * `kimi-k3` entry).
+   * The provider's **real** output ceiling for this model, in tokens. Required,
+   * and the requirement is the point: a registry entry carrying an invented
+   * number is worse than no entry, because the invented number looks measured.
+   *
+   * Measured or documented, never guessed — same rule as {@link windowLimit}.
+   * Re-derive any entry with `bun repro/32-what-the-provider-allows.ts`, which
+   * asks each registered model for an impossible `max_tokens` and reads the
+   * ceiling out of the refusal.
+   *
+   * 🔴 **This is the capability, and it is not what goes on the wire.** What we
+   * ask for is {@link OUTPUT_BUDGET}, which is far smaller and has to be — the
+   * window counts messages and completion together. This field's job is to cap
+   * that budget for a model too small to honour it, and to stop anyone having to
+   * guess the number later.
    */
-  maxTokens?: number;
+  maxOutputTokens: number;
+  /**
+   * `false` for a model whose ceiling must **not** be sent as `max_tokens`.
+   *
+   * Sending nothing is not the same as not knowing: `kimi-k3` reports
+   * `max_completion_tokens`, a parameter `ChatOpenAI` only emits for OpenAI
+   * o* / gpt-5 models, so any value we put in `max_tokens` is sent under a name
+   * the provider ignores. Staying silent lets Moonshot apply its own ceiling,
+   * which is the one we want anyway. The real number still lives in
+   * {@link maxOutputTokens}; this flag only decides whether it reaches the wire.
+   */
+  sendsMaxTokens?: false;
 }
+
+/**
+ * How many output tokens this program actually asks for, whatever the model
+ * would allow. **A policy, and it has to be one** — measured 2026-08-24:
+ *
+ *   > This model's maximum context length is 1048576 tokens. However, you
+ *   > requested 1249764 tokens (856548 in the messages, 393216 in the
+ *   > completion). Please reduce the length of the messages or completion.
+ *
+ * DeepSeek counts the window as **messages + completion**, so every token asked
+ * for here is a token the history cannot use. Asking for the provider's real
+ * ceiling (393,216) leaves 655,360 for input — **below the 838,860 at which
+ * `context/compaction.ts` starts summarising**, so the request would be refused
+ * before the overflow protection ever ran. `repro/33-does-output-share-the-window.ts`
+ * is that experiment, control group included.
+ *
+ * So this stays small: it goes to the wire untouched, which means it has to be
+ * safe against a nearly-full window on its own. `tests/models.test.ts` pins it
+ * against every registered window.
+ */
+export const OUTPUT_BUDGET = 4096;
 
 export interface ProviderSpec {
   id: ProviderId;
@@ -50,8 +92,25 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     // existing .env and CI on the day a second provider landed.
     legacyKeyEnvVar: "LLM_API_KEY",
     defaultModel: "deepseek-v4-flash",
+    // `GET /models` lists three ids: these two and `deepseek-v4-flash-vision-exp`.
+    // The vision model is left out deliberately — this program sends no images,
+    // so registering it would advertise a capability the tools cannot reach.
+    //
+    // Both entries carry the same two numbers because the provider gives them
+    // the same two numbers, checked 2026-08-24 from both directions:
+    //   - window: the pricing table's "Model Details" says 1M for every v4 model,
+    //     and 1_048_576 is the figure `repro/08-overflow.ts` measured on flash by
+    //     walking into the hard 400.
+    //   - output: asking for `max_tokens: 999_999_999` is refused with *the valid
+    //     range of max_tokens is [1, 393216]* — identically for flash, pro, and
+    //     the vision model.
+    //
+    // 🔑 `windowLimit` is the provider's own figure for both, not an
+    // extrapolation from flash: the refusal in `repro/33` names it for `pro`
+    // outright — *This model's maximum context length is 1048576 tokens*.
     models: {
-      "deepseek-v4-flash": { windowLimit: 1_048_576, maxTokens: 4096 },
+      "deepseek-v4-flash": { windowLimit: 1_048_576, maxOutputTokens: 393_216 },
+      "deepseek-v4-pro": { windowLimit: 1_048_576, maxOutputTokens: 393_216 },
     },
   },
   "moonshot-cn": {
@@ -63,13 +122,21 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     models: {
       // K3 reports `max_completion_tokens`, not `max_tokens`, and ChatOpenAI
       // only emits `max_completion_tokens` for OpenAI o* / gpt-5 models (its
-      // `isReasoningModel`). Leaving maxTokens absent means no output cap is
-      // sent and Moonshot applies its own default (131072) — which is exactly
-      // the "align to the provider's default" target, reached by not fighting
-      // the wrong parameter name.
-      "kimi-k3": { windowLimit: 1_048_576 },
-      "kimi-k2.7-code": { windowLimit: 262_144, maxTokens: 32_768 },
-      "kimi-k2.6": { windowLimit: 262_144, maxTokens: 32_768 },
+      // `isReasoningModel`). So whatever we put in `max_tokens` is sent under a
+      // name K3 ignores, and staying silent lets Moonshot apply its own ceiling
+      // — which is the one we want. `sendsMaxTokens: false` says exactly that,
+      // and keeps it distinguishable from "nobody looked the number up".
+      //
+      // ⚠️ **These three numbers are the weakest in the registry.** 131072 is
+      // the figure the previous comment recorded as Moonshot's default for K3;
+      // 32768 arrived with the entries and has no recorded source. Neither has
+      // been through the refusal probe, because the Moonshot key was removed
+      // from `.env` on 2026-08-24 and nothing here can reach that API today.
+      // Run `bun repro/32-what-the-provider-allows.ts` with a Moonshot key to
+      // replace them with measured values.
+      "kimi-k3": { windowLimit: 1_048_576, maxOutputTokens: 131_072, sendsMaxTokens: false },
+      "kimi-k2.7-code": { windowLimit: 262_144, maxOutputTokens: 32_768 },
+      "kimi-k2.6": { windowLimit: 262_144, maxOutputTokens: 32_768 },
     },
   },
 };
@@ -82,6 +149,12 @@ export interface ResolvedModelConfig {
   apiKey: string;
   maxTokens: number | undefined;
   windowLimit: number;
+  /**
+   * The provider's real output ceiling, always populated. Carried separately
+   * from {@link maxTokens} because a model can have a ceiling this program must
+   * not send (see {@link ModelSpec.sendsMaxTokens}).
+   */
+  maxOutputTokens: number;
   /** True when the key came from the deprecated `LLM_API_KEY` alias. */
   usedLegacyKey: boolean;
 }
@@ -128,7 +201,16 @@ export function resolveModelConfig(env: Config): ResolvedModelConfig {
     model,
     baseURL: env.LLM_BASE_URL ?? provider.baseURL,
     apiKey,
-    maxTokens: spec.maxTokens,
+    // Three states, and they are all different: ask for the program's budget,
+    // ask for less because this model cannot honour that much, or ask for
+    // nothing at all. Never ask for `maxOutputTokens` — that is the provider's
+    // ceiling, and on a window that counts the completion it would starve the
+    // history (see OUTPUT_BUDGET).
+    maxTokens:
+      spec.sendsMaxTokens === false
+        ? undefined
+        : Math.min(OUTPUT_BUDGET, spec.maxOutputTokens),
+    maxOutputTokens: spec.maxOutputTokens,
     windowLimit: spec.windowLimit,
     usedLegacyKey: canonicalKey === undefined && legacyKey !== undefined,
   };
