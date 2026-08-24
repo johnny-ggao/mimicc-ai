@@ -246,9 +246,12 @@ test("starting from a subdirectory is a different project, as decided", () => {
 
 test("the memory tools are registered when a directory was resolved, and not otherwise", () => {
   const model = new FakeListChatModel({ responses: ["unused"] });
+  const modelFor = () => model;
 
-  const without = registeredTools({ model }).map((tool) => tool.name);
-  const withMemory = registeredTools({ model, memory: store }).map((tool) => tool.name);
+  const without = registeredTools({ model, modelFor }).map((tool) => tool.name);
+  const withMemory = registeredTools({ model, modelFor, memory: store }).map(
+    (tool) => tool.name,
+  );
 
   // The control half. Absent memory must not half-register anything: a tool that
   // always fails is worse than a capability the model was never offered.
@@ -271,6 +274,7 @@ test("every memory tool has an explicit confirmation decision", () => {
   const registered = registeredTools(
     {
       model: new FakeListChatModel({ responses: ["unused"] }),
+      modelFor: () => new FakeListChatModel({ responses: ["unused"] }),
       memory: store,
     },
     new SkillRegistry([]),

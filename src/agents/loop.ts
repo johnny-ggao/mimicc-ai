@@ -306,6 +306,35 @@ export interface AgentGraph {
   }>;
 }
 
+/**
+ * Builds model instances that differ only in their output ceiling.
+ *
+ * `maxTokens` is a **constructor field**, not a call option:
+ * `@langchain/openai/dist/chat_models/completions.js:60-61` reads
+ * `this.maxTokens`, and this version's `ChatOpenAI` has no `.bind` at all
+ * (measured — `repro/34-can-a-middleware-change-max-tokens.ts` calls it and gets
+ * *request.model.bind is not a function*). So anything that wants a different
+ * ceiling for one call needs a different instance; there is no other lever.
+ *
+ * **Not cached, and that was measured rather than assumed.** Constructing one
+ * costs **6 µs** and its `client` is `undefined` until first use — the OpenAI
+ * SDK client is built lazily, so a fresh instance does not mean a fresh
+ * connection pool. Against a network round-trip that is nothing.
+ *
+ * ⚠️ **Instances from here must never have tools bound.** `AgentNode` calls
+ * `validateLLMHasNoBoundTools(request.model)` before binding its own
+ * (`langchain/dist/agents/nodes/AgentNode.js:143-145`), which is also why
+ * swapping the model inside `wrapModelCall` does not lose the agent's tools:
+ * binding happens after the middleware, not before.
+ */
+function modelFactory(options: AgentOptions): (maxTokens?: number) => ChatOpenAI {
+  // Destructured away rather than set to `undefined`: `exactOptionalPropertyTypes`
+  // is on, so an absent key and a key holding `undefined` are different types.
+  const { maxTokens: _ignored, ...withoutCeiling } = options;
+  return (maxTokens?: number) =>
+    createModel(maxTokens === undefined ? withoutCeiling : { ...withoutCeiling, maxTokens });
+}
+
 function createModel(options: AgentOptions): ChatOpenAI {
   return createChatModel({
     model: options.model,
@@ -574,9 +603,14 @@ export function registeredTools(
  * The conditional spreads are the `exactOptionalPropertyTypes` tax: `onUsage:
  * undefined` is not the same as an absent `onUsage` under that flag.
  */
-function environment(model: ChatOpenAI, options: AgentOptions): AgentEnvironment {
+function environment(
+  model: ChatOpenAI,
+  modelFor: (maxTokens?: number) => ChatOpenAI,
+  options: AgentOptions,
+): AgentEnvironment {
   return {
     model,
+    modelFor,
     ...(options.projectInstructions !== undefined
       ? { instructions: options.projectInstructions }
       : {}),
@@ -725,7 +759,12 @@ export function createUniversalAgent(options: AgentOptions) {
   // Built once and shared: the same model answers turns and writes summaries.
   // A summary decides what every later turn can see, which is a poor place to
   // economise, and this is a single-model program besides.
-  const model = createModel(options);
+  // One factory, and the agent's own instance comes out of it too — so the
+  // summariser's instance and this one are siblings rather than one being a
+  // special case of the other. This one is built once and reused for the life of
+  // the graph; only callers that need a different ceiling call the factory again.
+  const modelFor = modelFactory(options);
+  const model = modelFor(options.maxTokens);
 
   // The main agent is a kind like any other, so its window, its meter and its
   // instructions come from the same assembler every subagent uses — including
@@ -745,7 +784,7 @@ export function createUniversalAgent(options: AgentOptions) {
   // sidesteps the inference; a cast would only silence it.
   // Built once and handed to both. It used to be computed twice — once for the
   // tools, once for the middleware — which was harmless only because it is pure.
-  const env = environment(model, options);
+  const env = environment(model, modelFor, options);
 
   // The catalogue is built (or not) here rather than inline, so the decision
   // "no model-invoked skills → no middleware" is made once and the array below

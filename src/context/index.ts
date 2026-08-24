@@ -47,6 +47,7 @@ export {
   contextWindow,
   KEEP_FRACTION,
   SUMMARY_INPUT_TOKENS,
+  SUMMARY_OUTPUT_BUDGET,
   TRIGGER_FRACTION,
   WINDOW_LIMIT,
   type ContextWindowOptions,

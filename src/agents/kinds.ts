@@ -80,6 +80,20 @@ Write the report in the language of the task you were given.`;
 export interface AgentEnvironment {
   /** The model this kind runs on — the agent's own instance, shared. */
   model: BaseChatModel;
+  /**
+   * Builds a model instance with a chosen output ceiling.
+   *
+   * Exists because `maxTokens` is a constructor field rather than a call option
+   * (`@langchain/openai/dist/chat_models/completions.js:60-61`), so a caller that
+   * needs a different ceiling for one call needs a different instance.
+   *
+   * 🔑 **It is what stops the summariser inheriting the agent's ceiling by
+   * accident.** That call is a raw `model.invoke` outside the graph, so no
+   * middleware shapes it — before this field existed it simply used whatever
+   * instance it was handed, and any output policy written as middleware would
+   * have missed it in silence. Now it asks for its own budget, out loud.
+   */
+  modelFor: (maxTokens?: number) => BaseChatModel;
   /** The repository's instructions, already read and wrapped, when it has any. */
   instructions?: string;
   /** Where per-request token numbers go, labelled by the kind that spent them. */
@@ -143,13 +157,16 @@ export function agentStack(
   identity: string,
   environment: AgentEnvironment,
 ): AnyAgentMiddleware[] {
-  const { model, instructions, memory, onUsage, onWindow, window, rules } = environment;
+  const { model, modelFor, instructions, memory, onUsage, onWindow, window, rules } =
+    environment;
 
   const stack = [
     // Outside the meter, because it decides which messages are sent — and the
     // meter has to count the messages that were actually sent.
     contextWindow({
-      model,
+      // The factory, not the instance: the summarising call chooses its own
+      // output ceiling rather than inheriting whatever this agent runs with.
+      modelFor,
       agent: identity,
       // Nothing to wire for pinning any more: a message that must survive a cut
       // now carries the mark itself, so the injector pins it at construction and

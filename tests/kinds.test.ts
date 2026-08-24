@@ -24,10 +24,20 @@ import { contextWindow } from "@/context";
 
 const model = new FakeListChatModel({ responses: ["ok"] });
 
+/**
+ * A fake environment always hands back the same fake model, whatever ceiling is
+ * asked for — the point under test here is installation order, not ceilings.
+ * ⚠️ The field is required rather than optional on purpose: the summarising call
+ * bypasses every middleware, so "whoever assembles must say which model it gets"
+ * is the property that keeps it from inheriting one by accident.
+ */
+const modelFor = () => model;
+
 /** The middleware names langchain carries, in installation order. */
 const namesOf = (identity: string, instructions?: string): string[] =>
   agentStack(identity, {
     model,
+    modelFor,
     ...(instructions !== undefined ? { instructions } : {}),
   }).map((middleware) => middleware.name);
 
@@ -43,7 +53,7 @@ describe("the order every kind is assembled in", () => {
   });
 
   test("the same order holds for a subagent kind", () => {
-    const explore = subagentSpecs({ model })[0];
+    const explore = subagentSpecs({ model, modelFor })[0];
     const names = (explore?.middleware ?? []).map((middleware) => middleware.name);
 
     expect(names.indexOf("ContextWindow")).toBeLessThan(names.indexOf("UsageMeter"));
@@ -62,7 +72,7 @@ describe("the order every kind is assembled in", () => {
   test("a stack with the meter outside the window is refused at assembly", () => {
     const wrong = [
       usageMeter("main", "stub", () => {}),
-      contextWindow({ model, agent: "main" }),
+      contextWindow({ modelFor, agent: "main" }),
     ];
 
     expect(() => {
@@ -95,7 +105,7 @@ describe("what a kind is called", () => {
    * that never ran.
    */
   test("a subagent kind's registered name is the identity its stack is labelled with", () => {
-    const explore = subagentSpecs({ model })[0];
+    const explore = subagentSpecs({ model, modelFor })[0];
 
     expect(explore?.name).toBe("explore");
     // Proven through the usage records rather than by reading the middleware:

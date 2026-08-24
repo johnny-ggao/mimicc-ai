@@ -219,6 +219,7 @@ test("every registered tool has an explicit confirmation decision", () => {
   const registered = registeredTools(
     {
       model: new FakeListChatModel({ responses: ["unused"] }),
+      modelFor: () => new FakeListChatModel({ responses: ["unused"] }),
       memory: new MemoryStore({
         global: "/nonexistent/global",
         project: "/nonexistent/project",
@@ -235,7 +236,7 @@ test("every registered tool has an explicit confirmation decision", () => {
 // registry it gains Skill, after Task in the order the prompt advertises.
 test("the Skill tool is registered when a registry exists, after Task", () => {
   const registered = registeredTools(
-    { model: new FakeListChatModel({ responses: ["unused"] }) },
+    { model: new FakeListChatModel({ responses: ["unused"] }), modelFor: () => new FakeListChatModel({ responses: ["unused"] }) },
     new SkillRegistry([]),
   ).map((tool) => tool.name);
 
@@ -259,6 +260,7 @@ test("the Skill tool is registered when a registry exists, after Task", () => {
 test("the registered set is the six plus the dispatch tool", () => {
   const registered = registeredTools({
     model: new FakeListChatModel({ responses: ["unused"] }),
+    modelFor: () => new FakeListChatModel({ responses: ["unused"] }),
   }).map((tool) => tool.name);
 
   expect(registered).toEqual([
@@ -274,6 +276,7 @@ test("the registered set is the six plus the dispatch tool", () => {
 test("Write, Edit and Bash ask by default; the rest allow", () => {
   const asking = registeredTools({
     model: new FakeListChatModel({ responses: ["unused"] }),
+    modelFor: () => new FakeListChatModel({ responses: ["unused"] }),
   })
     .map((tool) => tool.name)
     .filter((name) => decide({ tool: name }).decision === "ask");

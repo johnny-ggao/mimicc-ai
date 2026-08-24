@@ -8,7 +8,12 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
 import type { ModelUsage } from "@/usage";
 import { JsonlSaver } from "@/checkpoint";
-import { PROJECT_INSTRUCTIONS_ID, SUMMARY_SOURCE, type WindowEvent } from "@/context";
+import {
+  PROJECT_INSTRUCTIONS_ID,
+  SUMMARY_OUTPUT_BUDGET,
+  SUMMARY_SOURCE,
+  type WindowEvent,
+} from "@/context";
 
 /**
  * One seam, two observation points — which is the whole reason this ticket can
@@ -22,10 +27,14 @@ import { PROJECT_INSTRUCTIONS_ID, SUMMARY_SOURCE, type WindowEvent } from "@/con
 
 interface StubRequest {
   messages: { role: string; content?: unknown; tool_calls?: unknown[] }[];
+  /** What the request actually asked the provider to reserve for the reply. */
+  max_tokens?: number;
 }
 
 let server: ReturnType<typeof Bun.serve>;
 let seen: StubRequest[] = [];
+/** Summarising calls, kept apart — `seen` is only ever the agent's own turns. */
+let seenSummaries: StubRequest[] = [];
 
 /** Set per test to steer the stub. */
 let promptTokens = 1;
@@ -59,7 +68,8 @@ beforeAll(() => {
     async fetch(request) {
       const body = (await request.json()) as StubRequest;
       const summarising = isSummaryCall(body);
-      if (!summarising) seen.push(body);
+      if (summarising) seenSummaries.push(body);
+      else seen.push(body);
 
       // Peek, and only consume when this call is the kind the entry is about —
       // otherwise a summarising call silently eats a failure meant for an agent
@@ -121,6 +131,7 @@ beforeEach(() => {
   promptTokens = 1;
   failures = [];
   summaryAlwaysFails = false;
+  seenSummaries = [];
 });
 
 const events: WindowEvent[] = [];
@@ -538,4 +549,46 @@ describe("what the scale sees when the window cuts", () => {
     expect(events.some((event) => event.type === "summarized")).toBe(true);
     expect(sent?.messages ?? 0).toBeLessThan(state.messages.length);
   });
+});
+
+/**
+ * The summarising call has its own output ceiling, and asks for it out loud.
+ *
+ * ## Why this is a wire test and not a unit test
+ *
+ * The claim is about a request nobody wraps. Summarising is a raw
+ * `model.invoke` outside the graph — `src/context/compaction.ts` says so in as
+ * many words — so every middleware this program installs misses it. A spy on the
+ * factory would prove the factory was called; only the stub's request log proves
+ * what the provider was actually asked for.
+ *
+ * ## What used to be wrong
+ *
+ * The middleware was handed a finished model instance and summarised with it, so
+ * the ceiling of a summary was whatever ceiling the agent happened to run with —
+ * inherited, never chosen. Here the agent is built with no ceiling at all, so
+ * before the split this assertion read `undefined`: the summary asked for
+ * nothing in particular, and any policy about output size would have skipped it
+ * without a word.
+ */
+test("the summarising call asks for its own output ceiling, not the agent's", async () => {
+  const graph = agent();
+  promptTokens = 1_900;
+  await turn(graph, "budget", bulky("first"));
+  await turn(graph, "budget", bulky("second"));
+
+  expect(events.some((event) => event.type === "summarized")).toBe(true);
+  expect(seenSummaries.length).toBeGreaterThan(0);
+
+  for (const request of seenSummaries) {
+    expect(request.max_tokens).toBe(SUMMARY_OUTPUT_BUDGET);
+  }
+
+  // The control half, and it is what makes the line above mean something: this
+  // agent was built without a ceiling, so its own turns carry none. The summary
+  // therefore did not inherit the number — it chose it.
+  expect(seen.length).toBeGreaterThan(0);
+  for (const request of seen) {
+    expect(request.max_tokens).toBeUndefined();
+  }
 });

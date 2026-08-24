@@ -81,6 +81,24 @@ export const KEEP_FRACTION = 0.3;
  */
 export const SUMMARY_INPUT_TOKENS = 100_000;
 
+/**
+ * How many output tokens the summarising call asks for.
+ *
+ * **Its own number, decided here.** It used to be whatever ceiling the agent's
+ * instance carried, which coupled the length of a summary to the length of a
+ * reply — two things with nothing to do with each other. Worse, the coupling was
+ * invisible: this call bypasses every middleware, so it inherited by accident
+ * rather than by decision.
+ *
+ * ⚠️ **The value is today's effective one, not a defended one.** 4096 is what a
+ * DeepSeek instance carried when this was split out, so nothing changed on the
+ * wire the day it moved. What *is* defended is the invariant
+ * `tests/window.test.ts` holds: this call must fit in one window alongside its
+ * own input ceiling, because {@link SUMMARY_INPUT_TOKENS} of transcript plus
+ * this many tokens of answer go out as a single request.
+ */
+export const SUMMARY_OUTPUT_BUDGET = 4096;
+
 const SUMMARY_PROMPT = `You are compacting a coding session so it can continue in a smaller context.
 
 Write a summary of the conversation below. Include, in this order:
@@ -99,11 +117,20 @@ Do not include pleasantries, and do not address the user. Write only the summary
 
 export interface ContextWindowOptions {
   /**
-   * The model that writes summaries. The same one the agent runs on: this is a
-   * single-model program, and a summary decides what every later turn can see,
-   * which is a poor place to economise.
+   * Builds the model that writes summaries, at a chosen output ceiling.
+   *
+   * A factory rather than an instance, and that is the whole point of this
+   * field. Summarising is a raw `model.invoke` outside the graph (see the note
+   * on the call below), so **no middleware shapes it**. Handed a finished
+   * instance, it silently inherited whatever ceiling the agent happened to run
+   * with — and any future policy about output size, written where policies
+   * naturally go, would have missed this call without a word.
+   *
+   * The model itself is still the one the agent runs on: this is a single-model
+   * program, and a summary decides what every later turn can see, which is a
+   * poor place to economise.
    */
-  model: BaseChatModel;
+  modelFor: (maxTokens?: number) => BaseChatModel;
   /**
    * Whose window this is — the same identity its meter is labelled with.
    *
@@ -120,17 +147,11 @@ export interface ContextWindowOptions {
    * nobody needs.
    */
   agent: string;
-  /**
-   * Message ids that must survive a cut, supplied by whoever installs this.
-   *
-   * The projection used to name one id itself — the only edge in the module
-   * graph that reached from this feature into another. It is here now because
-   * the place that *injects* a resident message is the place that knows it has
-   * to be pinned, and that place is `agentStack`: it installs
-   * `projectInstructions` and passes that message's id in the same breath. A
-   * second kind of resident content costs an entry in a list rather than an edit
-   * to the arithmetic.
-   */
+  // ⚠️ A doc comment describing a `pins: readonly string[]` field used to sit
+  // here. That field is gone — pinning is a mark the message carries now, see
+  // `PINNED` in ./projection — and the comment outlived it, describing an
+  // argument no caller passes. Removed 2026-08-24 rather than left to be read as
+  // current.
   /** Overridable so a test can trigger a summary without producing 800k tokens. */
   limit?: number;
   triggerFraction?: number;
@@ -166,7 +187,7 @@ export interface ContextWindowOptions {
  */
 export type WindowTuning = Omit<
   ContextWindowOptions,
-  "model" | "agent" | "onEvent" | "onUsage"
+  "modelFor" | "agent" | "onEvent" | "onUsage"
 >;
 
 /**
@@ -233,7 +254,12 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     const prompt = SUMMARY_PROMPT.replace("{conversation}", getBufferString(trimmed));
     const startedAt = Date.now();
     try {
-      const reply = await options.model.invoke([new HumanMessage(prompt)]);
+      // Its own instance at its own ceiling — see SUMMARY_OUTPUT_BUDGET.
+      // Constructing one costs 6 µs and builds no client until first use
+      // (measured), so this is cheaper than any bookkeeping that would avoid it.
+      const reply = await options
+        .modelFor(SUMMARY_OUTPUT_BUDGET)
+        .invoke([new HumanMessage(prompt)]);
       // Reported by hand because this call does not go through the agent: it is
       // `model.invoke` on the raw instance, so no middleware wraps it and the
       // meter never sees it. Left unreported it was the largest single request

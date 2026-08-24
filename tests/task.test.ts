@@ -260,7 +260,7 @@ describe("the tool defines no subagents of its own", () => {
   // the description forgets is a kind the model never dispatches, and nothing
   // else in the program would notice.
   test("the description lists every registered kind", () => {
-    const specs = subagentSpecs({ model: stubModel() });
+    const specs = subagentSpecs({ model: stubModel(), modelFor: stubModel });
     const built = createTaskTool({ model: stubModel(), subagents: specs });
 
     for (const spec of specs) {
@@ -307,7 +307,7 @@ describe("the guards", () => {
       tools: [
         createTaskTool({
           model: stubModel(),
-          subagents: subagentSpecs({ model: stubModel() }),
+          subagents: subagentSpecs({ model: stubModel(), modelFor: stubModel }),
         }),
       ],
     };
@@ -391,7 +391,7 @@ describe("the explore agent's boundaries", () => {
   });
 
   test("no registered kind can change anything", () => {
-    for (const spec of subagentSpecs({ model: stubModel() })) {
+    for (const spec of subagentSpecs({ model: stubModel(), modelFor: stubModel })) {
       const names = spec.tools.map((tool) => ("name" in tool ? tool.name : ""));
       for (const forbidden of ["Write", "Edit", "Bash", TASK_TOOL_NAME]) {
         expect(names).not.toContain(forbidden);
@@ -417,7 +417,7 @@ describe("cancellation", () => {
     const failure = await failureFrom(
       createTaskTool({
         model,
-        subagents: subagentSpecs({ model: stubModel() }),
+        subagents: subagentSpecs({ model: stubModel(), modelFor: stubModel }),
       }).invoke(
         { description: "find something", subagent_type: "explore" },
         { signal: AbortSignal.abort() },
@@ -456,7 +456,7 @@ describe("what reaches the parent", () => {
     const failure = await failureFrom(
       createTaskTool({
         model: stubModel(),
-        subagents: subagentSpecs({ model: stubModel() }),
+        subagents: subagentSpecs({ model: stubModel(), modelFor: stubModel }),
       }).invoke({
         description: "anything",
         subagent_type: "researcher",
@@ -550,6 +550,7 @@ describe("a subagent's own window", () => {
       model,
       subagents: subagentSpecs({
         model,
+        modelFor: () => model,
         onUsage: (record) => usage.push(record),
         onWindow: (event) => events.push(event),
         // trigger at 1,600, keep 100 — the same shape as the agent's own tests.
@@ -603,6 +604,7 @@ describe("a subagent's own window", () => {
       model,
       subagents: subagentSpecs({
         model,
+        modelFor: () => model,
         window: { limit: 2_000, keepFraction: 0.05 },
       }),
     }).invoke({ description: "look at several files", subagent_type: "explore" });

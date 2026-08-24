@@ -219,7 +219,8 @@ function hasPermissionGate(stack: AnyAgentMiddleware[]): boolean {
 }
 
 test("the deny effector is part of every kind's stack, subagents included", () => {
-  const env = { model: new FakeListChatModel({ responses: ["unused"] }) };
+  const model = new FakeListChatModel({ responses: ["unused"] });
+  const env = { model, modelFor: () => model };
   expect(hasPermissionGate(agentStack("main", env))).toBe(true);
   expect(hasPermissionGate(agentStack("explore", env))).toBe(true);
 });

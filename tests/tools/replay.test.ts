@@ -16,7 +16,8 @@ function registered() {
   // A fake model because `registeredTools` builds the dispatch tool and that
   // needs one; nothing here calls it. Same seam `tests/agent.test.ts` uses for
   // the confirmation gate's coverage.
-  return registeredTools({ model: new FakeListChatModel({ responses: ["unused"] }) });
+  const model = new FakeListChatModel({ responses: ["unused"] });
+  return registeredTools({ model, modelFor: () => model });
 }
 
 /**
