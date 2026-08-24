@@ -104,6 +104,14 @@ export interface AgentOptions {
   model: string;
   maxTokens?: number;
   /**
+   * The most this program asks for on one answer, before the window clamps it.
+   *
+   * Distinct from {@link maxTokens}, which is the ceiling the model instance is
+   * *built* with. This one is a want that `outputCeiling` lowers per request as
+   * the history fills up (`src/context/compaction.ts`).
+   */
+  outputBudget?: number;
+  /**
    * The system prompt, handed to `createAgent` rather than seeded into state.
    *
    * That distinction is the whole point and it is not cosmetic. A system message
@@ -309,6 +317,8 @@ export interface AgentGraph {
 /**
  * Builds model instances that differ only in their output ceiling.
  *
+ * ## Why a factory and not one instance
+ *
  * `maxTokens` is a **constructor field**, not a call option:
  * `@langchain/openai/dist/chat_models/completions.js:60-61` reads
  * `this.maxTokens`, and this version's `ChatOpenAI` has no `.bind` at all
@@ -320,6 +330,11 @@ export interface AgentGraph {
  * costs **6 µs** and its `client` is `undefined` until first use — the OpenAI
  * SDK client is built lazily, so a fresh instance does not mean a fresh
  * connection pool. Against a network round-trip that is nothing.
+ *
+ * ⚠️ A `Map` keyed by ceiling stood here first. It is worse than useless once
+ * the ceiling is computed per request rather than chosen from a short list: the
+ * key space becomes continuous and the map grows one entry per distinct ceiling,
+ * for the life of the process, to save 6 µs.
  *
  * ⚠️ **Instances from here must never have tools bound.** `AgentNode` calls
  * `validateLLMHasNoBoundTools(request.model)` before binding its own
@@ -617,6 +632,7 @@ function environment(
     ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
     ...(options.onWindow !== undefined ? { onWindow: options.onWindow } : {}),
     ...(options.window !== undefined ? { window: options.window } : {}),
+    ...(options.outputBudget !== undefined ? { outputBudget: options.outputBudget } : {}),
     ...(options.memory !== undefined
       ? { memory: new MemoryStore(options.memory) }
       : {}),

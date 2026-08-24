@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createUniversalAgent } from "./agents";
 import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
-import { resolveModelConfig } from "./models";
+import { OUTPUT_BUDGET, resolveModelConfig } from "./models";
 import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
 import { resolveMemoryDirs } from "./memory";
@@ -77,6 +77,9 @@ async function main(): Promise<void> {
     apiKey: model.apiKey,
     model: model.model,
     ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+    // The *want*. What actually goes on the wire is this clamped against what
+    // the history leaves — `outputCeiling` in `src/context/compaction.ts`.
+    outputBudget: model.maxTokens ?? OUTPUT_BUDGET,
     // The window limit is a per-model fact from the registry, not the global
     // `WINDOW_LIMIT` constant that only described DeepSeek.
     window: { limit: model.windowLimit },

@@ -3,6 +3,7 @@ import type { AnyAgentMiddleware } from "langchain";
 
 import { pinTurnTask, projectInstructions } from "../context";
 import { injectMemory, type MemoryStore } from "../memory";
+import { OUTPUT_BUDGET } from "../models";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { type RuleSet } from "../tools/permission";
 import { permissionGate } from "./permissionGate";
@@ -94,6 +95,13 @@ export interface AgentEnvironment {
    * have missed it in silence. Now it asks for its own budget, out loud.
    */
   modelFor: (maxTokens?: number) => BaseChatModel;
+  /**
+   * The most this program asks for on one answer, before the window clamps it.
+   *
+   * Absent means the registry's default. It is a *want*: `outputCeiling` in
+   * `context/compaction` lowers it whenever the history leaves less room.
+   */
+  outputBudget?: number;
   /** The repository's instructions, already read and wrapped, when it has any. */
   instructions?: string;
   /** Where per-request token numbers go, labelled by the kind that spent them. */
@@ -157,7 +165,7 @@ export function agentStack(
   identity: string,
   environment: AgentEnvironment,
 ): AnyAgentMiddleware[] {
-  const { model, modelFor, instructions, memory, onUsage, onWindow, window, rules } =
+  const { model, modelFor, outputBudget, instructions, memory, onUsage, onWindow, window, rules } =
     environment;
 
   const stack = [
@@ -167,6 +175,7 @@ export function agentStack(
       // The factory, not the instance: the summarising call chooses its own
       // output ceiling rather than inheriting whatever this agent runs with.
       modelFor,
+      outputBudget: outputBudget ?? OUTPUT_BUDGET,
       agent: identity,
       // Nothing to wire for pinning any more: a message that must survive a cut
       // now carries the mark itself, so the injector pins it at construction and

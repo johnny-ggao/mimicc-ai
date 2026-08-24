@@ -2,7 +2,12 @@ import { describe, expect, it } from "bun:test";
 
 import { loadConfig } from "../src/config";
 import { OUTPUT_BUDGET, PROVIDERS, resolveModelConfig } from "../src/models";
-import { TRIGGER_FRACTION } from "../src/context/compaction";
+import {
+  CONTEXT_SAFETY_TOKENS,
+  MIN_OUTPUT_TOKENS,
+  outputCeiling,
+  TRIGGER_FRACTION,
+} from "../src/context/compaction";
 
 describe("resolveModelConfig", () => {
   it("resolves DeepSeek defaults from the canonical key", () => {
@@ -116,23 +121,43 @@ describe("resolveModelConfig", () => {
  * The coupling `repro/33-does-output-share-the-window.ts` measured, pinned.
  *
  * DeepSeek counts the window as messages + completion, so what this program asks
- * for is subtracted from what the history may hold. `compaction.ts` starts
- * summarising at `TRIGGER_FRACTION` of the window and calls the rest margin
- * against its own token arithmetic. A completion budget has to fit inside that
- * margin *next to* an estimate error, not merely inside it.
+ * for is subtracted from what the history may hold.
  *
- * ⚠️ This test is the reason the two numbers cannot drift apart silently. It
- * fails if someone raises OUTPUT_BUDGET toward a provider ceiling, which is
- * exactly the mistake made and caught on 2026-08-24.
+ * ⚠️ **This replaces a weaker test.** Until 2026-08-24 it asserted that
+ * `OUTPUT_BUDGET` alone was a small fraction of the compaction margin — which was
+ * the only defence available while that constant went to the wire untouched. It
+ * is not the defence any more: the budget is now a *want* that `outputCeiling`
+ * lowers per request, so the property worth holding is about the clamp, not about
+ * the constant. Deleting the old one without this would have dropped the guard
+ * that caught the 2026-08-24 mistake.
  */
-describe("the output budget fits inside the compaction margin", () => {
+describe("the clamp keeps a request inside the window, whatever the budget is", () => {
   for (const provider of Object.values(PROVIDERS)) {
     for (const [name, spec] of Object.entries(provider.models)) {
-      it(`${name}: budget leaves the summariser room to act first`, () => {
-        const headroom = spec.windowLimit * (1 - TRIGGER_FRACTION);
-        expect(OUTPUT_BUDGET).toBeLessThan(headroom);
-        expect(OUTPUT_BUDGET).toBeLessThan(headroom * 0.1);
+      it(`${name}: a nearly-full context cannot push a request over the window`, () => {
+        // The worst case the trigger allows through: summarising starts here, so
+        // a request may legitimately be this large before anything shrinks it.
+        const used = Math.floor(spec.windowLimit * TRIGGER_FRACTION);
+        const ceiling = outputCeiling(OUTPUT_BUDGET, used, spec.windowLimit);
+        expect(used + ceiling).toBeLessThanOrEqual(spec.windowLimit);
+      });
+
+      it(`${name}: an empty context gets the whole budget`, () => {
+        expect(outputCeiling(OUTPUT_BUDGET, 0, spec.windowLimit)).toBe(OUTPUT_BUDGET);
       });
     }
   }
+
+  it("never returns less than the floor, however full the context", () => {
+    expect(outputCeiling(OUTPUT_BUDGET, 1_048_576, 1_048_576)).toBe(MIN_OUTPUT_TOKENS);
+  });
+
+  it("holds back the safety margin the estimate is allowed to be wrong in", () => {
+    // Room for exactly the budget plus the margin: the budget still fits.
+    const limit = 100_000;
+    const used = limit - OUTPUT_BUDGET - CONTEXT_SAFETY_TOKENS;
+    expect(outputCeiling(OUTPUT_BUDGET, used, limit)).toBe(OUTPUT_BUDGET);
+    // One token more of history and the answer has to give one token back.
+    expect(outputCeiling(OUTPUT_BUDGET, used + 1, limit)).toBe(OUTPUT_BUDGET - 1);
+  });
 });

@@ -9,11 +9,13 @@ import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
 import type { ModelUsage } from "@/usage";
 import { JsonlSaver } from "@/checkpoint";
 import {
+  MIN_OUTPUT_TOKENS,
   PROJECT_INSTRUCTIONS_ID,
   SUMMARY_OUTPUT_BUDGET,
   SUMMARY_SOURCE,
   type WindowEvent,
 } from "@/context";
+import { OUTPUT_BUDGET } from "@/models";
 
 /**
  * One seam, two observation points — which is the whole reason this ticket can
@@ -552,26 +554,19 @@ describe("what the scale sees when the window cuts", () => {
 });
 
 /**
- * The summarising call has its own output ceiling, and asks for it out loud.
+ * The summarising call asks for its own ceiling; the agent asks for its own.
  *
  * ## Why this is a wire test and not a unit test
  *
  * The claim is about a request nobody wraps. Summarising is a raw
- * `model.invoke` outside the graph — `src/context/compaction.ts` says so in as
- * many words — so every middleware this program installs misses it. A spy on the
- * factory would prove the factory was called; only the stub's request log proves
- * what the provider was actually asked for.
+ * `model.invoke` outside the graph, so every middleware this program installs
+ * misses it. Only the stub's request log proves what the provider was asked for.
  *
- * ## What used to be wrong
- *
- * The middleware was handed a finished model instance and summarised with it, so
- * the ceiling of a summary was whatever ceiling the agent happened to run with —
- * inherited, never chosen. Here the agent is built with no ceiling at all, so
- * before the split this assertion read `undefined`: the summary asked for
- * nothing in particular, and any policy about output size would have skipped it
- * without a word.
+ * ⚠️ **The two numbers have to differ for this to prove anything**, which is why
+ * the budgets are checked separately. They were briefly both 4096, and this test
+ * could not have told inheritance from choice.
  */
-test("the summarising call asks for its own output ceiling, not the agent's", async () => {
+test("the summarising call asks for its own ceiling, the agent asks for its own", async () => {
   const graph = agent();
   promptTokens = 1_900;
   await turn(graph, "budget", bulky("first"));
@@ -580,15 +575,43 @@ test("the summarising call asks for its own output ceiling, not the agent's", as
   expect(events.some((event) => event.type === "summarized")).toBe(true);
   expect(seenSummaries.length).toBeGreaterThan(0);
 
+  // This test's window is 2,000 tokens, far under the safety margin, so every
+  // ceiling here floors. That is the clamp working, and it is why the assertion
+  // is a range rather than a constant: what is shown is that each caller
+  // computes its own, not that either lands on a particular number.
   for (const request of seenSummaries) {
-    expect(request.max_tokens).toBe(SUMMARY_OUTPUT_BUDGET);
+    expect(request.max_tokens).toBeLessThanOrEqual(SUMMARY_OUTPUT_BUDGET);
+    expect(request.max_tokens).toBeGreaterThanOrEqual(MIN_OUTPUT_TOKENS);
   }
-
-  // The control half, and it is what makes the line above mean something: this
-  // agent was built without a ceiling, so its own turns carry none. The summary
-  // therefore did not inherit the number — it chose it.
-  expect(seen.length).toBeGreaterThan(0);
   for (const request of seen) {
-    expect(request.max_tokens).toBeUndefined();
+    expect(request.max_tokens).toBeLessThanOrEqual(OUTPUT_BUDGET);
+    expect(request.max_tokens).toBeGreaterThanOrEqual(MIN_OUTPUT_TOKENS);
   }
+});
+
+/**
+ * The ceiling on the wire tracks how full the context is — the whole point of
+ * the ticket, asserted where it is observable.
+ */
+test("the ceiling on the wire shrinks as the context fills", async () => {
+  const graph = agent({ limit: 200_000 });
+
+  promptTokens = 1;
+  await turn(graph, "roomy", "hello");
+  expect(seen.at(-1)?.max_tokens).toBe(OUTPUT_BUDGET);
+
+  // 190,000 of a 200,000 window already spoken for: what is left is less than
+  // the budget, so the answer has to be smaller.
+  //
+  // ⚠️ **Two turns, not one, and that is the mechanism rather than a workaround.**
+  // The ceiling is computed before the request goes out, from the anchor the
+  // *previous* answer left behind (`requestTokens` in `src/context/projection.ts`).
+  // So the turn that first reports a full context still asks for the full budget;
+  // the one after it is the first that can know.
+  promptTokens = 190_000;
+  await turn(graph, "roomy", "hello again");
+  await turn(graph, "roomy", "and again");
+  const full = seen.at(-1)?.max_tokens;
+  expect(full).toBeLessThan(OUTPUT_BUDGET);
+  expect(full).toBeGreaterThanOrEqual(MIN_OUTPUT_TOKENS);
 });

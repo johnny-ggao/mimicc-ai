@@ -149,8 +149,14 @@ _Avoid_: 消息列表、transcript（中文里）
 **窗口上限（window limit）**：
 一次请求装得下多少 token。`deepseek-v4-flash` 是 **1,048,576**（实测，撞上去是硬 400）。
 **它约束的是单次请求，不是一条 session 的总和**——六次请求各花 3000，不等于用掉了 18000。
-单次请求 = 常驻段（系统提示词 + 工具定义）+ 这条 thread 至今的全部历史，
-所以 **thread 越长、单次请求越大**，这才是窗口会满的机制。**这个数只能从 provider 的文档或
+单次请求 = 常驻段（系统提示词 + 工具定义）+ 这条 thread 至今的全部历史
+**+ 这次请求为回复预留的额度（`max_tokens`）**，所以 **thread 越长、单次请求越大**，
+这才是窗口会满的机制。
+🔑 **预留的输出额度是从同一个窗口里扣的，不是额外的。** 2026-08-24 实测，provider 逐字：
+*maximum context length is 1048576 tokens. However, you requested 1249764 tokens
+(856548 in the messages, 393216 in the completion)*
+（`repro/33-does-output-share-the-window.ts`，带对照组）。所以**要多少输出，就少多少历史**
+——这条决定了发到线上的输出额度必须远小于压缩阈值留下的余量。**这个数只能从 provider 的文档或
 实测拿**：API 不返回它，SDK 会替你编一个。
 _Avoid_: 上下文长度、context size、context window（指上限时）
 

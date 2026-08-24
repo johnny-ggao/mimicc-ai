@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import { downgrade } from "./downgrade";
 import {
+  estimate,
   planCut,
   project,
   requestTokens,
@@ -92,10 +93,87 @@ export const SUMMARY_INPUT_TOKENS = 100_000;
  *
  * ⚠️ **The value is today's effective one, not a defended one.** 4096 is what a
  * DeepSeek instance carried when this was split out, so nothing changed on the
- * wire the day it moved. What *is* defended is the invariant
- * `tests/window.test.ts` holds: this call must fit in one window alongside its
- * own input ceiling, because {@link SUMMARY_INPUT_TOKENS} of transcript plus
- * this many tokens of answer go out as a single request.
+ * wire the day it moved. What *is* defended is the invariant below, and
+ * `tests/window.test.ts` holds both: this call must fit in one window alongside
+ * its own input ceiling, because {@link SUMMARY_INPUT_TOKENS} of transcript plus
+ * this many tokens of answer go out as a single request — and DeepSeek counts a
+ * window as messages *plus* completion (`repro/33-does-output-share-the-window.ts`).
+ *
+ * Picking the number properly is `.scratch/output-budget/` ticket 01's job; pi
+ * derives it from the space the summary has to fit into
+ * (`packages/coding-agent/src/core/compaction/compaction.ts:637`).
+ */
+/**
+ * Tokens held back from the completion ceiling for the estimate to be wrong in.
+ *
+ * pi's number, and copied rather than derived on purpose
+ * (`packages/ai/src/api/simple-options.ts:12`, `CONTEXT_SAFETY_TOKENS = 4096`).
+ * It can be this small — a rounding error next to a 1M window — only because the
+ * estimate it protects is **anchored**: `requestTokens` takes the provider's own
+ * `input_tokens` from the last answer and estimates only the messages added
+ * since (`./projection`). A whole-context character estimate would need
+ * something multiplicative instead, because its error scales with the context
+ * (`repro/35-how-wrong-is-our-estimate.ts`: Chinese lands at 0.48 of actual,
+ * JSON 0.67, English 1.11).
+ *
+ * ⚠️ **The two belong together.** Taking this constant without the anchoring
+ * underneath it is exactly the mistake this file's ticket made on 2026-08-24.
+ */
+export const CONTEXT_SAFETY_TOKENS = 4_096;
+
+/**
+ * The completion ceiling never goes below this, however full the context is.
+ *
+ * 🔑 **Because reasoning is spent out of the same allowance.** DeepSeek v4
+ * returns `reasoning_content` by default and it is billed as output
+ * (`src/agents/prompt.ts`), so a ceiling of a few hundred tokens buys a thought
+ * and no answer. pi guards the same thing from the other end, reserving
+ * `MIN_ANSWER_TOKENS = 1024` for the answer when a thinking budget shares the
+ * ceiling (`packages/ai/src/api/simple-options.ts:54,80-83`).
+ *
+ * When even this does not fit, the request is already past saving and the
+ * overflow path below is what catches it — a floor that lies is worse than a
+ * request that fails honestly.
+ */
+export const MIN_OUTPUT_TOKENS = 1_024;
+
+/**
+ * What this request may spend on its answer: the budget, or what is left of the
+ * window, whichever is smaller.
+ *
+ * The shape is pi's `clampMaxTokensToContext`
+ * (`packages/ai/src/api/simple-options.ts:15-19`). The window counts messages
+ * *and* completion — measured, `repro/33-does-output-share-the-window.ts` — so
+ * every token reserved here is a token the history cannot use, and asking for
+ * the model's real ceiling would starve it.
+ */
+export function outputCeiling(wanted: number, used: number, limit: number): number {
+  const available = limit - used - CONTEXT_SAFETY_TOKENS;
+  return Math.min(wanted, Math.max(MIN_OUTPUT_TOKENS, available));
+}
+
+/**
+ * How many output tokens the summarising call asks for.
+ *
+ * Derived rather than fixed, and derived the same way as everything else: the
+ * transcript it is about to send is the used part of the window, so what is left
+ * is what it may write. pi does the same for its own summariser rather than
+ * reaching for a global constant
+ * (`packages/coding-agent/src/core/compaction/compaction.ts:637`).
+ *
+ * ⚠️ **This call bypasses every middleware** — it is a raw `model.invoke`, see
+ * the note at the call site — so nothing else would have clamped it.
+ */
+export function summaryOutputCeiling(inputTokens: number, limit: number): number {
+  return outputCeiling(SUMMARY_OUTPUT_BUDGET, inputTokens, limit);
+}
+
+/**
+ * The most the summarising call will ever ask for, before the window clamps it.
+ *
+ * ⚠️ **Today's effective value, not a defended one.** 4096 is what a DeepSeek
+ * instance carried when this was split out of the agent's own ceiling, so
+ * nothing changed on the wire the day it moved.
  */
 export const SUMMARY_OUTPUT_BUDGET = 4096;
 
@@ -131,6 +209,15 @@ export interface ContextWindowOptions {
    * poor place to economise.
    */
   modelFor: (maxTokens?: number) => BaseChatModel;
+  /**
+   * The most this agent asks for on any one answer, before the window clamps it.
+   *
+   * A want, not a ceiling: {@link outputCeiling} lowers it whenever the history
+   * leaves less room than that. Handed in rather than read from the registry
+   * because this module knows nothing about providers — and because a subagent
+   * could one day want a different number from the main agent's.
+   */
+  outputBudget: number;
   /**
    * Whose window this is — the same identity its meter is labelled with.
    *
@@ -187,7 +274,7 @@ export interface ContextWindowOptions {
  */
 export type WindowTuning = Omit<
   ContextWindowOptions,
-  "modelFor" | "agent" | "onEvent" | "onUsage"
+  "modelFor" | "outputBudget" | "agent" | "onEvent" | "onUsage"
 >;
 
 /**
@@ -254,11 +341,12 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     const prompt = SUMMARY_PROMPT.replace("{conversation}", getBufferString(trimmed));
     const startedAt = Date.now();
     try {
-      // Its own instance at its own ceiling — see SUMMARY_OUTPUT_BUDGET.
+      // Its own instance at its own ceiling, and the ceiling is derived from
+      // what this very call is about to send — see `summaryOutputCeiling`.
       // Constructing one costs 6 µs and builds no client until first use
       // (measured), so this is cheaper than any bookkeeping that would avoid it.
       const reply = await options
-        .modelFor(SUMMARY_OUTPUT_BUDGET)
+        .modelFor(summaryOutputCeiling(estimate([new HumanMessage(prompt)]), limit))
         .invoke([new HumanMessage(prompt)]);
       // Reported by hand because this call does not go through the agent: it is
       // `model.invoke` on the raw instance, so no middleware wraps it and the
@@ -378,9 +466,20 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
       }
 
       try {
+        // 🔑 The one place that knows both halves of the arithmetic: what this
+        // request costs, and what the window holds. `request.model` is swapped
+        // rather than configured because `maxTokens` is a constructor field —
+        // measured, `repro/34-can-a-middleware-change-max-tokens.ts`. Tools are
+        // bound after every middleware, so this does not lose them.
+        const ceiling = outputCeiling(
+          options.outputBudget,
+          requestTokens(history, cut),
+          limit,
+        );
         const response = await handler({
           ...request,
           messages: project(history, cut),
+          model: options.modelFor(ceiling),
         });
         return changed ? update(response, cut) : response;
       } catch (error) {
@@ -410,9 +509,15 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
         );
         if (next === undefined) throw error;
 
+        const retryCeiling = outputCeiling(
+          options.outputBudget,
+          requestTokens(history, next),
+          limit,
+        );
         const response = await handler({
           ...request,
           messages: project(history, next),
+          model: options.modelFor(retryCeiling),
         });
         return update(response, next);
       }

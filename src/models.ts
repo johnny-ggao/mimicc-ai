@@ -50,8 +50,19 @@ export interface ModelSpec {
 }
 
 /**
- * How many output tokens this program actually asks for, whatever the model
- * would allow. **A policy, and it has to be one** — measured 2026-08-24:
+ * How many output tokens this program asks for on one answer, before the window
+ * clamps it. **A want, not a ceiling** — `outputCeiling` in
+ * `src/context/compaction.ts` lowers it per request as the history fills up.
+ *
+ * 16384 is pi's per-model default (`packages/coding-agent/src/core/provider-composer.ts:161`),
+ * copied rather than reasoned out from scratch: it is a program of the same
+ * shape — a terminal coding agent — answering the same question. It is roughly
+ * the largest answer this program has a legitimate use for, a `Write` of a
+ * sizeable new file, and far below any provider ceiling.
+ *
+ * ⚠️ **It could not have been this large before the clamp existed.** Until
+ * 2026-08-24 this number went to the wire untouched, so it had to be small
+ * enough to be safe against a nearly-full window on its own — measured then:
  *
  *   > This model's maximum context length is 1048576 tokens. However, you
  *   > requested 1249764 tokens (856548 in the messages, 393216 in the
@@ -64,11 +75,11 @@ export interface ModelSpec {
  * before the overflow protection ever ran. `repro/33-does-output-share-the-window.ts`
  * is that experiment, control group included.
  *
- * So this stays small: it goes to the wire untouched, which means it has to be
- * safe against a nearly-full window on its own. `tests/models.test.ts` pins it
- * against every registered window.
+ * That danger is now handled where it belongs, per request, so the number is
+ * free to describe what an answer needs instead of what a full window survives.
+ * `tests/models.test.ts` pins the clamp against every registered window.
  */
-export const OUTPUT_BUDGET = 4096;
+export const OUTPUT_BUDGET = 16_384;
 
 export interface ProviderSpec {
   id: ProviderId;
