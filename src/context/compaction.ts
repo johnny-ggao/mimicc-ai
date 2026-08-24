@@ -164,6 +164,39 @@ export function outputCeiling(wanted: number, used: number, limit: number): numb
  * ⚠️ **This call bypasses every middleware** — it is a raw `model.invoke`, see
  * the note at the call site — so nothing else would have clamped it.
  */
+/**
+ * Reads an answer's ending, when the ending is worth reporting.
+ *
+ * `undefined` for the ordinary case — an answer that finished. Everything else
+ * here exists because {@link outputCeiling} made "ran out of room" a normal
+ * event rather than a rare one, and because nothing in this program could see it:
+ * `finish_reason` is carried all the way onto the message
+ * (`src/agents/model.ts:183-187` streaming, `:256-257` not) and **read nowhere**.
+ * Both paths were checked before this was written —
+ * `repro/36-does-finish-reason-survive-streaming.ts`.
+ *
+ * ⚠️ **`output` counts reasoning.** DeepSeek v4 bills its chain of thought as
+ * output tokens, so an answer can spend the whole ceiling thinking and return an
+ * empty body — which `emptyReplyGuard` then retries at the same ceiling. That
+ * combination is why this is worth reporting rather than inferring.
+ */
+export function answerEnding(
+  message: unknown,
+  ceiling: number,
+): { output: number; bound: "ceiling" | "provider" } | undefined {
+  const metadata = (message as { response_metadata?: { finish_reason?: unknown } })
+    .response_metadata;
+  if (metadata?.finish_reason !== "length") return undefined;
+
+  // The same quarantined cast as `requestTokens` and `usageMeter`: the field is
+  // declared through generic message-structure machinery that collapses to
+  // `undefined` at the default parameter. See the note in `./projection`.
+  const usage = (message as { usage_metadata?: { output_tokens?: number } })
+    .usage_metadata;
+  const output = usage?.output_tokens ?? 0;
+  return { output, bound: output >= ceiling ? "ceiling" : "provider" };
+}
+
 export function summaryOutputCeiling(inputTokens: number, limit: number): number {
   return outputCeiling(SUMMARY_OUTPUT_BUDGET, inputTokens, limit);
 }
@@ -299,6 +332,35 @@ export type WindowEvent =
       /** Characters before and after, across those results alone. */
       before: number;
       after: number;
+    }
+  | {
+      /**
+       * The answer stopped because it ran out of room, not because it was
+       * finished.
+       *
+       * ⚠️ **Not the same word as 截断**, which `CONTEXT.md` already spends on the
+       * third tier of 降级 (a tool result cut down to its head and tail). This is
+       * about the *answer* hitting a ceiling — 触顶.
+       */
+      type: "answer_cut";
+      agent: string;
+      /** What this request asked the provider to reserve. */
+      ceiling: number;
+      /** What the answer actually spent, reasoning included. */
+      output: number;
+      /**
+       * Who did the cutting, and the distinction is the point.
+       *
+       * `"ceiling"` — the answer spent everything it was given, so **our** budget
+       * was the binding constraint and the model had more to say. Compacting
+       * would not help; only a larger ceiling would.
+       *
+       * `"provider"` — it stopped short of what it was given, so something on
+       * the provider's side ended it early. pi treats exactly this case as
+       * recoverable and makes one bounded compact-and-retry attempt
+       * (`packages/ai/src/utils/overflow.ts:171`, `isRecoverableLength`).
+       */
+      bound: "ceiling" | "provider";
     }
   | {
       type: "summary_failed";
@@ -437,6 +499,13 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     return messages;
   }
 
+  /** Reports an answer that ran out of room, and stays quiet about every other. */
+  function reportEnding(response: unknown, ceiling: number): void {
+    const ending = answerEnding(response, ceiling);
+    if (ending === undefined) return;
+    report({ type: "answer_cut", agent: options.agent, ceiling, ...ending });
+  }
+
   return createMiddleware({
     name: "ContextWindow",
     stateSchema,
@@ -481,6 +550,10 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
           messages: project(history, cut),
           model: options.modelFor(ceiling),
         });
+        // Held onto until here, and that is the whole reason this lives in this
+        // file: nothing downstream knows what was asked for, so nothing
+        // downstream can tell an answer that finished from one that ran out.
+        reportEnding(response, ceiling);
         return changed ? update(response, cut) : response;
       } catch (error) {
         // The threshold is defended by an estimate, and the estimate can be
@@ -519,6 +592,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
           messages: project(history, next),
           model: options.modelFor(retryCeiling),
         });
+        reportEnding(response, retryCeiling);
         return update(response, next);
       }
     },

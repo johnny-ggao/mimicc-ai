@@ -46,6 +46,7 @@ export {
 export {
   contextWindow,
   KEEP_FRACTION,
+  answerEnding,
   CONTEXT_SAFETY_TOKENS,
   MIN_OUTPUT_TOKENS,
   outputCeiling,

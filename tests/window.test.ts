@@ -40,6 +40,11 @@ let seenSummaries: StubRequest[] = [];
 
 /** Set per test to steer the stub. */
 let promptTokens = 1;
+/**
+ * When set, the stub ends its answer with `finish_reason: "length"` and reports
+ * this many output tokens — the shape of an answer that ran out of room.
+ */
+let cutAt: number | undefined;
 let failures: ("overflow" | "summary" | "none")[] = [];
 /** Summarising fails for the whole test. A one-shot 500 is simply retried. */
 let summaryAlwaysFails = false;
@@ -96,6 +101,27 @@ beforeAll(() => {
         });
       }
 
+      if (cutAt !== undefined && !summarising) {
+        return Response.json({
+          id: `chatcmpl-cut-${String(seen.length)}`,
+          object: "chat.completion",
+          created: 0,
+          model: "stub",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "cut off mid-" },
+              finish_reason: "length",
+            },
+          ],
+          usage: {
+            prompt_tokens: promptTokens,
+            completion_tokens: cutAt,
+            total_tokens: promptTokens + cutAt,
+          },
+        });
+      }
+
       return Response.json({
         id: `chatcmpl-${String(seen.length)}-${summarising ? "s" : "a"}`,
         object: "chat.completion",
@@ -134,6 +160,7 @@ beforeEach(() => {
   failures = [];
   summaryAlwaysFails = false;
   seenSummaries = [];
+  cutAt = undefined;
 });
 
 const events: WindowEvent[] = [];
@@ -554,16 +581,25 @@ describe("what the scale sees when the window cuts", () => {
 });
 
 /**
- * The summarising call asks for its own ceiling; the agent asks for its own.
+ * The summarising call has its own output ceiling, and asks for it out loud.
  *
  * ## Why this is a wire test and not a unit test
  *
  * The claim is about a request nobody wraps. Summarising is a raw
- * `model.invoke` outside the graph, so every middleware this program installs
- * misses it. Only the stub's request log proves what the provider was asked for.
+ * `model.invoke` outside the graph — `src/context/compaction.ts` says so in as
+ * many words — so every middleware this program installs misses it. A spy on the
+ * factory would prove the factory was called; only the stub's request log proves
+ * what the provider was actually asked for.
+ *
+ * ## What used to be wrong
+ *
+ * The middleware was handed a finished model instance and summarised with it, so
+ * the ceiling of a summary was whatever ceiling the agent happened to run with —
+ * inherited, never chosen.
  *
  * ⚠️ **The two numbers have to differ for this to prove anything**, which is why
- * the budgets are checked separately. They were briefly both 4096, and this test
+ * the assertion is against `SUMMARY_OUTPUT_BUDGET` and the agent's own turns are
+ * checked against a different one. They were briefly both 4096, and the test
  * could not have told inheritance from choice.
  */
 test("the summarising call asks for its own ceiling, the agent asks for its own", async () => {
@@ -577,7 +613,7 @@ test("the summarising call asks for its own ceiling, the agent asks for its own"
 
   // This test's window is 2,000 tokens, far under the safety margin, so every
   // ceiling here floors. That is the clamp working, and it is why the assertion
-  // is a range rather than a constant: what is shown is that each caller
+  // is a range rather than a constant: what is being shown is that each caller
   // computes its own, not that either lands on a particular number.
   for (const request of seenSummaries) {
     expect(request.max_tokens).toBeLessThanOrEqual(SUMMARY_OUTPUT_BUDGET);
@@ -592,13 +628,19 @@ test("the summarising call asks for its own ceiling, the agent asks for its own"
 /**
  * The ceiling on the wire tracks how full the context is — the whole point of
  * the ticket, asserted where it is observable.
+ *
+ * A roomy window and a cheap turn: nothing is clamped, so the agent asks for the
+ * budget in full. Then the same graph with the stub reporting a nearly-full
+ * context: the ceiling has to come down, because the window counts messages and
+ * completion together (`repro/33-does-output-share-the-window.ts`).
  */
 test("the ceiling on the wire shrinks as the context fills", async () => {
   const graph = agent({ limit: 200_000 });
 
   promptTokens = 1;
   await turn(graph, "roomy", "hello");
-  expect(seen.at(-1)?.max_tokens).toBe(OUTPUT_BUDGET);
+  const roomy = seen.at(-1)?.max_tokens;
+  expect(roomy).toBe(OUTPUT_BUDGET);
 
   // 190,000 of a 200,000 window already spoken for: what is left is less than
   // the budget, so the answer has to be smaller.
@@ -614,4 +656,62 @@ test("the ceiling on the wire shrinks as the context fills", async () => {
   const full = seen.at(-1)?.max_tokens;
   expect(full).toBeLessThan(OUTPUT_BUDGET);
   expect(full).toBeGreaterThanOrEqual(MIN_OUTPUT_TOKENS);
+});
+
+/**
+ * An answer that ran out of room is reported, and the two ways it can happen are
+ * told apart.
+ *
+ * ## Why the distinction is the point
+ *
+ * `finish_reason: "length"` alone says an answer stopped early. It does not say
+ * whose fault it was, and the two have opposite fixes:
+ *
+ * - spent the whole ceiling → **our** budget bound it, and only a larger ceiling
+ *   helps;
+ * - stopped short of it → the provider ended it, which pi treats as recoverable
+ *   and retries once after compacting (`packages/ai/src/utils/overflow.ts:171`).
+ *
+ * Before this existed the program read `finish_reason` nowhere at all, so both
+ * cases were indistinguishable from an answer that simply finished.
+ */
+describe("an answer that ran out of room", () => {
+  test("is reported as ours when it spends the whole ceiling", async () => {
+    const graph = agent({ limit: 200_000 });
+    promptTokens = 1;
+    // The ceiling here is the full budget — nothing is clamped in a roomy
+    // window — so an answer that spends exactly that hit *our* limit.
+    cutAt = OUTPUT_BUDGET;
+    await turn(graph, "cut-ours", "write me something long");
+
+    const cut = events.filter((event) => event.type === "answer_cut");
+    expect(cut.length).toBeGreaterThan(0);
+    expect(cut[0]).toMatchObject({
+      type: "answer_cut",
+      bound: "ceiling",
+      ceiling: OUTPUT_BUDGET,
+      output: OUTPUT_BUDGET,
+    });
+  });
+
+  test("is reported as the provider's when it stops short of the ceiling", async () => {
+    const graph = agent({ limit: 200_000 });
+    promptTokens = 1;
+    cutAt = 12; // nowhere near the ceiling: something else ended this answer
+    await turn(graph, "cut-theirs", "write me something long");
+
+    const cut = events.filter((event) => event.type === "answer_cut");
+    expect(cut.length).toBeGreaterThan(0);
+    expect(cut[0]).toMatchObject({ type: "answer_cut", bound: "provider", output: 12 });
+  });
+
+  test("stays quiet when the answer simply finished", async () => {
+    const graph = agent({ limit: 200_000 });
+    promptTokens = 1;
+    await turn(graph, "clean", "hello");
+
+    // The control half: without it, a reporter that fired on every turn would
+    // pass both tests above.
+    expect(events.some((event) => event.type === "answer_cut")).toBe(false);
+  });
 });
