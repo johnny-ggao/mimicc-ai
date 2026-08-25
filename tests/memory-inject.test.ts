@@ -7,13 +7,17 @@ import { join } from "node:path";
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 
 import { createUniversalAgent, DURABILITY, RECURSION_LIMIT } from "@/agents";
-import { isPinned } from "@/context";
+import { JsonlSaver } from "@/checkpoint";
+import { decodeMessage, encodeMessage } from "@/checkpoint/messages";
+import { isPinned, PINNED, type WindowEvent } from "@/context";
 import {
   MAX_INJECTED_BYTES,
   MEMORY_ID,
   MemoryStore,
   render,
+  renderUpdate,
   select,
+  SNAPSHOT_KEY,
   type Memory,
   type MemoryDirs,
   type WriteContext,
@@ -22,15 +26,21 @@ import {
 /**
  * What injection costs, measured rather than asserted.
  *
- * The design decision this file defends was made against my recommendation
- * (2026-08-17): memory is re-injected live rather than frozen for the session,
- * and the price is that a turn which changes memory breaks the provider's cached
- * prefix from that message onwards. "The price is acceptable" is a claim about
- * bytes, so the end-to-end tests below read the bytes that actually went to the
- * provider — a stub records every request body — and pin *where* the two
- * requests stop matching.
+ * This file used to defend the opposite design. Memory was re-injected live and
+ * the price was that a turn which changed it broke the provider's cached prefix
+ * from that message onwards; the tests pinned *where* two requests stopped
+ * matching, so the price was at least known.
  *
- * Without that measurement the argument would rest on nobody having checked.
+ * The block is frozen now and corrections ride out as a `<memory-update>`
+ * appended to the request, so the claim being defended is stronger: a turn that
+ * changes memory breaks the prefix **nowhere**. That is still a claim about
+ * bytes, so it is still measured the same way — a stub records every request
+ * body and the tests read what actually went to the provider.
+ *
+ * ⚠️ The inverted test below is deliberately not deleted. What it protected was
+ * "the cost lands at the memory message rather than at the system prompt"; what
+ * replaces it protects "there is no cost to land". Dropping it would have left
+ * the strongest claim in the file resting on nobody having checked.
  */
 
 interface StubRequest {
@@ -198,7 +208,7 @@ test("a turn that changes nothing sends a byte-identical prefix", async () => {
   );
 });
 
-test("a turn that changes memory diverges at the memory message, and not before", async () => {
+test("a turn that changes memory breaks the prefix nowhere, and rides at the tail", async () => {
   store.add("writes in Chinese", "user", CONTEXT);
   const graph = agent(true);
 
@@ -207,22 +217,161 @@ test("a turn that changes memory diverges at the memory message, and not before"
   await turn(graph, "second", "same");
 
   const [one, two] = seen;
-  const at = divergence(one as StubRequest, two as StubRequest);
+  const first = one as StubRequest;
+  const second = two as StubRequest;
 
-  // The cost is real — this is the turn that pays it. What is being pinned is
-  // that it is paid *at the memory message* rather than at the system prompt:
-  // everything before it still caches, which is why the message is injected here
-  // and not prepended to the prompt.
-  expect(at).toBeLessThan((one as StubRequest).messages.length);
-  expect(String((one as StubRequest).messages[at]?.content)).toContain("<memory>");
-  for (let i = 0; i < at; i += 1) {
-    expect(JSON.stringify((one as StubRequest).messages[i])).toBe(
-      JSON.stringify((two as StubRequest).messages[i]),
-    );
-  }
-  expect(String((two as StubRequest).messages[at]?.content)).toContain(
-    "prefers Bun over Node",
+  // The inversion. Under live re-injection this diverged partway through; frozen,
+  // everything the first request contained is still there, byte for byte, in the
+  // same order — even though memory changed between the two.
+  expect(divergence(first, second)).toBe(first.messages.length);
+
+  // The change is not lost, it is appended — and it is *last*, so nothing before
+  // it moved and nothing before it re-bills. Exactly one, because it is rebuilt
+  // on every model call and a second copy would mean one of them stayed behind.
+  const carrying = second.messages.filter((message) =>
+    String(message.content).includes("</memory-update>"),
   );
+  expect(carrying).toHaveLength(1);
+  const appended = second.messages[second.messages.length - 1];
+  expect(String(appended?.content)).toContain("</memory-update>");
+  expect(String(appended?.content)).toContain("prefers Bun over Node");
+
+  // And the frozen block still says what it said, which is the other half of the
+  // same claim: the update wins, the block does not chase it.
+  const block = second.messages.find((message) =>
+    String(message.content).includes("<memory>"),
+  );
+  expect(String(block?.content)).not.toContain("prefers Bun over Node");
+});
+
+test("the update says what is no longer listed, not only what is new", async () => {
+  store.add("writes in Chinese", "user", CONTEXT);
+  const stale = store.add("uses Node 18", "project", CONTEXT);
+  const graph = agent(true);
+
+  await turn(graph, "first", "drop");
+  seen = [];
+  store.remove(stale.id);
+  await turn(graph, "second", "drop");
+
+  const appended = (seen[0] as StubRequest).messages.at(-1);
+  // Deletion is the case an "append the new stuff" design cannot express: the
+  // text is still visible in the block above, so the update has to retract it by
+  // id rather than by staying quiet.
+  expect(String(appended?.content)).toContain(`- [${stale.id}]`);
+});
+
+test("the update never enters the transcript", async () => {
+  store.add("writes in Chinese", "user", CONTEXT);
+  const graph = agent(true);
+
+  await turn(graph, "first", "ephemeral");
+  store.add("prefers Bun over Node", "user", { threadId: "t", callId: "c2" });
+  const messages = await turn(graph, "second", "ephemeral");
+
+  // It went to the provider (the test above reads it there) and it is nowhere in
+  // the state. That is what keeps it out of `pinTurnTask`'s reach — a human
+  // message written back would be pinned on the next turn and outlive its point.
+  // The closing tag, not the opening one: the frozen block's preamble names
+  // `<memory-update>` to tell the model where corrections show up, so matching
+  // the opening tag finds the block itself and the assertion passes for the
+  // wrong reason. Measured — it did, on the first run.
+  expect(JSON.stringify(seen)).toContain("</memory-update>");
+  expect(
+    messages.some((message) =>
+      JSON.stringify(message.content).includes("</memory-update>"),
+    ),
+  ).toBe(false);
+});
+
+test("the frozen block carries its id set, and it survives the checkpointer", async () => {
+  const written = store.add("writes in Chinese", "user", CONTEXT);
+  const messages = await turn(agent(true), "hello", "t1");
+  const block = messages.find((message) => message.id === MEMORY_ID);
+
+  expect(block?.additional_kwargs[SNAPSHOT_KEY]).toEqual([written.id]);
+
+  // Measured, not assumed. `checkpoint/messages.ts` lists the fields whose
+  // fidelity it has checked and `additional_kwargs` is not among them, so the
+  // marker this design depends on is checked here instead of inherited.
+  const round = decodeMessage(encodeMessage(block as BaseMessage));
+  expect(round.additional_kwargs[SNAPSHOT_KEY]).toEqual([written.id]);
+  expect(isPinned(round)).toBe(true);
+  expect(JSON.stringify(round.content)).toBe(JSON.stringify(block?.content));
+});
+
+test("reopening the thread with a fresh agent leaves the block byte-identical", async () => {
+  store.add("writes in Chinese", "user", CONTEXT);
+  const stateDir = join(root, "state");
+
+  // A second `createUniversalAgent` over the same saved state is what `--resume`
+  // does: new middleware, empty closures, the block coming back off disk. The
+  // marker has to be read out of the message, because there is nothing in memory
+  // left to remember it.
+  const first = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}/v1`,
+    apiKey: "sk-stub",
+    model: "stub",
+    systemPrompt: "stub prompt",
+    memory: dirs,
+    checkpointer: new JsonlSaver(stateDir),
+  });
+  await turn(first, "before", "resumed");
+
+  seen = [];
+  const second = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}/v1`,
+    apiKey: "sk-stub",
+    model: "stub",
+    systemPrompt: "stub prompt",
+    memory: dirs,
+    checkpointer: new JsonlSaver(stateDir),
+  });
+  const messages = await turn(second, "after", "resumed");
+
+  const block = messages.find((message) => message.id === MEMORY_ID);
+  expect(block?.additional_kwargs[SNAPSHOT_KEY]).toBeDefined();
+  // The failure this pins is silent: a re-freeze here would work perfectly and
+  // simply stop the cache hitting, for the rest of the session.
+  expect(JSON.stringify(block?.content)).toContain("writes in Chinese");
+  expect(JSON.stringify(seen)).not.toContain("</memory-update>");
+});
+
+test("a block that cannot say what it holds is re-frozen, and the event says so", async () => {
+  store.add("writes in Chinese", "user", CONTEXT);
+  const events: WindowEvent[] = [];
+  const graph = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}/v1`,
+    apiKey: "sk-stub",
+    model: "stub",
+    systemPrompt: "stub prompt",
+    memory: dirs,
+    onWindow: (event) => events.push(event),
+  });
+
+  // A session written before the block was frozen: right id, pinned, no marker.
+  // "Never marked" and "marker lost" are the same situation from here, so they
+  // take the same road rather than a branch each.
+  const legacy = new HumanMessage({
+    id: MEMORY_ID,
+    content: "<memory>\n[stale] whatever it used to say\n</memory>",
+    additional_kwargs: { ...PINNED },
+  });
+  const result = (await graph.invoke(
+    { messages: [legacy, new HumanMessage("hello")] },
+    {
+      recursionLimit: RECURSION_LIMIT,
+      durability: DURABILITY,
+      configurable: { thread_id: "legacy" },
+    },
+  )) as { messages: BaseMessage[] };
+
+  const block = result.messages.find((message) => message.id === MEMORY_ID);
+  expect(block?.additional_kwargs[SNAPSHOT_KEY]).toBeDefined();
+  expect(JSON.stringify(block?.content)).toContain("writes in Chinese");
+  // Reported, because re-freezing costs a cached prefix and is otherwise
+  // invisible — everything keeps working, the cache just stops hitting.
+  expect(events.filter((event) => event.type === "memory_refroze")).toHaveLength(1);
 });
 
 /* ---------- 选择：优先级、预算、整条 ---------- */
@@ -307,6 +456,43 @@ test("the rendered block groups by category and shows the id the tools take", ()
 
 test("nothing rendered from nothing, so the caller can tell empty from absent", () => {
   expect(render([])).toBeUndefined();
+});
+
+test("no change renders no update, because it is recomputed on every model call", () => {
+  const kept = [fake("user", "a", "2026-01-01")];
+  expect(renderUpdate(kept, ["a"])).toBeUndefined();
+});
+
+test("the update diffs the selected set, not the whole store", () => {
+  // The trap this pins: `select` caps the block, so a memory the budget left out
+  // is absent from the snapshot ids. Diffing the *store* against them would
+  // report every excluded memory as an addition on every single request, handing
+  // back exactly the bytes the cap just saved.
+  const long = "x".repeat(300);
+  const all = [
+    fake("user", long, "2026-01-02"),
+    fake("user", `${long}y`, "2026-01-01"),
+  ];
+  const kept = select(all, 400);
+  expect(kept).toHaveLength(1);
+
+  const snapshot = kept.map((memory) => memory.id);
+  expect(renderUpdate(kept, snapshot)).toBeUndefined();
+
+  // And the control: diffing what was deliberately excluded really would have
+  // produced one, so the assertion above is not passing because nothing can.
+  const wrong = renderUpdate(all, snapshot);
+  expect(wrong).toBeDefined();
+  expect(String(wrong)).toContain(`${long}y`);
+});
+
+test("an added memory is a `+` line and a vanished one is a `-` line", () => {
+  const update = renderUpdate([fake("user", "new", "2026-01-02")], ["gone"]);
+  expect(update).toContain("+ [new] new");
+  expect(update).toContain("- [gone]");
+  // Weaker than "deleted" on purpose: a memory can leave the selection by being
+  // crowded out, and the block never claimed to be the whole store.
+  expect(update).toContain("no longer listed");
 });
 
 /* ---------- 票 12 与票 13 接起来 ---------- */

@@ -16,4 +16,12 @@ export {
   type WriteContext,
 } from "./store";
 export { createMemoryTools, type MemoryToolOptions } from "./tools";
-export { injectMemory, MAX_INJECTED_BYTES, MEMORY_ID, render, select } from "./inject";
+export {
+  injectMemory,
+  MAX_INJECTED_BYTES,
+  MEMORY_ID,
+  render,
+  renderUpdate,
+  select,
+  SNAPSHOT_KEY,
+} from "./inject";

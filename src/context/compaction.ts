@@ -367,6 +367,22 @@ export type WindowEvent =
       agent: string;
       reason: "threshold" | "overflow";
       error: string;
+    }
+  | {
+      /**
+       * The memory block was rebuilt, which it otherwise never is.
+       *
+       * Frozen at first injection and byte-identical from then on, so this is the
+       * one moment it costs a cached prefix. It fires when the block is there but
+       * cannot say which memories it holds — a session written before the block
+       * was frozen, or a marker that did not survive — and re-freezing is the
+       * recovery. Reported because the failure it recovers from is otherwise
+       * **silent**: everything keeps working, the cache just stops hitting.
+       */
+      type: "memory_refroze";
+      agent: string;
+      /** How many memories the new block holds. */
+      memories: number;
     };
 
 /** Private state. The leading underscore keeps it out of the agent's input and output. */

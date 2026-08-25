@@ -202,7 +202,7 @@ export function agentStack(
     // ⚠️ Only the main agent has a store — see the note on `AgentEnvironment.memory`.
     // An Explore is stateless by design, so there is nothing to inject and this
     // slot is empty for it. That is decided, not incidental.
-    ...(memory !== undefined ? [injectMemory(memory)] : []),
+    ...(memory !== undefined ? [injectMemory(memory, identity, onWindow)] : []),
     pinTurnTask(),
     // The deny half of the permission gate. Unlike the confirmation gate (the
     // ask half, appended in `loop.ts`), this belongs to every kind: a subagent
