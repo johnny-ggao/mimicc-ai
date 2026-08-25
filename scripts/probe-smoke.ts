@@ -65,6 +65,8 @@ const PAID: Record<string, string> = {
     "四格各 1 次，走真 agent 与真闸，约 5.6 万 in",
   "43-does-a-real-task-reach-for-write.ts":
     "三格各 1 次真写码任务，走真 agent 与真闸，实测 6.8 万 in / 1.6k out",
+  "44-was-it-the-wording.ts":
+    "两臂 × 5 次，走真 agent 与真闸，实测 11.1 万 in / 3.5k out",
 };
 
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */
