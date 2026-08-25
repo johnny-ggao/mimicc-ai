@@ -54,7 +54,7 @@ src/
   skills/        外部装的技能：读取、目录、Skill 工具
   memory/        跨 session 的记忆
 tests/           与 src 同构，`bun test` 全量跑
-docs/adr/        判过的架构决定（六条）
+docs/adr/        判过的架构决定（八条）
 repro/           复现探针：每个脚本回答一个「当时不知道」的问题
 bench/           量测基线
 learn/           教学工作区（已在 prettier / eslint 里排除）
