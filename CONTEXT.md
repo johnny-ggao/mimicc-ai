@@ -90,7 +90,9 @@ _the hard floor does not reach `Bash`, so `cat .env` would leak the secret's val
 （它按工具名判，而认出一条命令写不写文件要解析 shell，那不是二值判据）。
 **把关它的是确认门**：安全清单只有 `ls` / `pwd` / `git status` / `git branch` 四条免问
 （`src/tools/permission.ts:216`），其余一律 ask。
-🔴 **所以 `auto` 下它没有默认的关**。要更严就配规则（见「自动模式」）。
+🔴 **所以 `auto` 下它没有默认的关**。要更严就配规则（见「自动模式」）——
+⚠️ **但规则本身也只到前缀**：`Bash(printf:*)` 拦得住 `printf … > f`，拦不住
+`cd src && printf … > f`（2026-08-26 实测）。**「写文件的命令」这个条件，今天的规则说不出来。**
 ⚠️ **这是边界，不是缺口**：这个仓库对 shell 的推理深度**只到前缀，不到语义**
 （`permission.ts:123`），在别处重新发明它会让同一个问题有两个不一致的答案。
 
