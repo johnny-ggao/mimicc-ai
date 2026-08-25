@@ -40,3 +40,5 @@ export {
 export { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "./prompt";
 export { interruptedText, toolRecovery, type ToolRecoveryOptions } from "./recovery";
 export { classify, failureMarker, failureText, type TurnOutcome } from "./outcome";
+export { readBeforeWrite, READ_MARK_KEY, type ReadMark } from "./readBeforeWrite";
+export { staleReads } from "./staleReads";

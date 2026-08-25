@@ -116,6 +116,30 @@ describe("what a kind is called", () => {
       "UsageMeter",
       "PinTurnTask",
       "PermissionGate",
+      "ReadBeforeWrite",
+      "StaleReads",
     ]);
+  });
+});
+
+describe("the read-before-write gate is fitted to every kind", () => {
+  test("it is in the stack, not appended per-agent like the confirmation gate", () => {
+    // A kind that may write and a kind that may not are assembled identically:
+    // an Explore has no Write/Edit, which makes the gate a no-op for it rather
+    // than a special case. A special case here would be a second way to name a
+    // kind — the thing this file exists to prevent.
+    expect(namesOf("main")).toContain("ReadBeforeWrite");
+    expect(namesOf("explore")).toContain("ReadBeforeWrite");
+  });
+
+  test("it runs inside the deny gate, so a denied path is never hashed", () => {
+    const names = namesOf("main");
+
+    // Both are wrapToolCall hooks, so the order decides which speaks first.
+    // Permission is the outer word: a path the hard floor refuses must not be
+    // opened and read by the gate on its way to a different refusal.
+    expect(names.indexOf("PermissionGate")).toBeLessThan(
+      names.indexOf("ReadBeforeWrite"),
+    );
   });
 });

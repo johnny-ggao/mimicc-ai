@@ -7,6 +7,8 @@ import { OUTPUT_BUDGET } from "../models";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { type RuleSet } from "../tools/permission";
 import { permissionGate } from "./permissionGate";
+import { readBeforeWrite } from "./readBeforeWrite";
+import { staleReads } from "./staleReads";
 import { usageMeter, type ModelUsage } from "../usage";
 import { contextWindow, type WindowEvent, type WindowTuning } from "../context";
 
@@ -209,6 +211,18 @@ export function agentStack(
     // cannot `interrupt()` to ask, but it can be denied, and denying needs no
     // checkpointer. Shared so an Explore's `Read` keeps the hard floor.
     permissionGate(rules),
+    // A second gate, and the first one on the quality axis rather than the
+    // permission axis: a write to an existing file needs a read of its current
+    // version. Shared by every kind for the same reason the deny half is —
+    // `wrapToolCall` needs no checkpointer, so a subagent is covered too. An
+    // Explore has no Write/Edit, which makes this a no-op for it; that is not a
+    // special case and must not become one (a second way to name a kind).
+    readBeforeWrite(),
+    // The sensor half of the same idea. The gate above refuses an edit built on
+    // a stale read; this one says so when a command changed a file out from
+    // under the model — the path with no tool call left to gate. It reports, it
+    // never blocks, and its notice is a hint, so it leaves the history untouched.
+    staleReads(),
   ];
 
   assertMeterInsideWindow(stack);
