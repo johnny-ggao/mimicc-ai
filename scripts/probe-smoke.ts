@@ -55,10 +55,16 @@ const PAID: Record<string, string> = {
   "32-what-the-provider-allows.ts": "不花 token（每发都是 400），列在这里只为不打网络",
   "33-does-output-share-the-window.ts": "两发各约 86 万未命中输入，实测 $0.1 量级",
   "35-how-wrong-is-our-estimate.ts": "六发各约 6k，合计约 3 万 in，$0.01 量级",
-  "37-does-position-change-adherence.ts": "三臂 × 两档 × 5 采样 × 2 面，深档每臂约 31.7 万 in",
-  "38-does-the-written-check-run.ts": "两臂 × 3 次，走真 agent，约 10.8 万 in / 1.7 万 out",
-  "39-does-the-check-slot-matter.ts": "两臂 × 3 次，走真 agent，约 13 万 in / 2.3 万 out",
-  "41-does-the-gate-hold-in-the-loop.ts": "四格各 1 次，走真 agent 与真闸，约 5.6 万 in",
+  "37-does-position-change-adherence.ts":
+    "三臂 × 两档 × 5 采样 × 2 面，深档每臂约 31.7 万 in",
+  "38-does-the-written-check-run.ts":
+    "两臂 × 3 次，走真 agent，约 10.8 万 in / 1.7 万 out",
+  "39-does-the-check-slot-matter.ts":
+    "两臂 × 3 次，走真 agent，约 13 万 in / 2.3 万 out",
+  "41-does-the-gate-hold-in-the-loop.ts":
+    "四格各 1 次，走真 agent 与真闸，约 5.6 万 in",
+  "43-does-a-real-task-reach-for-write.ts":
+    "三格各 1 次真写码任务，走真 agent 与真闸，实测 6.8 万 in / 1.6k out",
 };
 
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */
