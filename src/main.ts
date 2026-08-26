@@ -10,7 +10,7 @@ import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
 import { resolveMemoryDirs } from "./memory";
 import { buildSystemPrompt, type PromptEnvironment } from "./agents";
-import { parseArgs, runRepl, type Start } from "./console";
+import { parseArgs, runOnce, runRepl, type Start } from "./console";
 import { resolveSession } from "./session";
 import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
 import { loadPermissions } from "./tools/permissionConfig";
@@ -129,7 +129,33 @@ async function main(): Promise<void> {
     stateDir,
   });
 
+  // One turn and out. Branches here rather than inside `runRepl` because the
+  // two share the graph and nothing else: the repl owns a terminal, this owns a
+  // process exit code.
+  if (start.kind === "print") {
+    const result = await runOnce({ graph, task: start.task });
+    if (result.text !== "") process.stdout.write(`${result.text}\n`);
+    if (result.refused > 0) {
+      process.stderr.write(
+        `${String(result.refused)} call(s) refused: nobody is attached to approve them. ` +
+          `Pass --auto to run without asking.\n`,
+      );
+    }
+    if (!result.ok) {
+      process.stderr.write(`${result.error ?? "the turn did not finish"}\n`);
+      process.exit(1);
+    }
+    return;
+  }
+
   await runRepl({ graph, skills, stateDir, start });
+}
+
+/** What `--print` resolves to. Not a {@link Start}: it never opens a repl. */
+interface PrintStart {
+  kind: "print";
+  task: string;
+  auto: boolean;
 }
 
 /**
@@ -144,7 +170,7 @@ async function main(): Promise<void> {
  * feature can be tested and scripted at all — and answering it with a prompt
  * would take that away.
  */
-async function resolveStart(stateDir: string): Promise<Start> {
+async function resolveStart(stateDir: string): Promise<Start | PrintStart> {
   const invocation = parseArgs(process.argv.slice(2));
 
   if (invocation.kind === "error") {
