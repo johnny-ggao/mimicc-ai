@@ -6,6 +6,7 @@ import { injectMemory, type MemoryStore } from "../memory";
 import { OUTPUT_BUDGET } from "../models";
 import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
 import { type RuleSet } from "../tools/permission";
+import { assertBlocksInFrequencyOrder } from "./blockOrder";
 import { permissionGate } from "./permissionGate";
 import { readBeforeWrite } from "./readBeforeWrite";
 import { staleReads } from "./staleReads";
@@ -192,10 +193,13 @@ export function agentStack(
     // does not carry it (see the note in `usageMeter`), and this assembler is
     // the last place that still knows.
     usageMeter(identity, modelIdOf(model), onUsage ?? (() => {})),
-    // Both are beforeAgent hooks, so their position among the others is not
-    // load-bearing the way the two above are. Between themselves it does not
-    // matter either: the instructions arrive pinned, so PinTurnTask skips them
-    // whichever order they run in.
+    // Both are beforeAgent hooks. Their order is not load-bearing for pinning —
+    // the instructions arrive pinned, so PinTurnTask skips them whichever order
+    // they run in. It IS load-bearing for cost: the view is re-read from the
+    // top every turn, so a block that changes never must sit before one that
+    // changes rarely (upstream measured HEAD 4.0% vs TAIL 39.3% — view-layout
+    // ticket 01). The order is not held by this comment alone any more:
+    // `assertBlocksInFrequencyOrder` checks the assembled stack below.
     ...(instructions !== undefined ? [projectInstructions(instructions)] : []),
     // A third beforeAgent hook, and it joins them for the same reason: it runs
     // once per turn, outside the loop, so five tool laps still inject once. It
@@ -226,6 +230,12 @@ export function agentStack(
   ];
 
   assertMeterInsideWindow(stack);
+  // The second tripwire on this array: the blocks beforeAgent hooks inject must
+  // sit least-changing first, and every such hook must be registered (fail-
+  // closed). Runs here so every kind's stack is covered; `loop.ts` checks the
+  // full array again once SkillCatalog is appended, which this assembler
+  // cannot see (view-layout-impl ticket 01, 订正①).
+  assertBlocksInFrequencyOrder(stack);
   return stack;
 }
 

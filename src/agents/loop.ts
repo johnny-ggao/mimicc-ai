@@ -12,6 +12,7 @@ import {
 } from "langchain";
 
 import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
+import { assertBlocksInFrequencyOrder } from "./blockOrder";
 import { createChatModel } from "./model";
 import { toolRecovery } from "./recovery";
 import { createMemoryTools, MemoryStore, type MemoryDirs } from "../memory";
@@ -886,6 +887,10 @@ export function createUniversalAgent(options: AgentOptions) {
   ];
 
   assertLoopGuardBeforeGate(middleware);
+  // The block-order tripwire runs again on the full array: SkillCatalog is
+  // appended here, where the assembler's own check cannot see it
+  // (view-layout-impl ticket 01, 订正①).
+  assertBlocksInFrequencyOrder(middleware);
 
   const graph = createAgent({
     model,
