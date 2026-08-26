@@ -39,14 +39,52 @@ import { stallGuard } from "./stallguard";
 import { emptyReplyGuard } from "./terminal";
 
 /**
- * A ceiling on one user turn. The graph counts *node* executions, and one lap of
- * the loop is the model node, the afterModel middleware nodes, and the tools
- * node — several nodes, not two. The guards (loop, stall, empty reply) fire on
- * their own thresholds well inside this budget; this is the crash net behind
- * them, and it must stay wide enough that a guard always fires first.
- * Exceeding it raises GraphRecursionError.
+ * How many tool round-trips one user turn may take.
+ *
+ * **This is the number a person reasons about**, and the reason it exists is a
+ * defect that shipped for months: the ceiling used to be written in *node
+ * executions* (`48`), while the quantity anyone actually cares about is laps.
+ * The graph spends several nodes per lap — the model node, every `afterModel`
+ * middleware node, the tools node — so the usable lap count silently depended
+ * on **how many middlewares were installed**. Four guards cost six nodes a lap,
+ * which made `48` mean *eight laps*, and adding a fifth guard would have quietly
+ * made it under seven. Nobody decided that.
+ *
+ * 🔴 **Measured, not reasoned**: `repro/45-how-many-laps-fit-in-the-limit.ts`
+ * drives the shipped stack against a stub that never stops calling tools and
+ * counts the laps. It reported 8 laps at 6.0 nodes each.
+ *
+ * The old comment claimed the ceiling was "the crash net behind" the guards and
+ * that "a guard always fires first". **That could never hold**, and the reason is
+ * not the number: the guards fire on *pathology* — `LoopGuard` on a repeated
+ * call, `StallGuard` on consecutive failures — while the ceiling fires on
+ * *length*. A turn that honestly needs twelve different laps trips no guard at
+ * all, so no value of the ceiling makes that sentence true.
+ *
+ * 16 rather than the 8 it effectively was: twice the longest turn ever observed
+ * in this repository's own sessions (`.mimicc`, 11 turns, the longest exactly 8
+ * — right against the old ceiling). ⚠️ **That sample cannot settle this on its
+ * own**: those sessions are read-only exploration, `Write`/`Edit` zero, so they
+ * do not contain a coding task's lap requirement. The first real coding sample
+ * we have is an external benchmark task that wanted more than 8.
  */
-export const RECURSION_LIMIT = 48;
+export const LAP_BUDGET = 16;
+
+/**
+ * The node ceiling that buys {@link LAP_BUDGET} laps on the shipped stack.
+ *
+ * Derived rather than chosen, so the two roles the old constant confused stay
+ * apart: this is the **crash net** — a graph that reaches it is broken, not busy
+ * — while `LAP_BUDGET` is the **work budget**. Exceeding it raises
+ * GraphRecursionError, which `classify` reports as `reason: "recursion"`.
+ *
+ * ⚠️ The per-lap and once-per-turn costs are pinned by
+ * `tests/lap-budget.test.ts` against the real assembled stack, so a new
+ * middleware **fails a test** rather than silently shrinking every turn.
+ */
+export const NODES_PER_LAP = 6;
+const ONCE_PER_TURN_NODES = 6;
+export const RECURSION_LIMIT = ONCE_PER_TURN_NODES + LAP_BUDGET * NODES_PER_LAP;
 
 /**
  * When a checkpoint has to be **on disk** rather than merely handed to the saver.
@@ -347,7 +385,9 @@ function modelFactory(options: AgentOptions): (maxTokens?: number) => ChatOpenAI
   // is on, so an absent key and a key holding `undefined` are different types.
   const { maxTokens: _ignored, ...withoutCeiling } = options;
   return (maxTokens?: number) =>
-    createModel(maxTokens === undefined ? withoutCeiling : { ...withoutCeiling, maxTokens });
+    createModel(
+      maxTokens === undefined ? withoutCeiling : { ...withoutCeiling, maxTokens },
+    );
 }
 
 function createModel(options: AgentOptions): ChatOpenAI {
@@ -632,7 +672,9 @@ function environment(
     ...(options.onUsage !== undefined ? { onUsage: options.onUsage } : {}),
     ...(options.onWindow !== undefined ? { onWindow: options.onWindow } : {}),
     ...(options.window !== undefined ? { window: options.window } : {}),
-    ...(options.outputBudget !== undefined ? { outputBudget: options.outputBudget } : {}),
+    ...(options.outputBudget !== undefined
+      ? { outputBudget: options.outputBudget }
+      : {}),
     ...(options.memory !== undefined
       ? { memory: new MemoryStore(options.memory) }
       : {}),

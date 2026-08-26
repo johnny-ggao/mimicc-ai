@@ -24,6 +24,8 @@ export {
   CONFIRMATION_POLICY,
   DURABILITY,
   MAIN_AGENT,
+  LAP_BUDGET,
+  NODES_PER_LAP,
   RECURSION_LIMIT,
   registeredTools,
   type AgentGraph,

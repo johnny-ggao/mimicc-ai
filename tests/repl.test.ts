@@ -18,6 +18,7 @@ import {
   summarizeCall,
 } from "@/console";
 import type { Pending } from "@/console";
+import { RECURSION_LIMIT } from "@/agents";
 
 /**
  * The console is a debugging shell and mostly out of scope for tests — but this
@@ -148,8 +149,11 @@ describe("naming a tool call in one line", () => {
 describe("turning a thrown error into one line", () => {
   test("abort, recursion and llm status keep their exact wording", () => {
     expect(describeError({ name: "AbortError" })).toBe("^C interrupted");
+    // The constant, not the number: the ceiling is now derived from the lap
+    // budget (`loop.ts`), so a literal here would go stale the next time the
+    // budget or the stack changes — which is exactly how it went stale once.
     expect(describeError({ name: "GraphRecursionError" })).toBe(
-      "stopped after 48 steps without a final answer",
+      `stopped after ${String(RECURSION_LIMIT)} steps without a final answer`,
     );
     expect(describeError({ status: 429, message: "rate" })).toBe(
       "llm 429: rate (rate limited, or out of balance)",
