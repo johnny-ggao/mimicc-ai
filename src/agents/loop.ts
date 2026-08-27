@@ -62,14 +62,16 @@ import { emptyReplyGuard } from "./terminal";
  * *length*. A turn that honestly needs twelve different laps trips no guard at
  * all, so no value of the ceiling makes that sentence true.
  *
- * 16 rather than the 8 it effectively was: twice the longest turn ever observed
- * in this repository's own sessions (`.mimicc`, 11 turns, the longest exactly 8
- * — right against the old ceiling). ⚠️ **That sample cannot settle this on its
- * own**: those sessions are read-only exploration, `Write`/`Edit` zero, so they
- * do not contain a coding task's lap requirement. The first real coding sample
- * we have is an external benchmark task that wanted more than 8.
+ * 24 rather than the 16 it was: the first real coding sample that outgrew 16 is
+ * an external benchmark task — csv-to-parquet (run 2026-08-27__13-49-45), whose
+ * session archive shows 17 tool-call laps before the ceiling killed it
+ * (`.scratch/external-bench/issues/03-csv-budget.md`). 24 covers 17 with ~40%
+ * headroom. ⚠️ Deliberately not 32: those 17 laps already consumed the whole
+ * 420s adapter wall-clock cap, so beyond ~24 the clock becomes the binding
+ * constraint before the budget does — a further raise buys laps the clock
+ * cannot pay for (same ticket).
  */
-export const LAP_BUDGET = 16;
+export const LAP_BUDGET = 24;
 
 /**
  * The node ceiling that buys {@link LAP_BUDGET} laps on the shipped stack.
