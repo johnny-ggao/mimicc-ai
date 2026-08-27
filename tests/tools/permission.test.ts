@@ -3,10 +3,45 @@ import { describe, expect, test } from "bun:test";
 import { decide, parseRule, type Rule } from "@/tools/permission";
 
 describe("the hard floor", () => {
-  test("denies a path that escapes the working directory", () => {
-    const verdict = decide({ tool: "Read", path: "../escaped.txt" });
-    expect(verdict.decision).toBe("deny");
-    expect(verdict.reason).toContain("escapes the working directory");
+  // 🔴 This asserted the opposite until Terminal-Bench priced the rule: four
+  // tasks in run `2026-08-27__22-37-36` were refused a path outside `/app`
+  // (`/usr/bin/curl` — that task's actual answer — `/protected/maze_server.py`,
+  // a site-packages module, `/tmp`) and all four times the model got it anyway
+  // through `cat`/heredoc in Bash. The floor bought a wasted lap and moved the
+  // action onto the one path with no gate on it.
+  test("a read may leave the working directory; a write may not", () => {
+    expect(decide({ tool: "Read", path: "../escaped.txt" }).decision).not.toBe("deny");
+
+    for (const tool of ["Write", "Edit"]) {
+      const verdict = decide({ tool, path: "../escaped.txt" });
+      expect(verdict.decision).toBe("deny");
+      expect(verdict.reason).toContain("escapes the working directory");
+    }
+  });
+
+  // Letting Read out put the whole filesystem behind a tool that allows by
+  // default. Until then the escape rule covered `~/.ssh` by covering everything.
+  test("credential files outside the working directory are still refused", () => {
+    for (const path of [
+      "/Users/someone/.ssh/id_rsa",
+      "/Users/someone/.aws/credentials",
+      "/Users/someone/.docker/config.json",
+      "/Users/someone/.config/gcloud/token.json",
+      "/Users/someone/.netrc",
+      "../.env",
+    ]) {
+      const verdict = decide({ tool: "Read", path });
+      expect(verdict.decision).toBe("deny");
+      expect(verdict.reason).toContain("may hold credentials");
+    }
+  });
+
+  // The control: without it, a floor that denies everything outside passes the
+  // test above and the widening never happened.
+  test("an ordinary file outside the working directory is readable", () => {
+    for (const path of ["/etc/hosts", "/usr/bin/curl", "../notes.md"]) {
+      expect(decide({ tool: "Read", path }).decision).not.toBe("deny");
+    }
   });
 
   test("denies the files whose whole point is to hold secrets", () => {

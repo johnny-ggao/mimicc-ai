@@ -34,19 +34,56 @@ export function resolvePath(path: string): string {
 }
 
 /**
+ * The tools allowed out of the working directory: `Read` alone.
+ *
+ * 🔴 **Nothing was allowed out until Terminal-Bench priced the rule.** Four
+ * tasks in run `2026-08-27__22-37-36` had a path outside `/app` refused —
+ * `/usr/bin/curl`, which *was* that task's answer; `/protected/maze_server.py`;
+ * a site-packages module; `/tmp` — and all four times the model reached for
+ * `cat` or a heredoc through `Bash` and got exactly what it had been refused.
+ * The floor never held the access. It bought a wasted lap and moved the same
+ * action onto the one path with no gate on it
+ * (`.scratch/external-bench/issues/05-failure-triage.md`, D).
+ *
+ * ⚠️ **Read only, and the asymmetry is the point.** `Bash` can write outside
+ * too, but a write's blast radius is not a wasted lap, and `Write`/`Edit` ask
+ * before they run while `Read` allows by default. Letting the *silent* tool out
+ * is the cheap half of the trade; letting the mutating ones out is a separate
+ * decision with a separate cost.
+ */
+const ESCAPE_ALLOWED = new Set(["Read"]);
+
+/**
+ * Credential files that live outside a repository, checked against the absolute
+ * path once {@link ESCAPE_ALLOWED} lets a read out of the working directory.
+ *
+ * {@link SECRET} was written for paths *inside* a repository and is still right
+ * there. It does not name `~/.ssh` or `~/.aws`, because until now nothing could
+ * reach them: the escape rule covered the whole filesystem by covering
+ * everything at once. Widening Read removed that cover, so the floor has to name
+ * the places credentials actually live.
+ */
+const SECRET_OUTSIDE =
+  /(^|\/)\.(?:ssh|aws|gnupg|docker|kube|azure)(?:\/|$)|(^|\/)\.config\/(?:gcloud|gh)(?:\/|$)|(^|\/)\.(?:netrc|npmrc|pgpass|pypirc)$|(^|\/)credentials(?:\.[a-z]+)?$/;
+
+/**
  * Why the hard floor denies this path, or null when it does not.
  *
  * The hard floor is the part of the permission gate no rule can relax: it blocks
- * leaving the working directory and touching credential files.
+ * touching credential files, and it blocks leaving the working directory for
+ * every tool except the ones in {@link ESCAPE_ALLOWED}.
  */
-export function denyReason(path: string): string | null {
+export function denyReason(path: string, tool?: string): string | null {
   const full = resolve(ROOT, path);
-  if (full !== ROOT && !full.startsWith(ROOT + sep)) {
+  const outside = full !== ROOT && !full.startsWith(ROOT + sep);
+  if (outside && !(tool !== undefined && ESCAPE_ALLOWED.has(tool))) {
     return `path escapes the working directory: ${path}`;
   }
-  const rel = relative(ROOT, full);
-  if (SECRET.test(`/${rel}`)) {
-    return `refusing to touch ${rel}: it may hold credentials, and tool output is sent to the model`;
+  // Outside, the absolute path is what the patterns are about — `relative` would
+  // hand them a `../../` prefix that means nothing to a rule about `~/.ssh`.
+  const subject = outside ? full : relative(ROOT, full);
+  if (SECRET.test(`/${subject}`) || (outside && SECRET_OUTSIDE.test(subject))) {
+    return `refusing to touch ${subject}: it may hold credentials, and tool output is sent to the model`;
   }
   return null;
 }
@@ -161,7 +198,7 @@ export interface Verdict {
  */
 export function decide(call: ToolCall, rules?: RuleSet, auto = false): Verdict {
   if (call.path !== undefined) {
-    const reason = denyReason(call.path);
+    const reason = denyReason(call.path, call.tool);
     if (reason !== null) return { decision: "deny", reason };
   }
 

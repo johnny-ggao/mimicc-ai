@@ -119,7 +119,15 @@ test("denies a secret read with a message the model reads, not a throw", async (
   expect(tool.status).toBe("error");
 });
 
-test("denies a read that escapes the working directory", async () => {
+// 🔴 This used to assert the opposite, and the change was decided rather than
+// drifted into. Terminal-Bench, run `2026-08-27__22-37-36`: four tasks had a
+// path outside `/app` refused — `/usr/bin/curl` (which *was* the answer to that
+// task), `/protected/maze_server.py`, a site-packages module, `/tmp` — and all
+// four times the model simply reached for `cat`/heredoc through Bash and got
+// what it wanted. The floor never stopped the access; it bought a wasted lap and
+// moved the same action onto the path with no gate on it at all.
+// `.scratch/external-bench/issues/05-failure-triage.md`, D.
+test("a read outside the working directory is allowed — the floor never held it", async () => {
   toolName = "Read";
   toolArgs = { path: "../escaped.txt" };
   const out = await graph().invoke(
@@ -127,8 +135,21 @@ test("denies a read that escapes the working directory", async () => {
     { configurable: { thread_id: "test-thread" } },
   );
 
-  const tool = onlyTool(out.messages);
-  const content = contentOf(tool);
+  const content = contentOf(onlyTool(out.messages));
+  expect(content).not.toContain("escapes the working directory");
+});
+
+// Only `Read` was let out. A write outside the working directory is a different
+// question: Bash can do it too, but a write's blast radius is not a wasted lap.
+test("a write outside the working directory is still refused", async () => {
+  toolName = "Write";
+  toolArgs = { path: "../escaped.txt", content: "x" };
+  const out = await graph().invoke(
+    { messages: [new HumanMessage("write a file outside")] },
+    { configurable: { thread_id: "test-thread" } },
+  );
+
+  const content = contentOf(onlyTool(out.messages));
   expect(content).toContain("escapes the working directory");
   expect(content).not.toContain("Please fix your mistakes");
 });
