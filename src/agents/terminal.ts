@@ -7,15 +7,39 @@ import {
 } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
+import { readAnswerCut, type AnswerCut } from "../context";
+
 import { hintInjector } from "./hint";
 
 /**
- * Ensures a tool-using turn ends with a visible assistant response.
+ * Ensures a turn ends with a visible assistant response.
  *
- * The model can run tools and then produce an empty final answer — a turn that
- * ends with nothing, and no exception. Retry once: remove the empty message,
- * jump back to the model with a reminder. If the retry is empty again, persist
- * a canned fallback so the turn is visibly complete rather than blank.
+ * Two different things end a turn blank, and they need opposite treatment.
+ *
+ * **The model returned nothing.** It ran tools and then produced an empty final
+ * answer — no exception, just nothing. Retry once: remove the empty message,
+ * jump back to the model with a reminder. If the retry is empty too, persist a
+ * canned fallback so the turn is visibly complete rather than blank.
+ *
+ * **The output ceiling ate the answer.** On a reasoning model the reasoning is
+ * billed as output, so a whole ceiling can go into thinking with not one
+ * character of answer written. That reply is empty in exactly the same way, and
+ * the reminder above is the wrong thing to send: the model did not forget to
+ * answer, it never got there — and the retry re-asks at the same ceiling, so it
+ * ends the same way. Say what happened instead, and do not retry.
+ *
+ * Measured, Terminal-Bench run `2026-08-27__22-37-36`
+ * (`.scratch/external-bench/issues/05-failure-triage.md`, C1/C2):
+ * `grid-pattern-transform` spent 133s on one call that returned
+ * `completion_tokens == reasoning_tokens == 32768` and nothing else — and
+ * because no tool had run yet, the check below never looked at it and the turn
+ * ended silent. `write-compressor` did it twice for 325s and reported the
+ * fallback's wrong cause.
+ *
+ * ⚠️ **Only `bound: "ceiling"` short-circuits.** A `"provider"` ending is the
+ * recoverable one — pi makes exactly one bounded retry for it
+ * (`packages/ai/src/utils/overflow.ts:171`) — so it falls through to the retry
+ * that is already here.
  */
 
 const REMINDER =
@@ -25,6 +49,17 @@ const REMINDER =
 
 const FALLBACK =
   "The model completed the tool run but returned no final response, including after one automatic retry. Please try again.";
+
+/** Says which limit ended the turn, because "no response" would name the wrong cause. */
+function ceilingText(cut: AnswerCut): string {
+  return (
+    `This turn produced no answer: the reply reached its output limit ` +
+    `(${String(cut.output)} of ${String(cut.ceiling)} tokens) before writing any of it — ` +
+    `on a reasoning model the thinking is billed as output and can consume the whole limit. ` +
+    `Retrying at the same limit would end the same way, so nothing was retried. ` +
+    `Ask for less in one turn, or raise the output budget.`
+  );
+}
 
 function hasVisibleContent(message: AIMessage): boolean {
   // This program's single model returns string content. A non-string content
@@ -66,6 +101,21 @@ export function emptyReplyGuard(): AnyAgentMiddleware {
         if (last === undefined || !AIMessage.isInstance(last)) return;
         if (hasVisibleContent(last)) return;
         if ((last.tool_calls ?? []).length > 0) return;
+
+        // Before the tool-result check, not after: the ceiling can eat the very
+        // first reply of a turn, and that turn has no tool result to find.
+        const cut = readAnswerCut(last);
+        if (cut?.bound === "ceiling") {
+          return {
+            messages: [
+              new AIMessage({
+                ...(last.id !== undefined ? { id: last.id } : {}),
+                content: ceilingText(cut),
+              }),
+            ],
+          };
+        }
+
         if (!toolResultSinceLastUser(messages)) return;
 
         if (!retried) {

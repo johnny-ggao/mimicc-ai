@@ -2,6 +2,7 @@ import { ContextOverflowError } from "@langchain/core/errors";
 import {
   HumanMessage,
   getBufferString,
+  isBaseMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
@@ -195,6 +196,42 @@ export function answerEnding(
     .usage_metadata;
   const output = usage?.output_tokens ?? 0;
   return { output, bound: output >= ceiling ? "ceiling" : "provider" };
+}
+
+/** What {@link answerEnding} decided, once it is written down on the message. */
+export type AnswerCut = {
+  ceiling: number;
+  output: number;
+  bound: "ceiling" | "provider";
+};
+
+/** The key {@link markAnswerCut} stamps under, beside `PINNED_KEY`. */
+export const ANSWER_CUT_KEY = "mimicc_answer_cut";
+
+/**
+ * Writes the verdict onto the answer it is about.
+ *
+ * The event alone was enough while nothing acted on it (`answer_cut` reports to
+ * the log, output-budget ticket 02). It is not enough now: the guard that has to
+ * act runs in a different middleware and cannot read an event, and the same
+ * ticket's own criterion — *"a person can work out afterwards that this turn was
+ * cut"* — is better served from the transcript than from a log line the session
+ * file does not contain. Same shape as {@link markPinned} for the same reason:
+ * the evidence belongs on the message it describes.
+ */
+export function markAnswerCut<T extends BaseMessage>(message: T, cut: AnswerCut): T {
+  message.additional_kwargs[ANSWER_CUT_KEY] = cut;
+  return message;
+}
+
+/** The verdict on this answer, when it carries one. */
+export function readAnswerCut(message: BaseMessage): AnswerCut | undefined {
+  const mark = message.additional_kwargs[ANSWER_CUT_KEY];
+  if (typeof mark !== "object" || mark === null) return undefined;
+  const { ceiling, output, bound } = mark as Partial<AnswerCut>;
+  if (typeof ceiling !== "number" || typeof output !== "number") return undefined;
+  if (bound !== "ceiling" && bound !== "provider") return undefined;
+  return { ceiling, output, bound };
 }
 
 export function summaryOutputCeiling(inputTokens: number, limit: number): number {
@@ -520,6 +557,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
     const ending = answerEnding(response, ceiling);
     if (ending === undefined) return;
     report({ type: "answer_cut", agent: options.agent, ceiling, ...ending });
+    if (isBaseMessage(response)) markAnswerCut(response, { ceiling, ...ending });
   }
 
   return createMiddleware({
