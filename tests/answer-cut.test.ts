@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { HumanMessage } from "@langchain/core/messages";
 
-import { createUniversalAgent, RECURSION_LIMIT } from "@/agents";
+import { createUniversalAgent, DURABILITY, RECURSION_LIMIT } from "@/agents";
 import { JsonlSaver } from "@/checkpoint";
 
 /**
@@ -221,4 +221,41 @@ test("a ceiling-eaten reply is caught whether or not the provider says so", asyn
     events.filter((e) => e.type === "answer_cut" && e.bound === "ceiling"),
   ).not.toEqual([]);
   expect(text(out).toLowerCase()).toContain("output");
+});
+
+// 🔴 What `--print` actually reads. `runOnce` does not keep the stream's text —
+// it asks the checkpointer for the finished thread and walks back to the last
+// assistant message (`src/console/once.ts:165`). Terminal-Bench run
+// `2026-08-28__02-59-09` showed the gap: the `answer_cut` event fired, the retry
+// was correctly skipped, and `mimicc --print` still printed **nothing**, because
+// the message the guard substituted never came back out of the checkpointer.
+// Asserting on `invoke`'s return value cannot see this — that value is in-memory.
+test("the substituted message survives a round trip through the checkpointer", async () => {
+  mode = "first-empty";
+  const graph = createUniversalAgent({
+    baseURL: `http://localhost:${String(server.port)}`,
+    apiKey: "sk-stub",
+    model: "stub",
+    checkpointer: new JsonlSaver(mkdtempSync(join(tmpdir(), "mimicc-cut-"))),
+  });
+  const config = { configurable: { thread_id: "cut-5" } };
+  await graph.invoke(
+    { messages: [new HumanMessage("go")] },
+    { ...config, recursionLimit: RECURSION_LIMIT, durability: DURABILITY },
+  );
+
+  // `createUniversalAgent`'s return type does not surface `getState`; the cast is
+  // the same quarantine the rest of the suite uses for framework-shaped values.
+  const reader = graph as unknown as {
+    getState(c: typeof config): Promise<{
+      values: { messages: { getType(): string; content: unknown }[] };
+    }>;
+  };
+  const state = await reader.getState(config);
+  const said = state.values.messages
+    .filter((m) => m.getType() === "ai")
+    .map((m) => (typeof m.content === "string" ? m.content : ""))
+    .filter((c) => c.trim() !== "");
+
+  expect(said.at(-1)?.toLowerCase()).toContain("output");
 });

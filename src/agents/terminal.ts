@@ -83,6 +83,28 @@ function toolResultSinceLastUser(messages: BaseMessage[]): boolean {
   return false;
 }
 
+/**
+ * Swaps an empty answer for a written one: remove, then append.
+ *
+ * 🔴 **Not a same-id replacement**, and the difference is the whole point. Reusing
+ * the id is langgraph's own idiom and works in memory — but the saver keys
+ * messages by id and keeps the first write, so the substituted text never comes
+ * back out of the checkpointer. `mimicc --print` reads exactly that: it asks the
+ * checkpointer for the finished thread and walks back to the last assistant
+ * message (`src/console/once.ts:165`).
+ *
+ * Measured, Terminal-Bench run `2026-08-28__02-59-09`: `write-compressor` fired
+ * `answer_cut` and correctly skipped the retry, and `--print` still printed
+ * **nothing**. A test on `invoke`'s return value cannot see this — that value is
+ * the in-memory state, where the same-id write did land.
+ */
+function replace(empty: AIMessage, content: string): BaseMessage[] {
+  return [
+    ...(empty.id !== undefined ? [new RemoveMessage({ id: empty.id })] : []),
+    new AIMessage({ content }),
+  ];
+}
+
 export function emptyReplyGuard(): AnyAgentMiddleware {
   let retried = false;
   const inject = hintInjector();
@@ -106,14 +128,7 @@ export function emptyReplyGuard(): AnyAgentMiddleware {
         // first reply of a turn, and that turn has no tool result to find.
         const cut = readAnswerCut(last);
         if (cut?.bound === "ceiling") {
-          return {
-            messages: [
-              new AIMessage({
-                ...(last.id !== undefined ? { id: last.id } : {}),
-                content: ceilingText(cut),
-              }),
-            ],
-          };
+          return { messages: replace(last, ceilingText(cut)) };
         }
 
         if (!toolResultSinceLastUser(messages)) return;
@@ -126,14 +141,7 @@ export function emptyReplyGuard(): AnyAgentMiddleware {
             jumpTo: "model" as const,
           };
         }
-        return {
-          messages: [
-            new AIMessage({
-              ...(last.id !== undefined ? { id: last.id } : {}),
-              content: FALLBACK,
-            }),
-          ],
-        };
+        return { messages: replace(last, FALLBACK) };
       },
     },
     wrapModelCall: inject.wrapModelCall,
