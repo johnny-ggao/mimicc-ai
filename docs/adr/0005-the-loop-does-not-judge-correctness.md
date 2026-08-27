@@ -37,3 +37,10 @@ self-contradiction) is out of scope.
   outside the harness.
 - "Deterministic scoring first" is not a preference; it is the only reliable
   observability a single-user CLI has.
+
+## 增补（2026-08-27）：cap 的机制从一个变两个
+
+「capped completion」的机制最初只有 loop guard 的 `loop_capped`；回合预算落地后
+（ADR 0009）多了 `budget_exhausted`——token/墙钟耗尽、模型仍发工具调用时被 strip + 罐头收尾。
+两者都走 `onCap` 的同一条结构化上报（`turn_capped`），都不是失败、不写失败 marker。
+本 ADR 的轴不变：cap 判的是机械信号（重复、空转、预算耗尽），不是答案对不对。

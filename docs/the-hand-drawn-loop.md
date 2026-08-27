@@ -59,7 +59,9 @@ established, and the reason this file can be prose now:
   those slots, and none of them had anywhere to attach on the hand-drawn graph.
 - **`recursionLimit` counts node executions, not laps.** One lap is two nodes, so
   the ceiling has to be read in nodes. That assertion outlived the loop and is
-  still in the test file.
+  still in the test file. The ceiling itself is now a format placeholder: since
+  the work budget moved to the token/time axis (ADR 0009), the number only
+  satisfies langgraph's finite-limit requirement.
 
 ## Why it went
 
