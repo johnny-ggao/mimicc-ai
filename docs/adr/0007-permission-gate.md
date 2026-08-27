@@ -28,6 +28,19 @@ throw）是两套彼此不知情的机制。**它们被替换成一个权限门*
 - **`Bash` 按命令前缀进规则**（`Bash(git status:*)`），不按路径——路径 glob 对一个 shell 命令无效。
 - **硬地板不可放宽**（逃出工作目录 + `SECRET` 正则），任何层的规则都翻不动。「允不允许」与「问不问」
   是两条轴：自动模式只翻 ask→allow，永不碰 deny。
+  - 🔴 **订正（2026-08-28）：「逃出工作目录」不再覆盖 `Read`。**
+    这一条当初是照「统一入口」的对称性写的，没有量过它挡住了什么。Terminal-Bench
+    run `2026-08-27__22-37-36` 量了：四道题被拒了 cwd 之外的路径——`/usr/bin/curl`
+    （那正是那道题的答案）、`/protected/maze_server.py`、site-packages 里的模块、`/tmp`
+    ——**四次模型全都改用 `Bash` 的 `cat`/heredoc 拿到了同样的东西**。
+    这道门一次都没挡住访问，只买到一圈空转，并把同一个动作赶到唯一没有门的那条路
+    （见「逃生口」）上。**挡不住的规则不是更严，是把行为赶到看不见的地方。**
+    ⚠️ **只放 `Read`，`Write`/`Edit` 照旧出不去**：`Bash` 同样能往外写，
+    但写的爆炸半径不是一圈空转，而且 `Write`/`Edit` 跑之前要问、`Read` 默认放行——
+    **把那个不出声的工具放出去是便宜的那一半**。
+    ⚠️ 放行连带补了地板：原来的 `SECRET` 是照仓库内部写的，不认 `~/.ssh` / `~/.aws`
+    ——以前不用认，因为逃逸规则把整个文件系统一次盖住了。`SECRET_OUTSIDE` 把凭据
+    真正待的地方点名（`src/tools/permission.ts`）。
 - **两层配置、仓库只能更严**：用户级 `~/.mimicc/permissions.json` + 仓库级 `.mimicc-permissions.json`
   （tracked）；合并严格者胜；仓库层只许写 ask/deny。
 - **内置基线**：只读 allow / Write・Edit ask / `Bash` ask——「默认 ask」落在改型工具上，只读的

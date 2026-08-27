@@ -115,3 +115,18 @@ deer-flow 同样接受这一条；**上面那个微窗口**。
 文件时报错、不盖章，「Write never overwrites」的语义原样。词表（CONTEXT.md 版本闸/读标记）与
 `readBeforeWrite.ts` 的注释同步更新。deer-flow 原版「writes never refresh」的规则不变——它没有
 Write/Edit 的拆分，那个流在它那里不会精确触发。
+
+## 增补（2026-08-28）：`Edit` 也盖自己的章
+
+上一条增补给 `Write` 的理由（**自己写下的字节就是当前版本**）对 `Edit` 一字不差地成立：
+它同样精确知道改完的字节。原来那句「写永不刷新标记」给的论证是
+_「任何一次成功的写都改变哈希，因而作废此前所有的读」_——**这句是对的，但它论证的是
+「旧读不再开门」，不是「不能盖新章」**。
+
+Terminal-Bench run `2026-08-27__22-37-36` 给这个区别标了价：`Write → Edit → Edit`
+在三道题里都卡在第二个 `Edit`（`blind-maze-explorer-algorithm`、`pytorch-model-cli`、
+`.hard`），每次都逼一次「重读自己刚写完的文件」。修完复跑，被拦次数 2→0、1→0，
+消息数 59→34、111→79（`.scratch/external-bench/issues/05-failure-triage.md`，C4）。
+
+不变的两条仍有测试钉着：**只拿着过期的 `Read` 标记仍然被拒**；**自己改完之后被外部
+（`Bash`、用户）动过，仍然被拒**——盖章在改动落盘之后现算哈希，所以外部改动照样对不上。

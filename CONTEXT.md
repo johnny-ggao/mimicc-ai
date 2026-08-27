@@ -81,6 +81,11 @@ _Avoid_: YOLO 模式、绕过（绕过是另一件事）
 **硬地板（hard floor）**：
 权限门里不可放宽的那层 deny：逃出工作目录 + 密钥路径（`.env`、`.git/`、`.mimicc/`、`id_*`、
 `*.pem`、`*.key`）。任何层的规则都不能把它翻成 allow/ask。
+⚠️ **「逃出工作目录」这一条对 `Read` 不成立**（2026-08-28 判，ADR 0007 有订正）：
+`Read` 出得去，`Write`/`Edit` 出不去。理由是这道门对读**从来没挡住过**——
+Terminal-Bench 四次拒绝，四次模型改用 `Bash` 的 `cat`/heredoc 拿到了同样的东西，
+净效果只是多烧一圈并把动作赶到逃生口上。放行之后凭据地板补了仓库外的那一半
+（`SECRET_OUTSIDE`：`~/.ssh`、`~/.aws`、`~/.docker`、`~/.config/gcloud`、`.netrc` 等）。
 🔴 **它按路径判，所以够不到 `Bash`**（`src/tools/permission.ts:212-215` 逐字：
 _the hard floor does not reach `Bash`, so `cat .env` would leak the secret's value_
 ——这正是读内容的命令被刻意排除在安全清单之外的理由）。见「逃生口」。
@@ -109,11 +114,13 @@ _the hard floor does not reach `Bash`, so `cat .env` would leak the secret's val
 变了就发一条**一跳就消失**的提醒——那条路上没有工具调用可拦，只能告知。
 
 **读标记（read mark）**：
-一次 `Read` 或成功的 `Write` 在它的 `ToolMessage` 上留下的「哪个文件 + 当时的 sha256」。
+一次 `Read` 或一次成功的 `Write` / `Edit` 在它的 `ToolMessage` 上留下的
+「哪个文件 + 当时的 sha256」。
 **盖在 `additional_kwargs` 上，与钉住标记同一个位置**——所以**摘要吃掉那条结果，标记跟着没，
 闸就再也过不去**。🔑 **这不是巧合**：投影决定模型看得见什么，闸的状态就该活在模型看得见的那份里。
-**`Edit` 永不刷新它**：任何一次成功的改都改变哈希，作废此前所有的读与写——两次连续修改之间
-必须重读。**外部改动**（Bash、用户）让哈希对不上，标记照样作废、闸照样拦。
+**写完就盖新章**（`Write` 2026-08-27、`Edit` 2026-08-28）：工具自己算得出写完的字节，
+所以「知道当前版本」是事实不是客气。**作废的是此前的读**，不是新盖的这一枚——
+两次连续修改之间**不必**重读。**外部改动**（Bash、用户）让哈希对不上，标记照样作废、闸照样拦。
 _Avoid_: 缓存、快照（那是 `staleReads` 在命令前后各取的那两份）
 
 ### 上下文的成本
@@ -229,8 +236,8 @@ _Avoid_: 消息列表、transcript（中文里）
 **+ 这次请求为回复预留的额度（`max_tokens`）**，所以 **thread 越长、单次请求越大**，
 这才是窗口会满的机制。
 🔑 **预留的输出额度是从同一个窗口里扣的，不是额外的。** 2026-08-24 实测，provider 逐字：
-*maximum context length is 1048576 tokens. However, you requested 1249764 tokens
-(856548 in the messages, 393216 in the completion)*
+_maximum context length is 1048576 tokens. However, you requested 1249764 tokens
+(856548 in the messages, 393216 in the completion)_
 （`repro/33-does-output-share-the-window.ts`，带对照组）。所以**要多少输出，就少多少历史**
 ——这条决定了发到线上的输出额度必须远小于压缩阈值留下的余量。**这个数只能从 provider 的文档或
 实测拿**：API 不返回它，SDK 会替你编一个。
