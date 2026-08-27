@@ -24,13 +24,13 @@ export {
   CONFIRMATION_POLICY,
   DURABILITY,
   MAIN_AGENT,
-  LAP_BUDGET,
-  NODES_PER_LAP,
   RECURSION_LIMIT,
   registeredTools,
   type AgentGraph,
   type AgentOptions,
 } from "./loop";
+export { turnBudget } from "./turnBudget";
+export type { TurnCapReason } from "./loopguard";
 export {
   agentStack,
   assertMeterInsideWindow,

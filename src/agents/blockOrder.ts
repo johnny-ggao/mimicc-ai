@@ -55,6 +55,7 @@ export const BLOCKS: Record<string, Freq> = {
   LoopGuard: "notABlock", // resets its streak, injects nothing
   StallGuard: "notABlock", // resets its streak, injects nothing
   EmptyReplyGuard: "notABlock", // resets its retry flag, injects nothing
+  TurnBudget: "notABlock", // resets its counters, injects nothing
 };
 
 /**

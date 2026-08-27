@@ -35,6 +35,12 @@ const envSchema = z.object({
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_DEEPSEEK_API_KEY: z.string().min(1).optional(),
   LLM_MOONSHOT_CN_API_KEY: z.string().min(1).optional(),
+
+  // Turn-budget overrides (turn-budget ticket 02). The work budget lives on the
+  // token/time axis — there is no step budget. Defaults: token budget = the
+  // effective window limit × 4, wall-clock backstop = 10 minutes per turn.
+  MIMICC_TURN_TOKEN_BUDGET_MULTIPLIER: z.coerce.number().positive().default(4),
+  MIMICC_TURN_TIME_BUDGET_MS: z.coerce.number().positive().default(600_000),
 });
 
 export type Config = z.infer<typeof envSchema>;

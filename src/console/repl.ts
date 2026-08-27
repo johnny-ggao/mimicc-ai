@@ -1164,7 +1164,7 @@ export function describeError(error: unknown): string {
   const outcome = classify(error);
   if (outcome.kind === "abort") return "^C interrupted";
   if (outcome.reason === "recursion") {
-    return `stopped after ${String(RECURSION_LIMIT)} steps without a final answer`;
+    return "stopped without a final answer — the graph ran away past its recursion ceiling";
   }
   if (outcome.reason === "llm_status") {
     const status = outcome.status;

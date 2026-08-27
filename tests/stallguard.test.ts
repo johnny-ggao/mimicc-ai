@@ -73,6 +73,10 @@ function build() {
     apiKey: "sk-stub",
     model: "stub",
     checkpointer: new JsonlSaver(mkdtempSync(join(tmpdir(), "mimicc-stall-"))),
+    // The stub never stops, and the step axis is gone (turn-budget ticket 02):
+    // a turn now ends at the token/time budget, not at a node ceiling. A short
+    // wall clock stands in for the old recursion limit so the test stays fast.
+    turnBudget: { timeBudgetMs: 200 },
   });
 }
 
@@ -85,8 +89,8 @@ test("three failing tool calls in a row inject a progress hint", async () => {
       { recursionLimit: RECURSION_LIMIT, configurable: { thread_id: "t1" } },
     );
   } catch {
-    // The stub keeps asking for Read, so the turn runs to the recursion limit.
-    // The hint is what is under test, not the turn's end.
+    // The stub keeps asking for Read, so the turn runs until the wall-clock
+    // budget caps it. The hint is what is under test, not the turn's end.
   }
 
   const hintSeen = requests.some((req) =>

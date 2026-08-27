@@ -113,6 +113,12 @@ async function main(): Promise<void> {
     onCap: (reason) => {
       log.info("turn_capped", { reason });
     },
+    // The work budget lives on the token/time axis (turn-budget ticket 01);
+    // env overrides ride in through config.ts, defaults applied in the loop.
+    turnBudget: {
+      tokenMultiplier: config.MIMICC_TURN_TOKEN_BUDGET_MULTIPLIER,
+      timeBudgetMs: config.MIMICC_TURN_TIME_BUDGET_MS,
+    },
   });
 
   log.info("repl_start", {

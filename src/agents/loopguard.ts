@@ -5,7 +5,8 @@ import { hintInjector } from "./hint";
 
 /**
  * Detects a model going in circles and force-stops it, instead of leaving it to
- * spin until RECURSION_LIMIT — the hole admitted in loop.ts:22-30.
+ * burn tokens until the turn budget (turnBudget) or the wall clock lands —
+ * the pathology guards exist so the budget does not have to be the first line.
  *
  * The model repeats the same tool-call set: the set is hashed and counted per
  * turn. At the warn threshold a warning is injected on the next model call; at
@@ -24,7 +25,8 @@ const HARD_LIMIT = 5;
 const HARD_STOP_MSG =
   "[FORCED STOP] Repeated tool calls exceeded the safety limit. Producing final answer with results collected so far.";
 
-export type TurnCapReason = "loop_capped";
+/** The reasons a turn can end capped rather than clean. */
+export type TurnCapReason = "loop_capped" | "budget_exhausted";
 
 function warningText(streak: number): string {
   return (

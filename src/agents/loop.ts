@@ -33,61 +33,34 @@ import {
 } from "../tools";
 import { decide, toolCallOf, type RuleSet } from "../tools/permission";
 import type { ModelUsage } from "../usage";
-import { markPinned, type WindowEvent, type WindowTuning } from "../context";
+import { markPinned, WINDOW_LIMIT, type WindowEvent, type WindowTuning } from "../context";
 import { classify, failureMarker } from "./outcome";
 import { loopGuard, type TurnCapReason } from "./loopguard";
+import { turnBudget } from "./turnBudget";
 import { stallGuard } from "./stallguard";
 import { emptyReplyGuard } from "./terminal";
 
 /**
- * How many tool round-trips one user turn may take.
+ * The graph's recursion ceiling.
  *
- * **This is the number a person reasons about**, and the reason it exists is a
- * defect that shipped for months: the ceiling used to be written in *node
- * executions* (`48`), while the quantity anyone actually cares about is laps.
- * The graph spends several nodes per lap — the model node, every `afterModel`
- * middleware node, the tools node — so the usable lap count silently depended
- * on **how many middlewares were installed**. Four guards cost six nodes a lap,
- * which made `48` mean *eight laps*, and adding a fifth guard would have quietly
- * made it under seven. Nobody decided that.
+ * A format placeholder, not a budget: LangGraph requires a finite integer
+ * ≥ 1 (`pregel/index.js:1010` throws otherwise), so the number exists to
+ * satisfy the library. The real guards are the turn budget on the token/time
+ * axis (`turnBudget`, window × 4 per turn with a 10-minute wall-clock backstop),
+ * the pathology guards (`loopGuard` on repeated calls, `stallGuard` on
+ * consecutive failures), and the deployment's wall clock. None of the peers
+ * budget steps — pi's drive loop is `while (true)`, deepseek-harness runs until
+ * the model completes or hits max-tokens, deer-flow keeps one clamped ceiling
+ * as a crash net — and a step budget misclassifies a healthy-busy turn as
+ * broken: csv-to-parquet burned 17, then 25 honest tool-call laps on one hard
+ * task and got cut mid-fix three times (48 → 102 → 150 nodes).
+ * `.scratch/external-bench/issues/03-csv-budget.md` and
+ * `.scratch/turn-budget/issues/01-what-axis.md` record the decision.
  *
- * 🔴 **Measured, not reasoned**: `repro/45-how-many-laps-fit-in-the-limit.ts`
- * drives the shipped stack against a stub that never stops calling tools and
- * counts the laps. It reported 8 laps at 6.0 nodes each.
- *
- * The old comment claimed the ceiling was "the crash net behind" the guards and
- * that "a guard always fires first". **That could never hold**, and the reason is
- * not the number: the guards fire on *pathology* — `LoopGuard` on a repeated
- * call, `StallGuard` on consecutive failures — while the ceiling fires on
- * *length*. A turn that honestly needs twelve different laps trips no guard at
- * all, so no value of the ceiling makes that sentence true.
- *
- * 24 rather than the 16 it was: the first real coding sample that outgrew 16 is
- * an external benchmark task — csv-to-parquet (run 2026-08-27__13-49-45), whose
- * session archive shows 17 tool-call laps before the ceiling killed it
- * (`.scratch/external-bench/issues/03-csv-budget.md`). 24 covers 17 with ~40%
- * headroom. ⚠️ Deliberately not 32: those 17 laps already consumed the whole
- * 420s adapter wall-clock cap, so beyond ~24 the clock becomes the binding
- * constraint before the budget does — a further raise buys laps the clock
- * cannot pay for (same ticket).
+ * A graph that reaches this number is neither busy nor broken — it is a
+ * runaway, and the number is chosen so nothing healthy can ever touch it.
  */
-export const LAP_BUDGET = 24;
-
-/**
- * The node ceiling that buys {@link LAP_BUDGET} laps on the shipped stack.
- *
- * Derived rather than chosen, so the two roles the old constant confused stay
- * apart: this is the **crash net** — a graph that reaches it is broken, not busy
- * — while `LAP_BUDGET` is the **work budget**. Exceeding it raises
- * GraphRecursionError, which `classify` reports as `reason: "recursion"`.
- *
- * ⚠️ The per-lap and once-per-turn costs are pinned by
- * `tests/lap-budget.test.ts` against the real assembled stack, so a new
- * middleware **fails a test** rather than silently shrinking every turn.
- */
-export const NODES_PER_LAP = 6;
-const ONCE_PER_TURN_NODES = 6;
-export const RECURSION_LIMIT = ONCE_PER_TURN_NODES + LAP_BUDGET * NODES_PER_LAP;
+export const RECURSION_LIMIT = 1_000_000;
 
 /**
  * When a checkpoint has to be **on disk** rather than merely handed to the saver.
@@ -247,6 +220,22 @@ export interface AgentOptions {
    * wrong.
    */
   window?: WindowTuning;
+  /**
+   * Turn-budget overrides for the token/time axis (see `turnBudget`).
+   *
+   * Defaults when absent: token budget = the effective window limit × 4,
+   * wall-clock backstop = 10 minutes per turn. Both are reachable from
+   * main.ts via `MIMICC_TURN_TOKEN_BUDGET_MULTIPLIER` and
+   * `MIMICC_TURN_TIME_BUDGET_MS`; the fields exist here rather than raw env
+   * because the loop is built from options, not from the environment
+   * (turn-budget ticket 02).
+   */
+  turnBudget?: {
+    /** Multiplier over the window limit. Default 4. */
+    tokenMultiplier?: number;
+    /** Wall-clock budget per turn, milliseconds. Default 600_000. */
+    timeBudgetMs?: number;
+  };
   /**
    * Where per-request token and cache numbers go. Optional because the loop runs
    * fine without a scale — but every context-engineering change is judged on
@@ -867,6 +856,17 @@ export function createUniversalAgent(options: AgentOptions) {
     // Before the gate, so it hashes the raw model output rather than whatever
     // the gate did to it.
     loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
+    // The work budget on the token/time axis. After loopGuard so pathology
+    // (a repeated call) is named before plain exhaustion; its afterModel is
+    // read by the same assembly assertions as the guards' (BLOCKS:
+    // "notABlock").
+    turnBudget({
+      tokenBudget:
+        (options.window?.limit ?? WINDOW_LIMIT) *
+        (options.turnBudget?.tokenMultiplier ?? 4),
+      timeBudgetMs: options.turnBudget?.timeBudgetMs ?? 600_000,
+      ...(options.onCap !== undefined ? { onCap: options.onCap } : {}),
+    }),
     // Outside stallGuard: wrapToolCall nests first-in-outermost, so this must
     // sit outside the guard to see the error ToolMessage the guard turns a
     // throw into and record its settlement — the reverse order skips it
