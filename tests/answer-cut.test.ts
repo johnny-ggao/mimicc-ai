@@ -25,7 +25,7 @@ import { JsonlSaver } from "@/checkpoint";
  */
 
 let server: ReturnType<typeof Bun.serve>;
-let mode: "first-empty" | "tool-then-empty" | "plain-empty" = "first-empty";
+let mode: "first-empty" | "tool-then-empty" | "plain-empty" | "spoken" = "first-empty";
 let replies = 0;
 
 // A distinct id per response, and it is load-bearing: langgraph keys messages by
@@ -40,8 +40,34 @@ const envelope = (choice: unknown, usage: unknown) => ({
   usage,
 });
 
-/** Reasoning ate the whole ceiling: nothing to show, and the provider says why. */
+/**
+ * Reasoning ate the whole ceiling and nothing came back.
+ *
+ * 🔴 **No `finish_reason`, and that is the measured shape**, not a simplified
+ * stub: the reply that started all this came back
+ * `{model_provider, usage, model}` and nothing else (Terminal-Bench run
+ * `2026-08-28__00-35-01`). The first version of this test said
+ * `finish_reason: "length"` and passed while the fix it was guarding did
+ * nothing at all in production.
+ */
 const ceilingBound = (ceiling: number) =>
+  Response.json(
+    envelope(
+      {
+        index: 0,
+        message: { role: "assistant", content: "" },
+      },
+      {
+        prompt_tokens: 10,
+        completion_tokens: ceiling,
+        total_tokens: 10 + ceiling,
+        completion_tokens_details: { reasoning_tokens: ceiling },
+      },
+    ),
+  );
+
+/** The other half of the same fact: the provider *does* say it. Both must work. */
+const ceilingBoundSpoken = (ceiling: number) =>
   Response.json(
     envelope(
       {
@@ -99,7 +125,8 @@ beforeAll(() => {
       if (mode === "plain-empty") {
         return replies === 1 ? toolCall() : plainEmpty();
       }
-      return ceilingBound(body.max_tokens ?? 0);
+      const ceiling = body.max_tokens ?? 0;
+      return mode === "spoken" ? ceilingBoundSpoken(ceiling) : ceilingBound(ceiling);
     },
   });
 });
@@ -181,4 +208,17 @@ test("an empty reply that is not the ceiling's doing keeps the old handling", as
   expect(text(out)).toContain("no final response");
   // The retry the control is protecting: tool call, empty, retry, empty.
   expect(replies).toBe(3);
+});
+
+// The provider that does report it must still be handled — the usage-only path
+// is a fallback for silence, not a replacement for reading what was said.
+test("a ceiling-eaten reply is caught whether or not the provider says so", async () => {
+  mode = "spoken";
+  const { turn, events } = run("cut-4");
+  const out = await turn;
+
+  expect(
+    events.filter((e) => e.type === "answer_cut" && e.bound === "ceiling"),
+  ).not.toEqual([]);
+  expect(text(out).toLowerCase()).toContain("output");
 });

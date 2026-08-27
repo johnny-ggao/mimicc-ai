@@ -187,7 +187,7 @@ export function answerEnding(
 ): { output: number; bound: "ceiling" | "provider" } | undefined {
   const metadata = (message as { response_metadata?: { finish_reason?: unknown } })
     .response_metadata;
-  if (metadata?.finish_reason !== "length") return undefined;
+  const finish = metadata?.finish_reason;
 
   // The same quarantined cast as `requestTokens` and `usageMeter`: the field is
   // declared through generic message-structure machinery that collapses to
@@ -195,7 +195,27 @@ export function answerEnding(
   const usage = (message as { usage_metadata?: { output_tokens?: number } })
     .usage_metadata;
   const output = usage?.output_tokens ?? 0;
-  return { output, bound: output >= ceiling ? "ceiling" : "provider" };
+
+  if (finish === "length") {
+    return { output, bound: output >= ceiling ? "ceiling" : "provider" };
+  }
+
+  // 🔴 **The provider may not say it at all.** DeepSeek streams a reply whose
+  // reasoning ate the whole ceiling with **no `finish_reason` on any frame** —
+  // measured, Terminal-Bench run `2026-08-28__00-35-01`, where
+  // `grid-pattern-transform` came back `{model_provider, usage, model}` and
+  // nothing else. `repro/47` rules out this program losing it: both `invoke`
+  // and `stream` keep a `finish_reason` the stub does send.
+  //
+  // Spending the entire ceiling is the fact, and it is one this program owns
+  // both halves of — it chose the ceiling and it counted the tokens. So it
+  // stands on its own when the provider stays silent. **Only when silent**: a
+  // `finish_reason` that says `stop` is the provider answering the question, and
+  // an answer that ends cleanly on the last token it was allowed is not cut.
+  if (finish == null && ceiling > 0 && output >= ceiling) {
+    return { output, bound: "ceiling" };
+  }
+  return undefined;
 }
 
 /** What {@link answerEnding} decided, once it is written down on the message. */
