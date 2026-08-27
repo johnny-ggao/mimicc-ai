@@ -243,6 +243,69 @@ test("editing right after your own Write needs no re-read", async () => {
   expect(ran).toBe(true);
 });
 
+// Terminal-Bench, run `2026-08-27__22-37-36`: `Write → Edit → Edit` was refused
+// on the second Edit in three separate tasks (`blind-maze-explorer-algorithm`,
+// `pytorch-model-cli`, `.hard`), each costing a re-read of a file the model had
+// just written itself. The Write reason applies unchanged: the tool computed the
+// bytes, so "knows the current version" is a fact.
+test("an Edit stamps a mark naming the file it just changed", async () => {
+  const marked = await readMarkFor(FILE);
+  const { result, ran } = await callGate(
+    "Edit",
+    { path: FILE, oldString: "original", newString: "changed" },
+    [marked],
+    () => writeFileSync(FILE, "changed\n"),
+  );
+
+  expect(ran).toBe(true);
+  const mark = result.additional_kwargs[READ_MARK_KEY] as {
+    path: string;
+    hash: string;
+  };
+  expect(mark.path).toBe(resolvePath(FILE));
+  // The bytes *after* the edit, not the ones the read saw.
+  expect(mark.hash).not.toBe(
+    (marked.additional_kwargs[READ_MARK_KEY] as { hash: string }).hash,
+  );
+});
+
+test("editing twice in a row needs no re-read in between", async () => {
+  const marked = await readMarkFor(FILE);
+  const { result } = await callGate(
+    "Edit",
+    { path: FILE, oldString: "original", newString: "changed" },
+    [marked],
+    () => writeFileSync(FILE, "changed\n"),
+  );
+
+  const { ran } = await callGate(
+    "Edit",
+    { path: FILE, oldString: "changed", newString: "changed twice" },
+    [marked, result],
+  );
+  expect(ran).toBe(true);
+});
+
+test("an external change after your Edit is still refused", async () => {
+  const marked = await readMarkFor(FILE);
+  const { result } = await callGate(
+    "Edit",
+    { path: FILE, oldString: "original", newString: "changed" },
+    [marked],
+    () => writeFileSync(FILE, "changed\n"),
+  );
+
+  // Somebody else — Bash, the user — moves the file out from under the mark.
+  writeFileSync(FILE, "changed by someone else\n");
+
+  const { ran } = await callGate(
+    "Edit",
+    { path: FILE, oldString: "changed", newString: "changed twice" },
+    [marked, result],
+  );
+  expect(ran).toBe(false);
+});
+
 test("an external change after your Write is still refused", async () => {
   const fresh = `${DIR}/written.md`;
   const { result } = await callGate(
@@ -275,7 +338,12 @@ test("a Write that fails to land stamps nothing", async () => {
       status: "error",
     });
   const request = {
-    toolCall: { name: "Write", args: { path: FILE, content: "x" }, id: "call_1", type: "tool_call" },
+    toolCall: {
+      name: "Write",
+      args: { path: FILE, content: "x" },
+      id: "call_1",
+      type: "tool_call",
+    },
     tool: undefined,
     state: { messages: [] as BaseMessage[] },
     runtime: {},

@@ -38,11 +38,21 @@ import { resolvePath } from "../tools/permission";
  *
  * A `Write` stamps its own mark — the file's bytes after a Write are exactly
  * what the model sent, so "knows the current version" is a fact, not a
- * courtesy (rbw-tax ticket 01). `Edit` never refreshes a mark: any successful
- * edit changes the file's hash, which invalidates every earlier read of it —
- * so two consecutive modifications of one file require a re-read between them.
- * External changes — Bash, the user — break whatever mark exists and are
- * refused either way.
+ * courtesy (rbw-tax ticket 01). **A successful `Edit` stamps for the same
+ * reason**: it too computed the bytes it just wrote. What a modification
+ * invalidates is every *earlier* read of the file, and that still holds — the
+ * stale read no longer opens the gate, only the mark the modification itself
+ * left does. External changes — Bash, the user — break whatever mark exists and
+ * are refused either way.
+ *
+ * ⚠️ **This overturns the first version of this paragraph**, which said `Edit`
+ * never refreshes a mark and required a re-read between two modifications of one
+ * file. The argument it gave was about earlier reads going stale, which is true
+ * and is not an argument against writing a new mark. Terminal-Bench, run
+ * `2026-08-27__22-37-36`, priced the difference: `Write → Edit → Edit` was
+ * refused on the second Edit in three separate tasks, each buying a re-read of a
+ * file the model had just written itself
+ * (`.scratch/external-bench/issues/05-failure-triage.md`, C4).
  *
  * ## Fail-open
  *
@@ -243,7 +253,18 @@ export function readBeforeWrite(): AnyAgentMiddleware {
 
       inFlight.add(full);
       try {
-        return await handler(request);
+        const result = await handler(request);
+        // A successful Edit stamps too, and for the Write reason word for word:
+        // the tool computed the bytes it just wrote, so "knows the current
+        // version" is a fact rather than a courtesy. Hashed *after* the edit
+        // lands, so an external change still breaks it — the test above holds.
+        if (ToolMessage.isInstance(result) && result.status !== "error") {
+          const after = hashOf(full);
+          if (after !== null) {
+            result.additional_kwargs[READ_MARK_KEY] = { path: full, hash: after };
+          }
+        }
+        return result;
       } finally {
         inFlight.delete(full);
       }
