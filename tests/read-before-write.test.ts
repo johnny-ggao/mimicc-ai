@@ -207,3 +207,84 @@ test("Write is not gated — a stricter rule already covers it, and two rules re
 
   expect(ran).toBe(true);
 });
+
+test("a Write stamps a mark naming the file it just created", async () => {
+  const fresh = `${DIR}/written.md`;
+  const { result, ran } = await callGate(
+    "Write",
+    { path: fresh, content: "brand new\n" },
+    [],
+    () => writeFileSync(fresh, "brand new\n"),
+  );
+
+  expect(ran).toBe(true);
+  const mark = result.additional_kwargs[READ_MARK_KEY] as {
+    path: string;
+    hash: string;
+  };
+  expect(mark.path).toBe(resolvePath(fresh));
+  expect(mark.hash).toMatch(/^[0-9a-f]{64}$/);
+});
+
+test("editing right after your own Write needs no re-read", async () => {
+  const fresh = `${DIR}/written.md`;
+  const { result } = await callGate(
+    "Write",
+    { path: fresh, content: "brand new\n" },
+    [],
+    () => writeFileSync(fresh, "brand new\n"),
+  );
+
+  const { ran } = await callGate(
+    "Edit",
+    { path: fresh, oldString: "brand", newString: "fresh" },
+    [result],
+  );
+  expect(ran).toBe(true);
+});
+
+test("an external change after your Write is still refused", async () => {
+  const fresh = `${DIR}/written.md`;
+  const { result } = await callGate(
+    "Write",
+    { path: fresh, content: "brand new\n" },
+    [],
+    () => writeFileSync(fresh, "brand new\n"),
+  );
+  // Someone else (or Bash) touches it after the Write.
+  writeFileSync(fresh, "changed from outside\n");
+
+  const { ran, result: refusal } = await callGate(
+    "Edit",
+    { path: fresh, oldString: "a", newString: "b" },
+    [result],
+  );
+  expect(ran).toBe(false);
+  expect(refusal.content).toContain("you have not read its current version");
+});
+
+test("a Write that fails to land stamps nothing", async () => {
+  // Write onto an existing file throws in the tool; the engine turns the throw
+  // into an error ToolMessage. That error must not carry a mark, or a later
+  // Edit would hold a fake stamp for bytes that were never written.
+  const handler = async (): Promise<ToolMessage> =>
+    new ToolMessage({
+      tool_call_id: "call_1",
+      name: "Write",
+      content: "Error: already exists and Write never overwrites",
+      status: "error",
+    });
+  const request = {
+    toolCall: { name: "Write", args: { path: FILE, content: "x" }, id: "call_1", type: "tool_call" },
+    tool: undefined,
+    state: { messages: [] as BaseMessage[] },
+    runtime: {},
+  };
+  const result = (await gate.wrapToolCall?.(
+    request as never,
+    handler as never,
+  )) as ToolMessage;
+
+  expect(result.status).toBe("error");
+  expect(result.additional_kwargs[READ_MARK_KEY]).toBeUndefined();
+});

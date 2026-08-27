@@ -9,7 +9,8 @@ import { resolvePath } from "../tools/permission";
 
 /**
  * A deterministic version gate: modifying a file that already exists requires a
- * `Read` of that file's *current* version earlier in the conversation.
+ * `Read` of that file's *current* version earlier in the conversation — or your
+ * own `Write` of it, which stamps the same mark (rbw-tax ticket 01).
  *
  * ## Why this is here, written down because it is not a bugfix
  *
@@ -35,9 +36,13 @@ import { resolvePath } from "../tools/permission";
  * **a summary that eats the read result eats the mark with it**. The gate can
  * never pass on a read the model can no longer see.
  *
- * A write never refreshes a mark. Any successful write changes the file's hash,
- * which invalidates every earlier read of it — so two consecutive modifications
- * of one file require a re-read between them.
+ * A `Write` stamps its own mark — the file's bytes after a Write are exactly
+ * what the model sent, so "knows the current version" is a fact, not a
+ * courtesy (rbw-tax ticket 01). `Edit` never refreshes a mark: any successful
+ * edit changes the file's hash, which invalidates every earlier read of it —
+ * so two consecutive modifications of one file require a re-read between them.
+ * External changes — Bash, the user — break whatever mark exists and are
+ * refused either way.
  *
  * ## Fail-open
  *
@@ -78,6 +83,7 @@ export interface ReadMark {
 }
 
 const READ_TOOL = "Read";
+const WRITE_TOOL = "Write";
 /**
  * The tools this gate covers: `Edit` alone.
  *
@@ -173,7 +179,10 @@ export function readBeforeWrite(): AnyAgentMiddleware {
     wrapToolCall: async (request, handler) => {
       const name = request.toolCall.name;
       const raw = pathArg(request.toolCall.args);
-      if (raw === null || (name !== READ_TOOL && !GATED_TOOLS.has(name))) {
+      if (
+        raw === null ||
+        (name !== READ_TOOL && name !== WRITE_TOOL && !GATED_TOOLS.has(name))
+      ) {
         return handler(request);
       }
 
@@ -187,7 +196,13 @@ export function readBeforeWrite(): AnyAgentMiddleware {
       // A read stamps the mark. The tool returns a string and langchain builds
       // the ToolMessage, so there is no constructor to reach — the mark is
       // added here, the same exception `markPinned` exists for.
-      if (name === READ_TOOL) {
+      //
+      // A successful Write stamps too: the file's bytes after a Write are
+      // exactly what the model sent, so "knows the current version" is a fact,
+      // not a courtesy (rbw-tax ticket 01). The hash is taken *after* the write
+      // lands, so the stamp describes the real bytes — and any external change
+      // (Bash, the user) breaks the hash and is still refused.
+      if (name === READ_TOOL || name === WRITE_TOOL) {
         const result = await handler(request);
         if (ToolMessage.isInstance(result) && result.status !== "error") {
           const hash = hashOf(full);
