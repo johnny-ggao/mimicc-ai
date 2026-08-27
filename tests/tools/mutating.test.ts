@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 
 import { bashTool, editTool, writeTool } from "@/tools";
+import { runCommand } from "@/tools/mutating";
 
 /**
  * Everything resolves against process.cwd(), so the fixtures have to live inside
@@ -210,4 +211,67 @@ test("Bash does not hand the API keys to the commands it runs", async () => {
   });
 
   expect(result).toContain("a=[unset] b=[unset] c=[unset]");
+});
+
+/* ---------- Bash: the deadline ---------- */
+
+/**
+ * The deadline is tested through `runCommand` rather than the tool because the
+ * tool's own is 120 seconds. What is under test is not the number.
+ *
+ * Every case here uses the same shape, and it is the shape that broke in the
+ * field: **a grandchild that outlives the shell**. `sh -c` spawns it, the shell
+ * waits for it, and it holds the write end of our stdout pipe. Signalling the
+ * shell alone left it running — so the read never saw EOF, and the deadline that
+ * had already fired could not end the call it fired for.
+ */
+const grandchild = (marker: string, sleepSec: number) =>
+  `(sleep ${String(sleepSec)}; echo alive > ${marker}) & echo started; wait`;
+
+test("a command that outlives its shell is still cut off at the deadline", async () => {
+  const started = Date.now();
+  const outcome = await runCommand(grandchild(file("never-1"), 5), 300);
+
+  expect(outcome.timedOut).toBe(true);
+  expect(outcome.code).toBe(null);
+  // Whatever it printed before the deadline is still reported — the model is
+  // told the command was cut off, not handed nothing.
+  expect(outcome.body).toContain("started");
+  // The point of the whole change: back before the deadline, not after the
+  // grandchild's 5s. Generous enough not to flake on a loaded machine.
+  expect(Date.now() - started).toBeLessThan(3000);
+});
+
+test("the deadline kills what the command started, not just the shell", async () => {
+  const marker = file("never-2");
+  await runCommand(grandchild(marker, 1), 200);
+
+  // Past the grandchild's own sleep: if it survived the kill, the marker lands.
+  await Bun.sleep(1800);
+  expect(await Bun.file(marker).exists()).toBe(false);
+});
+
+// An interrupted turn used to be cleaned up by the terminal signalling the whole
+// foreground process group. `detached` took the command out of that group, so
+// the abort has to carry the kill itself — or Ctrl-C would leave the work running.
+test("an aborted turn kills what the command started", async () => {
+  const marker = file("never-3");
+  const controller = new AbortController();
+  const running = runCommand(grandchild(marker, 1), 10_000, controller.signal);
+
+  await Bun.sleep(200);
+  controller.abort();
+  await running;
+
+  await Bun.sleep(1800);
+  expect(await Bun.file(marker).exists()).toBe(false);
+});
+
+test("a command that finishes on its own is untouched by any of this", async () => {
+  const outcome = await runCommand("echo out; echo err 1>&2; exit 3", 10_000);
+
+  expect(outcome.timedOut).toBe(false);
+  expect(outcome.code).toBe(3);
+  expect(outcome.body).toContain("out");
+  expect(outcome.body).toContain("err");
 });

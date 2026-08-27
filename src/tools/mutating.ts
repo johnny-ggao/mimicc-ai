@@ -17,6 +17,142 @@ const MAX_COMMAND_MS = 120_000;
 /** Command output goes into the next prompt, same as any other tool result. */
 const MAX_OUTPUT_BYTES = 32_000;
 
+/** What {@link runCommand} saw. `code` is null exactly when the command was killed. */
+export type CommandOutcome = {
+  body: string;
+  code: number | null;
+  timedOut: boolean;
+};
+
+/** Distinguishes "the timer won the race" from an exit code, which can be 0. */
+const TIMED_OUT = Symbol("timed out");
+
+/**
+ * Kills the command **and everything it started**.
+ *
+ * `child` is the `/bin/sh` this module spawned; the work is almost always in
+ * *its* children — a pipeline, a background job, an `apt-get`. Signalling the
+ * shell alone leaves those running, and that costs twice:
+ *
+ * 1. **The read below never ends.** A surviving grandchild still holds the write
+ *    end of our stdout pipe, so `EOF` never arrives no matter what the shell did.
+ * 2. **They outlive this process.** Terminal-Bench caught the shape whole: an
+ *    orphaned `apt-get` still holding `/var/lib/dpkg/lock-frontend` while the
+ *    *grading* phase ran, which failed a task the agent was no longer part of
+ *    (`.scratch/external-bench/issues/05-failure-triage.md`, C3).
+ *
+ * `detached: true` at spawn makes the shell a session leader, so its pid is also
+ * its process-group id and the negative form reaches the whole group.
+ *
+ * 🔴 **The negative pid cannot hit this process's own group by accident.** That
+ * would require our process-group id to equal a pid the kernel has just handed
+ * to the child, and a live pid belongs to one process. If `detached` ever stops
+ * making the child a leader, the group kill fails with `ESRCH` and the fallback
+ * below runs — the old behaviour, not a worse one.
+ */
+function killTree(child: Bun.Subprocess): void {
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // Already reaped between the race and here. Nothing left to kill.
+    }
+  }
+}
+
+/** Appends a pipe's text as it arrives, so a killed command still reports what it printed. */
+async function drain(
+  stream: ReadableStream<Uint8Array> | undefined,
+  into: string[],
+): Promise<void> {
+  if (stream === undefined) return;
+  const decoder = new TextDecoder();
+  for await (const chunk of stream) into.push(decoder.decode(chunk, { stream: true }));
+  const tail = decoder.decode();
+  if (tail.length > 0) into.push(tail);
+}
+
+/**
+ * Runs one shell command under a deadline that actually bites.
+ *
+ * Split out of the tool because the deadline is the part worth testing and
+ * 120 seconds is not a test. Two things make it bite, and **both are needed**:
+ *
+ * - {@link killTree} reaches the whole process group, not just the shell.
+ * - The result is decided by a **race**, not by reading to EOF. Even a perfect
+ *   kill can be escaped — a double fork leaves the group — and a command that
+ *   escapes must not be able to hold this call open a second time. The old code
+ *   awaited `new Response(child.stdout).text()`, so the kill it did fire could
+ *   not end the wait it was fired for: mimicc sat on one `frotz` for 370s until
+ *   the outer harness killed the whole agent.
+ */
+export async function runCommand(
+  command: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<CommandOutcome> {
+  const child = Bun.spawn(["/bin/sh", "-c", command], {
+    cwd: ROOT,
+    // Its own process group — see killTree for why the deadline needs one.
+    detached: true,
+    stdout: "pipe",
+    stderr: "pipe",
+    // The model's own environment, minus the key variables it must never read
+    // back out of a process it started. All three names are stripped — the two
+    // per-provider keys and the legacy alias — because any one of them is the
+    // credential for whichever provider the program happens to run on.
+    env: {
+      ...process.env,
+      LLM_API_KEY: undefined,
+      LLM_DEEPSEEK_API_KEY: undefined,
+      LLM_MOONSHOT_CN_API_KEY: undefined,
+    },
+  });
+
+  const out: string[] = [];
+  const err: string[] = [];
+  const finished: Promise<number> = (async () => {
+    await Promise.all([drain(child.stdout, out), drain(child.stderr, err)]);
+    return await child.exited;
+  })();
+  // Nothing awaits this once the race is lost. A pipe torn down by the kill is
+  // the kill working, not a failure the caller needs to hear about.
+  void finished.catch(() => undefined);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(TIMED_OUT);
+    }, timeoutMs);
+  });
+
+  // An interrupted turn used to be cleaned up by the terminal, which signals the
+  // whole foreground group — but `detached` took this command out of that group,
+  // so the abort has to carry the kill itself. It now reaches further than the
+  // terminal did: the group, not just the shell.
+  const onAbort = (): void => {
+    killTree(child);
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+
+  try {
+    const settled = await Promise.race([finished, expired]);
+    const body = [out.join(""), err.join("")]
+      .filter((part) => part.length > 0)
+      .join("\n");
+    if (settled === TIMED_OUT) {
+      killTree(child);
+      return { body, code: null, timedOut: true };
+    }
+    return { body, code: settled, timedOut: false };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 /**
  * Creates files. It refuses to overwrite one, and that refusal is the whole
  * point.
@@ -141,48 +277,28 @@ export const editTool = tool(
 );
 
 export const bashTool = tool(
-  async ({ command }): Promise<string> => {
-    const child = Bun.spawn(["/bin/sh", "-c", command], {
-      cwd: ROOT,
-      stdout: "pipe",
-      stderr: "pipe",
-      // The model's own environment, minus the key variables it must never read
-      // back out of a process it started. All three names are stripped — the two
-      // per-provider keys and the legacy alias — because any one of them is the
-      // credential for whichever provider the program happens to run on.
-      env: {
-        ...process.env,
-        LLM_API_KEY: undefined,
-        LLM_DEEPSEEK_API_KEY: undefined,
-        LLM_MOONSHOT_CN_API_KEY: undefined,
-      },
-    });
+  async ({ command }, config): Promise<string> => {
+    const { body, code, timedOut } = await runCommand(
+      command,
+      MAX_COMMAND_MS,
+      (config as { signal?: AbortSignal } | undefined)?.signal,
+    );
 
-    const timer = setTimeout(() => void child.kill(), MAX_COMMAND_MS);
-    let stdout: string;
-    let stderr: string;
-    let code: number | null;
-    try {
-      [stdout, stderr] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ]);
-      code = await child.exited;
-    } finally {
-      clearTimeout(timer);
-    }
-
-    const body = [stdout, stderr].filter((part) => part.length > 0).join("\n");
     const clipped =
       body.length > MAX_OUTPUT_BYTES
         ? `${body.slice(0, MAX_OUTPUT_BYTES)}\n\n[clipped at ${String(MAX_OUTPUT_BYTES)} bytes of ${String(body.length)}]`
         : body;
+    const prefix = `${clipped}${clipped.length > 0 ? "\n" : ""}`;
 
     // A non-zero exit is a *result*, not a tool failure: a failing test suite is
-    // exactly what the model needs to read. Only the command never finishing is
-    // an error, and that arrives as a kill rather than as an exception.
+    // exactly what the model needs to read. The deadline is a result too, and it
+    // says so in words: the model has to know the command was cut off rather
+    // than read a partial transcript as the whole story.
+    if (timedOut) {
+      return `${prefix}[timed out after ${String(MAX_COMMAND_MS / 1000)}s; killed, along with everything it started]`;
+    }
     if (code !== 0) {
-      return `${clipped}${clipped.length > 0 ? "\n" : ""}[exit ${String(code)}]`;
+      return `${prefix}[exit ${String(code)}]`;
     }
     return clipped.length > 0 ? clipped : "[no output]";
   },
@@ -190,7 +306,7 @@ export const bashTool = tool(
     name: "Bash",
     // Never, even when the command is `ls` — the declaration is per tool, and the runtime cannot read a shell command.
     metadata: { ...NEVER_REPLAY },
-    description: `Run one shell command in the working directory. Returns stdout and stderr combined; a non-zero exit is reported as [exit N] rather than as a failure. Times out after ${String(MAX_COMMAND_MS / 1000)}s.`,
+    description: `Run one shell command in the working directory. Returns stdout and stderr combined; a non-zero exit is reported as [exit N] rather than as a failure. After ${String(MAX_COMMAND_MS / 1000)}s the command and everything it started are killed and the output so far is returned with [timed out]. Do not use it to run an interactive program — it has no stdin.`,
     schema: z.object({
       command: z.string().describe("The command to run. One command per call."),
     }),
