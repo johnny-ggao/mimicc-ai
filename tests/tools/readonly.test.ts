@@ -153,3 +153,81 @@ test("Read says a directory is a directory", async () => {
   expect(message).toContain("is a directory");
   expect(message).not.toContain("no such file");
 });
+
+/* ---------- what a scan left out has to be in what it returns ---------- */
+
+// 🔴 **Not under `.test-tmp/`**, and the reason is itself one of the findings:
+// `Glob`/`Grep` cannot see anything inside a hidden directory, so fixtures there
+// are invisible to the very tools under test. That hole is still open (ticket 07
+// item 4); this name works around it rather than hiding it.
+const SCAN = "test-scan-tmp";
+afterAll(() => {
+  rmSync(SCAN, { recursive: true, force: true });
+});
+
+// 🔴 All four of these came back as `no files match` / `no matches` before —
+// a *positive claim of absence* about files that were never opened. That is the
+// one shape a search must never have, because a plain "no" is the answer a model
+// has no reason to question.
+test("Glob says when it stopped at its limit", async () => {
+  mkdirSync(`${SCAN}/many`, { recursive: true });
+  for (let i = 0; i < 250; i += 1) {
+    writeFileSync(`${SCAN}/many/f${String(i)}.txt`, "needle\n");
+  }
+
+  const out = String(await globTool.invoke({ pattern: `${SCAN}/many/*.txt` }));
+
+  expect(out.split("\n")).toHaveLength(201); // 200 hits + the note
+  expect(out).toContain("stopped at the 200-result limit");
+  rmSync(SCAN, { recursive: true, force: true });
+});
+
+test("Grep says when it stopped at its limit", async () => {
+  mkdirSync(`${SCAN}/many`, { recursive: true });
+  for (let i = 0; i < 150; i += 1) {
+    writeFileSync(`${SCAN}/many/f${String(i)}.txt`, "needle\n");
+  }
+
+  const out = String(
+    await grepTool.invoke({ pattern: "needle", glob: `${SCAN}/many/*.txt` }),
+  );
+
+  expect(out).toContain("stopped at the 100-match limit");
+  rmSync(SCAN, { recursive: true, force: true });
+});
+
+test("Grep says which files it passed over instead of calling them absent", async () => {
+  mkdirSync(SCAN, { recursive: true });
+  writeFileSync(`${SCAN}/big.txt`, `needle\n${"x".repeat(70_000)}`);
+  writeFileSync(`${SCAN}/bin.dat`, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]));
+
+  const big = String(
+    await grepTool.invoke({ pattern: "needle", glob: `${SCAN}/big.txt` }),
+  );
+  expect(big).toContain("no matches");
+  expect(big).toContain("too large to search");
+
+  // And a binary file is skipped rather than searched: returning the matched
+  // "line" is how mojibake used to reach the model.
+  const bin = String(
+    await grepTool.invoke({ pattern: "PNG", glob: `${SCAN}/bin.dat` }),
+  );
+  expect(bin).toContain("skipped 1 file: binary");
+  expect(bin).not.toContain("PNG\u0000");
+  rmSync(SCAN, { recursive: true, force: true });
+});
+
+// The control. Without it, a version that appends a note every time passes all
+// three tests above and makes every ordinary result noisier.
+test("a scan that left nothing out says nothing extra", async () => {
+  mkdirSync(SCAN, { recursive: true });
+  writeFileSync(`${SCAN}/one.txt`, "needle\n");
+
+  expect(String(await globTool.invoke({ pattern: `${SCAN}/*.txt` }))).toBe(
+    `${SCAN}/one.txt`,
+  );
+  expect(
+    String(await grepTool.invoke({ pattern: "needle", glob: `${SCAN}/*.txt` })),
+  ).toBe(`${SCAN}/one.txt:1:needle`);
+  rmSync(SCAN, { recursive: true, force: true });
+});

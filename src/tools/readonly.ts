@@ -10,10 +10,19 @@ import { MAX_FILE_BYTES, ROOT, withPathLock } from "./workspace";
 
 import { isSecret, resolvePath } from "./permission";
 
-// Result caps. Same reasoning as MAX_FILE_BYTES: what a tool returns is what the
-// next request pays for.
-const MAX_GLOB_HITS = 200;
-const MAX_GREP_HITS = 100;
+// Result caps and the vocabulary for saying what was left out. Same reasoning as
+// MAX_FILE_BYTES for the caps themselves: what a tool returns is what the next
+// request pays for. `./limits` owns *saying so* — see its header for why that is
+// shared code rather than an `if` in each tool.
+import {
+  countSkip,
+  limitNote,
+  MAX_GLOB_HITS,
+  MAX_GREP_HITS,
+  skipNote,
+  withNotes,
+  type Skips,
+} from "./limits";
 
 const IGNORED = ["node_modules/**", ".git/**", "dist/**", "coverage/**"];
 
@@ -138,23 +147,31 @@ export const readTool = tool(
 export const globTool = tool(
   async ({ pattern }): Promise<string> => {
     const hits: string[] = [];
+    let more = false;
     for await (const hit of new Bun.Glob(pattern).scan({
       cwd: ROOT,
       onlyFiles: true,
     })) {
       if (ignored(hit)) continue;
+      // One past the limit, so "there are more" is something this knows rather
+      // than something the reader has to infer from a suspiciously round number.
+      if (hits.length >= MAX_GLOB_HITS) {
+        more = true;
+        break;
+      }
       hits.push(hit);
-      if (hits.length >= MAX_GLOB_HITS) break;
     }
 
-    return hits.length === 0 ? `no files match ${pattern}` : hits.sort().join("\n");
+    return withNotes(
+      hits.length === 0 ? `no files match ${pattern}` : hits.sort().join("\n"),
+      limitNote("result", MAX_GLOB_HITS, more),
+    );
   },
   {
     name: "Glob",
     // A scan. Same pattern, same answer, nothing touched.
     metadata: { ...SAFE_TO_REPLAY },
-    description:
-      "Find files by path pattern, e.g. src/**/*.test.ts. Skips node_modules, .git, dist and coverage.",
+    description: `Find files by path pattern, e.g. src/**/*.test.ts. Skips node_modules, .git, dist and coverage, and does not match hidden files. Stops at ${String(MAX_GLOB_HITS)} results and says so.`,
     schema: z.object({
       pattern: z.string().describe("Glob pattern, relative to the working directory"),
     }),
@@ -174,31 +191,60 @@ export const grepTool = tool(
     }
 
     const hits: string[] = [];
+    // 🔴 Every one of these was silent, and all four came out as
+    // `no matches` — a positive claim of absence about files never opened.
+    const skips: Skips = {};
+    let more = false;
     for await (const path of new Bun.Glob(glob).scan({ cwd: ROOT, onlyFiles: true })) {
-      if (ignored(path) || isSecret(path)) continue;
+      if (ignored(path)) continue;
+      if (isSecret(path)) {
+        countSkip(skips, "may hold credentials");
+        continue;
+      }
 
       const file = Bun.file(resolve(ROOT, path));
-      if (file.size > MAX_FILE_BYTES) continue;
+      if (file.size > MAX_FILE_BYTES) {
+        countSkip(skips, "too large to search");
+        continue;
+      }
 
-      const text = await file.text().catch(() => "");
+      let text: string;
+      try {
+        text = await file.text();
+      } catch {
+        countSkip(skips, "unreadable");
+        continue;
+      }
+      // The same NUL heuristic `Read` refuses on. Searching a binary and
+      // returning the matched "line" is how `bin.dat:1:\ufffdPNG…` used to reach
+      // the model.
+      if (text.includes("\u0000")) {
+        countSkip(skips, "binary");
+        continue;
+      }
+
       for (const [i, line] of text.split("\n").entries()) {
         if (!regex.test(line)) continue;
+        if (hits.length >= MAX_GREP_HITS) {
+          more = true;
+          break;
+        }
         hits.push(`${path}:${String(i + 1)}:${line.trim().slice(0, 200)}`);
-        if (hits.length >= MAX_GREP_HITS) break;
       }
-      if (hits.length >= MAX_GREP_HITS) break;
+      if (more) break;
     }
 
-    return hits.length === 0
-      ? `no matches for /${pattern}/ in ${glob}`
-      : hits.join("\n");
+    return withNotes(
+      hits.length === 0 ? `no matches for /${pattern}/ in ${glob}` : hits.join("\n"),
+      limitNote("match", MAX_GREP_HITS, more),
+      skipNote(skips),
+    );
   },
   {
     name: "Grep",
     // Same: it looks, it does not touch.
     metadata: { ...SAFE_TO_REPLAY },
-    description:
-      "Find files by content, using a JavaScript regular expression. Returns path:line:text.",
+    description: `Find files by content, using a JavaScript regular expression. Returns path:line:text. Stops at ${String(MAX_GREP_HITS)} matches; reports any files it skipped (too large, binary, unreadable, credential-shaped). Does not search hidden files.`,
     schema: z.object({
       pattern: z.string().describe("JavaScript regular expression source"),
       glob: z
