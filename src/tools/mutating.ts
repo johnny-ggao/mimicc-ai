@@ -12,8 +12,50 @@ import { ROOT, withPathLock } from "./workspace";
 
 import { resolvePath } from "./permission";
 
-/** A command that has not produced anything in this long is not going to. */
-const MAX_COMMAND_MS = 120_000;
+/**
+ * The longest a single command may be asked to run: the timer's own ceiling.
+ *
+ * Not a policy number — `setTimeout` cannot express more, so anything larger is
+ * a typo rather than an intention. pi validates against the same bound and for
+ * the same reason (`core/tools/bash.ts:24`).
+ */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * The deadline a command gets when **nobody is attached to the session**.
+ *
+ * 🔴 **The number is inherited, not derived** — it was `MAX_COMMAND_MS = 120_000`
+ * with the note "a command that has not produced anything in this long is not
+ * going to", and until the deadline was fixed to actually bite (`3baf03c`) it had
+ * never once fired, so it had never been wrong in public. It has been since:
+ * Terminal-Bench's `build-initramfs-qemu` needed a command that takes two minutes
+ * (booting a kernel under emulation) and its agent said so in as many words.
+ *
+ * What changed is not the number but that **it is no longer the only option**:
+ * `timeout` is a parameter now, so a command that needs longer can say so.
+ *
+ * ⚠️ **Why unattended is the case that needs a ceiling at all.** Attached, the
+ * human is the deadline — they watch the row a running command paints and
+ * interrupt, which kills the whole process group. `--print` has no terminal and
+ * nobody to press anything, and the program already models exactly this fact:
+ * `console/once.ts` refuses confirmations with *"No one is attached to this
+ * session"*. pi draws the same line — its print mode leaves the bound to whoever
+ * invoked it.
+ */
+export const UNATTENDED_COMMAND_CEILING_MS = 120_000;
+
+/**
+ * The deadline for commands with no `timeout` of their own, or `undefined` for
+ * none. Set once by the entry point, which is the layer that knows whether a
+ * human is there — the same reason `killRunningCommands` is called rather than
+ * self-installed.
+ */
+let ceilingMs: number | undefined;
+
+/** Called by `src/main.ts`. `undefined` means "a human is watching; let it run". */
+export function setCommandCeiling(ms: number | undefined): void {
+  ceilingMs = ms;
+}
 
 /** Command output goes into the next prompt, same as any other tool result. */
 const MAX_OUTPUT_BYTES = 32_000;
@@ -135,7 +177,7 @@ async function drain(
  */
 export async function runCommand(
   command: string,
-  timeoutMs: number,
+  timeoutMs: number | undefined,
   signal?: AbortSignal,
   onTick?: (tick: { elapsedMs: number; bytes: number }) => void,
 ): Promise<CommandOutcome> {
@@ -180,11 +222,17 @@ export async function runCommand(
         }, TICK_MS);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<typeof TIMED_OUT>((resolve) => {
-    timer = setTimeout(() => {
-      resolve(TIMED_OUT);
-    }, timeoutMs);
-  });
+  // No deadline is a real option, not a missing value: with a human attached the
+  // interrupt is the deadline, and a promise that never settles would only add a
+  // second thing that can never win the race.
+  const expired =
+    timeoutMs === undefined
+      ? undefined
+      : new Promise<typeof TIMED_OUT>((resolve) => {
+          timer = setTimeout(() => {
+            resolve(TIMED_OUT);
+          }, timeoutMs);
+        });
 
   // An interrupted turn used to be cleaned up by the terminal, which signals the
   // whole foreground group — but `detached` took this command out of that group,
@@ -196,7 +244,8 @@ export async function runCommand(
   signal?.addEventListener("abort", onAbort, { once: true });
 
   try {
-    const settled = await Promise.race([finished, expired]);
+    const settled =
+      expired === undefined ? await finished : await Promise.race([finished, expired]);
     const body = [out.join(""), err.join("")]
       .filter((part) => part.length > 0)
       .join("\n");
@@ -336,11 +385,35 @@ export const editTool = tool(
   },
 );
 
+/**
+ * The deadline this call gets, in milliseconds, or `undefined` for none.
+ *
+ * A bad `timeout` throws rather than falling back to the ceiling: a model that
+ * asked for one and silently got another would be told nothing, which is the
+ * defect this whole area is being cleaned of.
+ */
+function resolveTimeoutMs(timeout: number | undefined): number | undefined {
+  if (timeout === undefined) return ceilingMs;
+  if (!Number.isFinite(timeout) || timeout <= 0) {
+    throw new Error(
+      `invalid timeout: ${String(timeout)}s — give a positive number of seconds`,
+    );
+  }
+  const ms = timeout * 1000;
+  if (ms > MAX_TIMEOUT_MS) {
+    throw new Error(
+      `invalid timeout: ${String(timeout)}s is beyond the ${String(Math.floor(MAX_TIMEOUT_MS / 1000))}s a timer can hold`,
+    );
+  }
+  return ms;
+}
+
 export const bashTool = tool(
-  async ({ command }, config): Promise<string> => {
+  async ({ command, timeout }, config): Promise<string> => {
+    const deadline = resolveTimeoutMs(timeout);
     const { body, code, timedOut } = await runCommand(
       command,
-      MAX_COMMAND_MS,
+      deadline,
       (config as { signal?: AbortSignal } | undefined)?.signal,
       (tick) => {
         // Fire-and-forget, and swallowed on purpose: a console that is not
@@ -365,7 +438,7 @@ export const bashTool = tool(
     // says so in words: the model has to know the command was cut off rather
     // than read a partial transcript as the whole story.
     if (timedOut) {
-      return `${prefix}[timed out after ${String(MAX_COMMAND_MS / 1000)}s; killed, along with everything it started]`;
+      return `${prefix}[timed out after ${String((deadline ?? 0) / 1000)}s; killed, along with everything it started. Pass a larger timeout if the command legitimately needs one]`;
     }
     if (code !== 0) {
       return `${prefix}[exit ${String(code)}]`;
@@ -376,9 +449,15 @@ export const bashTool = tool(
     name: "Bash",
     // Never, even when the command is `ls` — the declaration is per tool, and the runtime cannot read a shell command.
     metadata: { ...NEVER_REPLAY },
-    description: `Run one shell command in the working directory. Returns stdout and stderr combined; a non-zero exit is reported as [exit N] rather than as a failure. After ${String(MAX_COMMAND_MS / 1000)}s the command and everything it started are killed and the output so far is returned with [timed out]. Do not use it to run an interactive program — it has no stdin.`,
+    description: `Run one shell command in the working directory. Returns stdout and stderr combined; a non-zero exit is reported as [exit N] rather than as a failure. When a deadline applies and is reached, the command and everything it started are killed and the output so far comes back marked [timed out]. Do not use it to run an interactive program — it has no stdin.`,
     schema: z.object({
       command: z.string().describe("The command to run. One command per call."),
+      timeout: z
+        .number()
+        .optional()
+        .describe(
+          "Seconds to allow this command. Give one when it legitimately takes longer than usual — a build, a boot, a long test run.",
+        ),
     }),
   },
 );

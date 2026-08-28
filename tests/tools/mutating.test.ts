@@ -2,7 +2,12 @@ import { afterAll, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 
 import { bashTool, editTool, writeTool } from "@/tools";
-import { killRunningCommands, runCommand } from "@/tools/mutating";
+import {
+  killRunningCommands,
+  runCommand,
+  setCommandCeiling,
+  UNATTENDED_COMMAND_CEILING_MS,
+} from "@/tools/mutating";
 
 /**
  * Everything resolves against process.cwd(), so the fixtures have to live inside
@@ -323,4 +328,74 @@ test("a command nobody is watching pays for no ticks", async () => {
   // No callback, no timer. The courtesy is opt-in.
   const outcome = await runCommand("echo quiet", 10_000);
   expect(outcome.body).toContain("quiet");
+});
+
+/* ---------- who owns the deadline ---------- */
+
+// pi lets the model ask for the time a command needs, and defaults to none —
+// which it can afford because a human is watching and can interrupt. We take the
+// parameter; the default is the half that depends on somebody being there.
+test("a command may ask for the time it needs", async () => {
+  const marker = file("never-5");
+  const started = Date.now();
+  // Two seconds of grandchild, and a call that asks for less than that.
+  const outcome = await runCommand(grandchild(marker, 5), 400);
+
+  expect(outcome.timedOut).toBe(true);
+  expect(Date.now() - started).toBeLessThan(3000);
+});
+
+test("no deadline means no deadline — the command decides when it is done", async () => {
+  const started = Date.now();
+  const outcome = await runCommand("sleep 0.4; echo done", undefined);
+
+  expect(outcome.timedOut).toBe(false);
+  expect(outcome.body).toContain("done");
+  expect(Date.now() - started).toBeGreaterThanOrEqual(350);
+});
+
+// The tool's own default comes from whoever set the ceiling — `src/main.ts` sets
+// one only for `--print`, where nobody can press anything.
+test("the ceiling is what a call with no timeout of its own gets", async () => {
+  const marker = file("never-6");
+  setCommandCeiling(400);
+  try {
+    const result = String(await bashTool.invoke({ command: grandchild(marker, 5) }));
+    expect(result).toContain("timed out after 0.4s");
+    expect(result).toContain("Pass a larger timeout");
+  } finally {
+    setCommandCeiling(undefined);
+  }
+});
+
+test("a call may override the ceiling upwards", async () => {
+  setCommandCeiling(200);
+  try {
+    // The ceiling would have cut this at 200ms; the call asks for more and gets it.
+    const result = String(
+      await bashTool.invoke({ command: "sleep 0.5; echo through", timeout: 5 }),
+    );
+    expect(result).toContain("through");
+    expect(result).not.toContain("timed out");
+  } finally {
+    setCommandCeiling(undefined);
+  }
+});
+
+// A model that asked for a deadline and silently got a different one would be
+// told nothing — the exact defect this area is being cleaned of.
+test("a nonsense timeout is refused rather than quietly replaced", async () => {
+  expect(await rejection(bashTool.invoke({ command: "true", timeout: 0 }))).toContain(
+    "invalid timeout",
+  );
+  expect(await rejection(bashTool.invoke({ command: "true", timeout: -3 }))).toContain(
+    "invalid timeout",
+  );
+  expect(
+    await rejection(bashTool.invoke({ command: "true", timeout: 9_999_999_999 })),
+  ).toContain("a timer can hold");
+});
+
+test("the unattended ceiling is the number `--print` installs", () => {
+  expect(UNATTENDED_COMMAND_CEILING_MS).toBe(120_000);
 });

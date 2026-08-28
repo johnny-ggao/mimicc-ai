@@ -16,6 +16,8 @@ export {
   COMMAND_TICK_EVENT,
   editTool,
   killRunningCommands,
+  setCommandCeiling,
+  UNATTENDED_COMMAND_CEILING_MS,
   writeTool,
   type CommandTick,
 } from "./mutating";

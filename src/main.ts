@@ -13,7 +13,11 @@ import { buildSystemPrompt, type PromptEnvironment } from "./agents";
 import { parseArgs, runOnce, runRepl, type Start } from "./console";
 import { resolveSession } from "./session";
 import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
-import { killRunningCommands } from "./tools";
+import {
+  killRunningCommands,
+  setCommandCeiling,
+  UNATTENDED_COMMAND_CEILING_MS,
+} from "./tools";
 import { loadPermissions } from "./tools/permissionConfig";
 
 /**
@@ -167,6 +171,12 @@ async function main(): Promise<void> {
   // two share the graph and nothing else: the repl owns a terminal, this owns a
   // process exit code.
   if (start.kind === "print") {
+    // 🔑 Nobody is attached, so nobody can interrupt a command that never ends —
+    // the same fact `runOnce` already acts on when it refuses confirmations with
+    // "No one is attached to this session". A ceiling is the stand-in for the
+    // human who is not there; with one attached, below, there is none and the
+    // interrupt does that job (see `setCommandCeiling`).
+    setCommandCeiling(UNATTENDED_COMMAND_CEILING_MS);
     const result = await runOnce({ graph, task: start.task });
     if (result.text !== "") process.stdout.write(`${result.text}\n`);
     if (result.refused > 0) {
