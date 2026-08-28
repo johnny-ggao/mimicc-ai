@@ -11,7 +11,7 @@ export {
   SAFE_TO_REPLAY,
   type Replay,
 } from "./replay";
-export { bashTool, editTool, writeTool } from "./mutating";
+export { bashTool, editTool, killRunningCommands, writeTool } from "./mutating";
 // `Clarify` is a schema declaration whose body never runs — `clarifyGate` answers
 // the call in `afterModel` instead. Both are exported because the assembling
 // caller wires them as a pair; installing one without the other is either a tool

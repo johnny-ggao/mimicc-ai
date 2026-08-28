@@ -13,9 +13,37 @@ import { buildSystemPrompt, type PromptEnvironment } from "./agents";
 import { parseArgs, runOnce, runRepl, type Start } from "./console";
 import { resolveSession } from "./session";
 import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
+import { killRunningCommands } from "./tools";
 import { loadPermissions } from "./tools/permissionConfig";
 
+/**
+ * Takes every still-running command with us on the way out.
+ *
+ * `Bash` spawns detached (`src/tools/mutating.ts`), which is what lets the
+ * deadline kill a whole pipeline — and what lets a survivor outlive this
+ * process when nothing sweeps. Registered here rather than in the tool because
+ * a module that installs signal handlers on import is a side effect nobody
+ * greps for; the process's exit belongs to its entry point.
+ *
+ * `exit` covers the normal end and every `process.exit`. The two signals do not
+ * run `exit` handlers on their own, so they sweep and then leave with the
+ * conventional 128+signal.
+ */
+function sweepOnExit(): void {
+  process.on("exit", killRunningCommands);
+  for (const [signal, code] of [
+    ["SIGTERM", 143],
+    ["SIGHUP", 129],
+  ] as const) {
+    process.on(signal, () => {
+      killRunningCommands();
+      process.exit(code);
+    });
+  }
+}
+
 async function main(): Promise<void> {
+  sweepOnExit();
   const config = loadConfig();
   const log = createLogger(config.LOG_LEVEL);
 

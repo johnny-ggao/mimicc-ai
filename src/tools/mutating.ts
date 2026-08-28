@@ -28,6 +28,34 @@ export type CommandOutcome = {
 const TIMED_OUT = Symbol("timed out");
 
 /**
+ * Commands still running, so that leaving can take them along.
+ *
+ * `detached: true` (see {@link killTree}) means a child survives this process by
+ * default. **That is the point while a command is running and exactly wrong once
+ * we are on the way out.** The deadline kills, and an abort kills — but a clean
+ * exit killed nothing, and Terminal-Bench measured what that costs: an orphaned
+ * `apt-get` still holding `/var/lib/dpkg/lock-frontend` while the *grading* phase
+ * ran, failing a task the agent was no longer part of.
+ *
+ * pi keeps the same registry and sweeps it from every entry point
+ * (`utils/shell.ts:179-194`, `modes/print-mode.ts:58`) — this is that shape, not
+ * an invention.
+ */
+const running = new Set<Bun.Subprocess>();
+
+/**
+ * Kills every command still running, and everything each of them started.
+ *
+ * Called from the process's exit paths rather than registered here: a module
+ * that installs a global signal handler on import is a side effect nobody
+ * greps for. `src/main.ts` owns the exit, so it owns the sweep.
+ */
+export function killRunningCommands(): void {
+  for (const child of running) killTree(child);
+  running.clear();
+}
+
+/**
  * Kills the command **and everything it started**.
  *
  * `child` is the `/bin/sh` this module spawned; the work is almost always in
@@ -111,6 +139,7 @@ export async function runCommand(
     },
   });
 
+  running.add(child);
   const out: string[] = [];
   const err: string[] = [];
   const finished: Promise<number> = (async () => {
@@ -148,6 +177,7 @@ export async function runCommand(
     }
     return { body, code: settled, timedOut: false };
   } finally {
+    running.delete(child);
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }

@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 
 import { bashTool, editTool, writeTool } from "@/tools";
-import { runCommand } from "@/tools/mutating";
+import { killRunningCommands, runCommand } from "@/tools/mutating";
 
 /**
  * Everything resolves against process.cwd(), so the fixtures have to live inside
@@ -274,4 +274,30 @@ test("a command that finishes on its own is untouched by any of this", async () 
   expect(outcome.code).toBe(3);
   expect(outcome.body).toContain("out");
   expect(outcome.body).toContain("err");
+});
+
+// The deadline kills and an abort kills — but a clean exit killed nothing, and a
+// detached child survives its parent by design. Terminal-Bench measured the
+// cost: an orphaned `apt-get` still holding the dpkg lock while the *grading*
+// phase ran. `src/main.ts` calls this from the process's exit paths.
+test("leaving takes every still-running command with it", async () => {
+  const marker = file("never-4");
+  const running = runCommand(grandchild(marker, 1), 10_000);
+
+  await Bun.sleep(200);
+  killRunningCommands();
+  await running;
+
+  await Bun.sleep(1800);
+  expect(await Bun.file(marker).exists()).toBe(false);
+});
+
+// The other half of the same fact: a command that already finished must not be
+// in the registry, or a later sweep would be signalling recycled pids.
+test("a finished command is not swept later", async () => {
+  await runCommand("true", 10_000);
+  // Nothing to kill, and nothing throws: the registry emptied itself.
+  expect(() => {
+    killRunningCommands();
+  }).not.toThrow();
 });
