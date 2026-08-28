@@ -87,6 +87,38 @@ const TIMEOUT_MS = 180_000;
  */
 const PAID_TIMEOUT_MS = 30_000;
 
+/**
+ * 退役的探针：**它的问题答完了，而被它量的那样东西已经不在了。**
+ *
+ * ## 为什么需要这个机制，而不是删掉文件
+ *
+ * 这个脚本自己的失败提示一直写着「修它，或者退役——**别把它从这个列表里划掉**」，
+ * 但在 2026-08-28 之前**没有「退役」这回事**：这里是 `readdirSync` 全扫，
+ * 唯一能让一个探针不报红的办法就是删掉它。于是那句话是空的，而空的规矩会以两种方式塌——
+ * 要么留着一个永远红的条目（红久了没人再看红字），要么真把文件删了
+ * （**证据不能只存在于一台机器上**，那是 `repro/README.md` 顶上写死的理由）。
+ *
+ * 所以退役的定义是**只列不跑**：文件留在 git 里、名字留在这份输出里、旁边写着为什么。
+ * 🔑 **看得见才叫退役，看不见就叫划掉。**
+ *
+ * ## 什么时候可以退役（两条都要成立）
+ *
+ * 1. 它的结论**已经落进 `docs/adr/` 或 `CONTEXT.md`**——探针是证据，不是结论的家；
+ * 2. 它量的那样东西**没了**，所以它不可能再答一次自己的问题。
+ *
+ * ⚠️ **「它现在跑不起来」不是理由，那是腐烂**，腐烂要修（这个脚本存在的全部意义）。
+ * 分辨的方法是问：把接口改回去它就能答了吗？能，就是腐烂；不能，才是退役。
+ */
+const RETIRED: Record<string, string> = {
+  "45-how-many-laps-fit-in-the-limit.ts":
+    "2026-08-28 退役。它量的是「`RECURSION_LIMIT = 48` 等于几圈」，而 ADR 0009（`5fea7ee`）" +
+    "把步数预算整个删了——那个常数今天是 `1_000_000` 的格式占位，**撞不到**，" +
+    "「撞顶时跑了几圈」这个观测面不存在了。单独跑实测 **10 分 17 秒**，" +
+    "而且父进程最后印的是「子进程没交回东西」、退出码 0：" +
+    "**把上限抬高也没用，它只会「起得来」而什么都答不出。** " +
+    "结论在 ADR 0009 与 CONTEXT.md「回合预算」。",
+};
+
 interface Result {
   file: string;
   ok: boolean;
@@ -173,12 +205,31 @@ const files = readdirSync(REPRO)
   .filter((name) => name.endsWith(".ts"))
   .sort();
 
+// 一份指着不存在的文件的退役名单，本身就是腐烂——而且是**看不见**的那种：
+// 它会安静地什么都不做。所以先对账，再开跑。
+const orphaned = Object.keys(RETIRED).filter((name) => !files.includes(name));
+if (orphaned.length > 0) {
+  process.stdout.write(
+    `🔴 退役名单里有 ${String(orphaned.length)} 个文件不存在：${orphaned.join("、")}\n` +
+      "   退役是「只列不跑」，不是删掉。把文件找回来，或者把这条名单删掉。\n",
+  );
+  process.exit(1);
+}
+
+const live = files.filter((name) => !(name in RETIRED));
 process.stdout.write(
-  `冒烟 ${String(files.length)} 个探针（花钱的 ${String(Object.keys(PAID).length)} 个跑在本地 stub 上）\n\n`,
+  `冒烟 ${String(live.length)} 个探针（花钱的 ${String(Object.keys(PAID).length)} 个跑在本地 stub 上` +
+    `${files.length === live.length ? "" : `；另有 ${String(files.length - live.length)} 个已退役，只列不跑`}）\n\n`,
 );
 
 const results: Result[] = [];
 for (const file of files) {
+  // 退役的照样占一行。名字看得见、理由看得见，才不是「划掉」。
+  const why = RETIRED[file];
+  if (why !== undefined) {
+    process.stdout.write(`  ⏸️  已退役  ${file}\n        ${why}\n`);
+    continue;
+  }
   const paid = file in PAID;
   const result = await run(file, paid);
   results.push(result);
@@ -189,13 +240,17 @@ for (const file of files) {
 }
 
 const failed = results.filter((result) => !result.ok);
+const retiredNote =
+  files.length === live.length ? "" : `（另有 ${String(files.length - live.length)} 个已退役）`;
 process.stdout.write(
-  `\n${failed.length === 0 ? "✅ 全部起得来" : `🔴 ${String(failed.length)} 个起不来`}\n`,
+  `\n${failed.length === 0 ? `✅ 全部起得来${retiredNote}` : `🔴 ${String(failed.length)} 个起不来${retiredNote}`}\n`,
 );
 if (failed.length > 0) {
   process.stdout.write(
-    "\n探针腐烂通常不是探针的错：改了接口而它还照着旧的写。修它，或者在 `repro/README.md`\n" +
-      "里把它退役——**别把它从这个列表里划掉**，那等于把「没人知道它死了多久」再来一次。\n",
+    "\n探针腐烂通常不是探针的错：改了接口而它还照着旧的写。**先修它。**\n" +
+      "只有当它量的那样东西已经不存在、而结论已经进了 `docs/adr/` 或 `CONTEXT.md` 时，\n" +
+      "才把它登记进这个脚本的 `RETIRED`（并在 `repro/README.md` 的表里标上）——\n" +
+      "**退役是只列不跑，不是从列表里划掉**，那等于把「没人知道它死了多久」再来一次。\n",
   );
   process.exit(1);
 }
