@@ -24,7 +24,38 @@ import {
   type Skips,
 } from "./limits";
 
-const IGNORED = ["node_modules/**", ".git/**", "dist/**", "coverage/**"];
+/**
+ * Trees never worth walking: machine-generated, and large enough to bury the
+ * answer under the limit before the answer is reached.
+ *
+ * 🔴 **Every pattern is `**\/name/**` and that is a fix, not a style.** They used
+ * to be written `node_modules/**`, which matches `node_modules/x.js` and **not**
+ * `packages/a/node_modules/x.js` — measured. So a declared exclusion quietly did
+ * not apply wherever the tree had depth, which is the same defect this whole
+ * file is being cleaned of: something the tool says it does, and does not.
+ *
+ * `__pycache__` and `.venv` are new here, and they are not a guess: the list
+ * already encodes "machine-generated dependency and build trees", and those two
+ * are that, in the ecosystem the other four do not cover. **The list is repeated
+ * in both tool descriptions**, because an exclusion the caller cannot see is
+ * indistinguishable from a lie.
+ */
+const IGNORED = [
+  "**/node_modules/**",
+  "**/.git/**",
+  "**/dist/**",
+  "**/coverage/**",
+  "**/__pycache__/**",
+  "**/.venv/**",
+  // A git worktree under here is **a checkout of this same repository**, so
+  // every hit inside it is a duplicate of one outside it. Measured once `dot`
+  // was turned on: a repo-wide grep came back with each match twice.
+  "**/.claude/worktrees/**",
+];
+
+/** Named for the description, so the sentence and the behaviour cannot drift apart. */
+const IGNORED_FOR_HUMANS =
+  "node_modules, .git, dist, coverage, __pycache__, .venv and .claude/worktrees";
 
 function ignored(path: string): boolean {
   return IGNORED.some((pattern) => new Bun.Glob(pattern).match(path));
@@ -151,6 +182,13 @@ export const globTool = tool(
     for await (const hit of new Bun.Glob(pattern).scan({
       cwd: ROOT,
       onlyFiles: true,
+      // 🔴 Hidden files are files. Without this, `.github/workflows/ci.yml`,
+      // `.env.example` and everything under `.claude/` simply do not exist as
+      // far as this tool is concerned — and the tool says `no files match`,
+      // which is a *positive claim of absence* about a place it never looked.
+      // Measured on the repository's own tests: fixtures under `.test-tmp/`
+      // were invisible to the tools under test.
+      dot: true,
     })) {
       if (ignored(hit)) continue;
       // One past the limit, so "there are more" is something this knows rather
@@ -171,7 +209,7 @@ export const globTool = tool(
     name: "Glob",
     // A scan. Same pattern, same answer, nothing touched.
     metadata: { ...SAFE_TO_REPLAY },
-    description: `Find files by path pattern, e.g. src/**/*.test.ts. Skips node_modules, .git, dist and coverage, and does not match hidden files. Stops at ${String(MAX_GLOB_HITS)} results and says so.`,
+    description: `Find files by path pattern, e.g. src/**/*.test.ts. Includes hidden files. Skips ${IGNORED_FOR_HUMANS} at any depth. Stops at ${String(MAX_GLOB_HITS)} results and says so.`,
     schema: z.object({
       pattern: z.string().describe("Glob pattern, relative to the working directory"),
     }),
@@ -195,7 +233,13 @@ export const grepTool = tool(
     // `no matches` — a positive claim of absence about files never opened.
     const skips: Skips = {};
     let more = false;
-    for await (const path of new Bun.Glob(glob).scan({ cwd: ROOT, onlyFiles: true })) {
+    for await (const path of new Bun.Glob(glob).scan({
+      cwd: ROOT,
+      onlyFiles: true,
+      // Same reason as `Glob` above: a search that cannot see `.github/` must
+      // not answer "no matches" as though it had looked there.
+      dot: true,
+    })) {
       if (ignored(path)) continue;
       if (isSecret(path)) {
         countSkip(skips, "may hold credentials");
@@ -244,7 +288,7 @@ export const grepTool = tool(
     name: "Grep",
     // Same: it looks, it does not touch.
     metadata: { ...SAFE_TO_REPLAY },
-    description: `Find files by content, using a JavaScript regular expression. Returns path:line:text. Stops at ${String(MAX_GREP_HITS)} matches; reports any files it skipped (too large, binary, unreadable, credential-shaped). Does not search hidden files.`,
+    description: `Find files by content, using a JavaScript regular expression. Returns path:line:text. Includes hidden files; skips ${IGNORED_FOR_HUMANS} at any depth. Stops at ${String(MAX_GREP_HITS)} matches, and reports any files it passed over (too large, binary, unreadable, credential-shaped).`,
     schema: z.object({
       pattern: z.string().describe("JavaScript regular expression source"),
       glob: z

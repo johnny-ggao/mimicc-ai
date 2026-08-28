@@ -231,3 +231,41 @@ test("a scan that left nothing out says nothing extra", async () => {
   ).toBe(`${SCAN}/one.txt:1:needle`);
   rmSync(SCAN, { recursive: true, force: true });
 });
+
+/* ---------- hidden files are files ---------- */
+
+// 🔴 Before this, `.github/`, `.env.example` and everything under `.claude/`
+// did not exist as far as these two tools were concerned — and the answer they
+// gave was `no files match`, about a place they never looked. The tests for the
+// change above had to be moved out of `.test-tmp/` for exactly this reason.
+test("Glob and Grep see inside hidden directories", async () => {
+  mkdirSync(`${SCAN}/.github/workflows`, { recursive: true });
+  writeFileSync(`${SCAN}/.github/workflows/ci.yml`, "needle: yes\n");
+  writeFileSync(`${SCAN}/.env.example`, "needle=1\n");
+
+  const globbed = String(await globTool.invoke({ pattern: `${SCAN}/**/*.yml` }));
+  expect(globbed).toContain(".github/workflows/ci.yml");
+
+  const grepped = String(
+    await grepTool.invoke({ pattern: "needle", glob: `${SCAN}/**` }),
+  );
+  expect(grepped).toContain(".github/workflows/ci.yml");
+  // `.env.example` is credential-shaped, so Grep passes it over — but *says so*
+  // rather than folding it into "no matches".
+  expect(grepped).toContain("may hold credentials");
+  rmSync(SCAN, { recursive: true, force: true });
+});
+
+// The ignore list is the one exclusion that stays, so it has to hold at depth —
+// it was written `node_modules/**`, which never matched a nested one.
+test("the ignored trees are ignored at any depth", async () => {
+  mkdirSync(`${SCAN}/packages/a/node_modules`, { recursive: true });
+  writeFileSync(`${SCAN}/packages/a/node_modules/dep.js`, "needle\n");
+  writeFileSync(`${SCAN}/packages/a/own.js`, "needle\n");
+
+  const out = String(await globTool.invoke({ pattern: `${SCAN}/**/*.js` }));
+
+  expect(out).toContain("packages/a/own.js");
+  expect(out).not.toContain("node_modules");
+  rmSync(SCAN, { recursive: true, force: true });
+});
