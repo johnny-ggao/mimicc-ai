@@ -1,6 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { rm } from "node:fs/promises";
 
+import { setProcessDeadline } from "@/deadline";
 import { bashTool, editTool, writeTool } from "@/tools";
 import {
   killRunningCommands,
@@ -398,4 +399,69 @@ test("a nonsense timeout is refused rather than quietly replaced", async () => {
 
 test("the unattended ceiling is the number `--print` installs", () => {
   expect(UNATTENDED_COMMAND_CEILING_MS).toBe(120_000);
+});
+
+/**
+ * 内层的钟必须严格小于外层的钟（ADR 0010）。
+ *
+ * 在这之前 `timeout` 唯一的上界是 `setTimeout` 自己能装下的 24.8 天：模型在一次只剩
+ * 200 秒的调用里给一条命令要 3600 秒，会**原样拿到**。
+ */
+test("这次调用剩下多少，一条命令最多就拿多少 —— 而且夹了要说", async () => {
+  // 余量 2 秒，所以 2.4 秒的总闸留给命令 0.4 秒。
+  setProcessDeadline(Date.now() + 2_400);
+  try {
+    const result = String(
+      await bashTool.invoke({
+        command: grandchild(file("clamped-1"), 5),
+        timeout: 3_600,
+      }),
+    );
+    // 钉「不到半秒就被掐了」，不钉具体毫秒：夹出来的数随 `Date.now()` 抖
+    // （实测 0.399 与 0.4 都出现过），钉它就是钉噪音。
+    expect(result).toMatch(/timed out after 0\.\d+s/);
+    // 说出它要过什么、以及再要也没用——不说的话，模型会把「才跑几百毫秒就被杀」
+    // 读成命令自己的毛病。
+    expect(result).toContain("you asked for 3600s");
+    expect(result).toContain("a larger timeout would not have helped");
+  } finally {
+    setProcessDeadline(undefined);
+  }
+});
+
+test("没给 timeout 的那一格，话要换一种说法 —— 它没要过 120 秒", async () => {
+  setProcessDeadline(Date.now() + 2_400);
+  setCommandCeiling(UNATTENDED_COMMAND_CEILING_MS);
+  try {
+    const result = String(
+      await bashTool.invoke({ command: grandchild(file("clamped-2"), 5) }),
+    );
+    expect(result).toMatch(/timed out after 0\.\d+s/);
+    expect(result).not.toContain("you asked for");
+    expect(result).toContain("that is all this run had left");
+  } finally {
+    setCommandCeiling(undefined);
+    setProcessDeadline(undefined);
+  }
+});
+
+// 一条注定在起跑线上被杀的命令只会留下副作用和一段没人读得完的输出。
+test("余地不够就根本不开跑，并说出是这次调用没时间了", async () => {
+  setProcessDeadline(Date.now() + 500);
+  try {
+    const result = String(await bashTool.invoke({ command: "echo ran", timeout: 5 }));
+    expect(result).toContain("not started");
+    expect(result).not.toContain("ran");
+  } finally {
+    setProcessDeadline(undefined);
+  }
+});
+
+// 有人挂着的时候没有总闸，所以什么都不夹——人就是那把钟。
+test("没有总闸时，要多久就是多久", async () => {
+  const result = String(
+    await bashTool.invoke({ command: "sleep 0.2; echo through", timeout: 3_600 }),
+  );
+  expect(result).toContain("through");
+  expect(result).not.toContain("timed out");
 });

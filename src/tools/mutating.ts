@@ -12,6 +12,8 @@ import { ROOT, withPathLock } from "./workspace";
 
 import { resolvePath } from "./permission";
 
+import { clamp, type Clamped } from "../deadline";
+
 /**
  * The longest a single command may be asked to run: the timer's own ceiling.
  *
@@ -386,34 +388,65 @@ export const editTool = tool(
 );
 
 /**
+ * The gap the run's deadline keeps ahead of any command it contains.
+ *
+ * The invariant is that the inner clock is **strictly** smaller than the outer
+ * one (ADR 0010), and a margin is what makes "strictly" mean something: a
+ * command that ends at the very instant the run does leaves nothing between the
+ * two, and which of them stopped it becomes a race.
+ *
+ * ⚠️ **Deliberately small.** The tempting reading is "leave room for one more
+ * model call so the answer can be handed in", which argues for tens of seconds
+ * — but a run that reaches its deadline has no answer to hand in by definition
+ * (CONTEXT.md「期限」), and a margin that large creates its own defect: a window
+ * at the end of every run where no command can be given any time at all.
+ */
+const RUN_DEADLINE_MARGIN_MS = 2_000;
+
+/**
  * The deadline this call gets, in milliseconds, or `undefined` for none.
  *
  * A bad `timeout` throws rather than falling back to the ceiling: a model that
  * asked for one and silently got another would be told nothing, which is the
  * defect this whole area is being cleaned of.
+ *
+ * 🔑 **And the run's own deadline clamps whatever survives that** (ADR 0010):
+ * `inner = min(what it asked for, what the run has left − margin)`. Without the
+ * clamp a model could hand one command a longer deadline than the whole run has
+ * — measured as reachable: `timeout` has no upper bound but the timer's own, so
+ * `timeout: 3600` in a run with 200 seconds left used to be honoured in full.
+ * The clamp is silent only when it changed nothing; {@link Clamped.asked}
+ * carries the ask through to the message the model reads.
  */
-function resolveTimeoutMs(timeout: number | undefined): number | undefined {
-  if (timeout === undefined) return ceilingMs;
-  if (!Number.isFinite(timeout) || timeout <= 0) {
-    throw new Error(
-      `invalid timeout: ${String(timeout)}s — give a positive number of seconds`,
-    );
+function resolveTimeoutMs(timeout: number | undefined): Clamped {
+  if (timeout !== undefined) {
+    if (!Number.isFinite(timeout) || timeout <= 0) {
+      throw new Error(
+        `invalid timeout: ${String(timeout)}s — give a positive number of seconds`,
+      );
+    }
+    if (timeout * 1000 > MAX_TIMEOUT_MS) {
+      throw new Error(
+        `invalid timeout: ${String(timeout)}s is beyond the ${String(Math.floor(MAX_TIMEOUT_MS / 1000))}s a timer can hold`,
+      );
+    }
   }
-  const ms = timeout * 1000;
-  if (ms > MAX_TIMEOUT_MS) {
-    throw new Error(
-      `invalid timeout: ${String(timeout)}s is beyond the ${String(Math.floor(MAX_TIMEOUT_MS / 1000))}s a timer can hold`,
-    );
-  }
-  return ms;
+  return clamp(timeout === undefined ? ceilingMs : timeout * 1000, RUN_DEADLINE_MARGIN_MS);
 }
 
 export const bashTool = tool(
   async ({ command, timeout }, config): Promise<string> => {
     const deadline = resolveTimeoutMs(timeout);
+
+    // 没余地了就不开跑。一条注定在起跑线上被杀的命令只会留下副作用和一段没人读得完的输出，
+    // 而「为什么它一个字都没输出」是模型猜不出来的——**说出是哪只钟，比让它去猜便宜。**
+    if (deadline.ms === 0) {
+      return `[not started: this run has less than ${String(RUN_DEADLINE_MARGIN_MS / 1000)}s left, so there is no time to run anything]`;
+    }
+
     const { body, code, timedOut } = await runCommand(
       command,
-      deadline,
+      deadline.ms,
       (config as { signal?: AbortSignal } | undefined)?.signal,
       (tick) => {
         // Fire-and-forget, and swallowed on purpose: a console that is not
@@ -438,7 +471,15 @@ export const bashTool = tool(
     // says so in words: the model has to know the command was cut off rather
     // than read a partial transcript as the whole story.
     if (timedOut) {
-      return `${prefix}[timed out after ${String((deadline ?? 0) / 1000)}s; killed, along with everything it started. Pass a larger timeout if the command legitimately needs one]`;
+      // 被夹短了才说，没夹不说——而夹了不说，就是这条线要治的那种沉默：模型会以为
+      // 自己要的 3600 秒真的给了它，然后把「才跑了 200 秒就被杀」读成别的什么毛病。
+      const why =
+        deadline.asked === undefined
+          ? "Pass a larger timeout if the command legitimately needs one"
+          : timeout === undefined
+            ? "that is all this run had left — a larger timeout would not have helped"
+            : `you asked for ${String(timeout)}s, but that is all this run had left — a larger timeout would not have helped`;
+      return `${prefix}[timed out after ${String((deadline.ms ?? 0) / 1000)}s; killed, along with everything it started. ${why}]`;
     }
     if (code !== 0) {
       return `${prefix}[exit ${String(code)}]`;

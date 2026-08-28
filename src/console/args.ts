@@ -31,15 +31,17 @@ export type Invocation =
    * switch (CONTEXT.md 「自动模式」). Without it, a run with nobody attached
    * refuses every call the gate would have asked about — see `once.ts`.
    */
-  | { kind: "print"; task: string; auto: boolean }
+  | { kind: "print"; task: string; auto: boolean; timeoutSec?: number }
   | { kind: "error"; message: string };
 
-const USAGE = "usage: mimicc [--auto] [--resume [<session-id>]] [--print <task>]";
+const USAGE =
+  "usage: mimicc [--auto] [--resume [<session-id>]] [--print <task> [--timeout <seconds>]]";
 
 export function parseArgs(argv: string[]): Invocation {
   let auto = false;
   let resume: { prefix: string } | "bare" | undefined = undefined;
   let task: string | undefined = undefined;
+  let timeoutSec: number | undefined = undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -86,6 +88,24 @@ export function parseArgs(argv: string[]): Invocation {
       continue;
     }
 
+    // 这次调用的总闸，秒。它是 ADR 0010 那个「最外层必须有一个真的钟」的入口。
+    const timeout = /^--timeout(?:=([\s\S]+))?$/.exec(arg);
+    if (timeout !== null) {
+      const raw = timeout[1] ?? argv[i + 1];
+      if (timeout[1] === undefined) i += 1;
+      const seconds = Number(raw);
+      // 拒绝而不是退回默认值：一个打错的期限和一个没给的期限，后果差着数量级，
+      // 而调用方（通常是脚本或 benchmark 适配器）看不见我们悄悄换了什么数。
+      if (raw === undefined || !Number.isFinite(seconds) || seconds <= 0) {
+        return {
+          kind: "error",
+          message: `--timeout needs a positive number of seconds\n${USAGE}`,
+        };
+      }
+      timeoutSec = seconds;
+      continue;
+    }
+
     return { kind: "error", message: `unknown argument: ${arg}\n${USAGE}` };
   }
 
@@ -99,7 +119,13 @@ export function parseArgs(argv: string[]): Invocation {
         message: `--print cannot be combined with --resume\n${USAGE}`,
       };
     }
-    return { kind: "print", task, auto };
+    return { kind: "print", task, auto, ...(timeoutSec !== undefined ? { timeoutSec } : {}) };
+  }
+
+  // 交互式没有总闸，因为人就是那把钟（CONTEXT.md「期限」）。一个在这里被静默忽略的
+  // `--timeout` 会让调用方以为自己设了界限，而这正是本条不变式要治的病。
+  if (timeoutSec !== undefined) {
+    return { kind: "error", message: `--timeout only applies to --print\n${USAGE}` };
   }
 
   if (resume === undefined) return { kind: "new", auto };

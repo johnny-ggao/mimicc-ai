@@ -1,5 +1,7 @@
 import { AIMessage } from "@langchain/core/messages";
 
+import { DeadlineExceeded } from "../deadline";
+
 /**
  * How a thrown error ends a turn — in one place, so the classification is
  * written once and the four call sites only consume it (ticket 01).
@@ -9,8 +11,9 @@ import { AIMessage } from "@langchain/core/messages";
  * - **abort** — the user pressing Ctrl+C, orthogonal control (CONTEXT.md「中止」).
  *   Not a failure: no marker is written, nothing is rescued.
  * - **failure** — the turn genuinely did not run (model 500, request over
- *   limit, retries exhausted, or the loop hit the recursion ceiling). Rescuable
- *   (CONTEXT.md「失败」); a marker is written for the next turn to read.
+ *   limit, retries exhausted, the loop hit the recursion ceiling, or the run's
+ *   deadline came up). Rescuable (CONTEXT.md「失败」); a marker is written for
+ *   the next turn to read.
  * - **capped** — the loop guard force-stopped it and still produced a final
  *   answer. Deliberately absent here: it is reported through `onCap`, not
  *   thrown as an error, so `classify` cannot see it. It stays `TurnCapReason`
@@ -33,7 +36,7 @@ export type TurnOutcome =
   | { kind: "abort" }
   | {
       kind: "failure";
-      reason: "recursion" | "llm_status" | "other";
+      reason: "recursion" | "llm_status" | "deadline" | "other";
       error: unknown;
       /** Present only when `reason` is `"llm_status"`. */
       status?: number;
@@ -46,8 +49,16 @@ export type TurnOutcome =
  * checked first (an AbortError that also carries a status is still an abort),
  * then recursion, then the provider status. Anything that is not an object, or
  * has none of these marks, is an ordinary failure.
+ *
+ * 🔑 **期限排在中止前面，因为期限也是靠 abort 落地的**（`console/once.ts` 到点按下那把
+ * 中断）。两者的形状一样、含义相反：中止是**人**要停，不写 marker、不救活；期限是**机制**
+ * 停手，写 marker 并报出是哪只钟（ADR 0010）。顺序反过来，超期就会被当成用户按了 Ctrl+C
+ * ——而那正是这条不变式要治的病：**失败的原因被伪装成别的东西。**
  */
 export function classify(error: unknown): TurnOutcome {
+  if (DeadlineExceeded.isInstance(error)) {
+    return { kind: "failure", reason: "deadline", error };
+  }
   if (typeof error !== "object" || error === null) {
     return { kind: "failure", reason: "other", error };
   }

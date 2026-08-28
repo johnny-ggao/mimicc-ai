@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { createUniversalAgent } from "./agents";
 import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
+import { setProcessDeadline } from "./deadline";
 import { OUTPUT_BUDGET, resolveModelConfig } from "./models";
 import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
@@ -177,7 +178,18 @@ async function main(): Promise<void> {
     // human who is not there; with one attached, below, there is none and the
     // interrupt does that job (see `setCommandCeiling`).
     setCommandCeiling(UNATTENDED_COMMAND_CEILING_MS);
-    const result = await runOnce({ graph, task: start.task });
+    // 同一条判据的第二次使用：没人挂着，所以这次调用要有一个**总闸**（ADR 0010）。
+    // `--timeout` 是给它的值；没给就退到回合墙钟的配置值——退到那个数不是因为它对，
+    // 而是因为**在此之前它就是这条路上唯一写下来的时间数字**，换成别的数会凭空多一个常数。
+    // ⚠️ 时刻在这里定下，不在 `runOnce` 里：从这一行起，工具层的夹取和这次调用的总闸
+    // 减的是同一个数（`src/deadline.ts` 头部讲的就是这件事）。
+    const deadlineAt =
+      Date.now() +
+      (start.timeoutSec !== undefined
+        ? start.timeoutSec * 1000
+        : config.MIMICC_TURN_TIME_BUDGET_MS);
+    setProcessDeadline(deadlineAt);
+    const result = await runOnce({ graph, task: start.task, deadlineAt });
     if (result.text !== "") process.stdout.write(`${result.text}\n`);
     if (result.refused > 0) {
       process.stderr.write(
@@ -200,6 +212,8 @@ interface PrintStart {
   kind: "print";
   task: string;
   auto: boolean;
+  /** `--timeout <秒>`：这次调用的总闸。缺省时退到回合墙钟的配置值。 */
+  timeoutSec?: number;
 }
 
 /**

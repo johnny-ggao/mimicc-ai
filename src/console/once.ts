@@ -2,6 +2,8 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 
 import { classify, DURABILITY, RECURSION_LIMIT, type AgentGraph } from "../agents";
+import { failureText } from "../agents/outcome";
+import { DeadlineExceeded } from "../deadline";
 import { isClarifyRequest, type ClarifyAnswer } from "../tools/clarify";
 
 /**
@@ -43,6 +45,14 @@ export interface OnceOptions {
   task: string;
   /** The thread this runs on. A fresh uuid unless a caller pins one. */
   session?: string;
+  /**
+   * 这次调用的总闸：一个绝对时刻，过了就停手（ADR 0010）。
+   *
+   * 🔑 **它是这套东西里唯一一个真会响的钟。** 别的层——回合预算的墙钟、单条命令的期限——
+   * 要么是查表，要么是从这个数的剩余量里夹出来的。`undefined` 意思是没有总闸，
+   * 那只在有人挂着的时候成立，而有人挂着就不会走到这个函数（这里是 `--print` 的路）。
+   */
+  deadlineAt?: number;
 }
 
 export interface OnceResult {
@@ -118,8 +128,23 @@ export async function runOnce({
   graph,
   task,
   session = crypto.randomUUID(),
+  deadlineAt,
 }: OnceOptions): Promise<OnceResult> {
   const controller = new AbortController();
+  const startedAt = Date.now();
+  // 🔑 **这一行是 ADR 0010 的全部落点。** 在它之前，这个 `AbortController` 从被造出来到
+  // 进程结束没有一处调用过它的 `abort()`——它只是为了给 `signal` 一个值。于是「没人挂着」
+  // 这件事只被用来拒绝确认，没有被用来给这次调用定一个界限，一个挂住的流可以让整个进程
+  // 永远停在那里（`repro/50` 实测）。
+  const alarm =
+    deadlineAt === undefined
+      ? undefined
+      : setTimeout(
+          () => {
+            controller.abort(new DeadlineExceeded(Date.now() - startedAt, "run"));
+          },
+          Math.max(0, deadlineAt - startedAt),
+        );
   let input: { messages: BaseMessage[] } | Command = {
     messages: [new HumanMessage(task)],
   };
@@ -149,12 +174,28 @@ export async function runOnce({
         if (value !== undefined) parked = value;
       }
     } catch (error) {
-      const outcome = classify(error);
+      // ⚠️ 两个出口各清一次，别省这一行：一个还挂着的 `setTimeout` 会**把事件循环撑住**，
+      // 于是一次早早失败的 `--print` 要一直等到期限才肯退出——一个专门用来防挂死的机制，
+      // 自己变成了挂死的原因。
+      clearTimeout(alarm);
+      // 期限也是靠 abort 落地的，所以逃出来的可能是 langgraph 自己那个 AbortError 的壳。
+      // **认信号上挂的 reason，不认逃出来的壳**——否则超期会被读成「用户按了 Ctrl+C」，
+      // 而这两件事一个写 marker、一个不写。
+      const outcome = classify(
+        DeadlineExceeded.isInstance(controller.signal.reason)
+          ? controller.signal.reason
+          : error,
+      );
       return {
         text: "",
         ok: false,
         refused,
-        error: outcome.kind === "abort" ? "interrupted" : String(error).slice(0, 300),
+        error:
+          outcome.kind === "abort"
+            ? "interrupted"
+            : outcome.reason === "deadline"
+              ? failureText(outcome.error)
+              : String(error).slice(0, 300),
       };
     }
 
@@ -165,6 +206,7 @@ export async function runOnce({
     input = reply.command;
   }
 
+  clearTimeout(alarm);
   const state = await graph.getState({ configurable: { thread_id: session } });
   return { text: finalText(state.values.messages ?? []), ok: true, refused };
 }
