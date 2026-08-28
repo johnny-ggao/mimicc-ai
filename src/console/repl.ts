@@ -13,6 +13,7 @@ import {
 } from "../agents";
 import { markdownStream, stylingEnabled } from "./markdown";
 import { statusRow } from "./reasoning";
+import type { CommandTick } from "../tools";
 import {
   renderHistory,
   summarizeCall,
@@ -892,6 +893,37 @@ async function runTurn(
   });
 
   /**
+   * The same one-row treatment for a command that is still running.
+   *
+   * A second `statusRow` rather than sharing the thinking one, because the two
+   * are never open together — the model has stopped streaming by the time a tool
+   * runs — and because what they carry differs: one accumulates prose, the other
+   * restates a fact (`replace`, not `push`).
+   */
+  /**
+   * What the live row says while a command runs.
+   *
+   * Kept local rather than in `transcript.ts`: that file owns wording that has
+   * to read the same in a resumed session, and this row **leaves no trace** —
+   * the permanent record is the tool line `renderStructure` prints when the
+   * result lands. Seconds and bytes together, because they answer different
+   * questions: `0.0 KB` after `40s` is what a hung command looks like, and a
+   * growing byte count is what work looks like.
+   */
+  const runningRow = (tick: CommandTick): string => {
+    const seconds = Math.round(tick.elapsedMs / 1000);
+    const head = tick.command.replace(/\s+/g, " ").slice(0, 60);
+    return `${head} · ${String(seconds)}s · ${(tick.bytes / 1024).toFixed(1)} KB`;
+  };
+
+  const running = statusRow({
+    write: (text) => process.stdout.write(text),
+    columns: () => process.stdout.columns ?? 80,
+    isTTY: process.stdout.isTTY === true,
+    styled: stylingEnabled(),
+  });
+
+  /**
    * Ends the open block of reasoning, if there is one, leaving the one line that
    * stands for it.
    *
@@ -900,6 +932,18 @@ async function runTurn(
    * `\r`, which clears whatever row the cursor is on: anything printed while the
    * row is still open lands inside it and then gets wiped.
    */
+  /**
+   * Erases the running-command row, if one is open.
+   *
+   * ⚠️ Same contract as {@link settleThinking} and for the same reason — the row
+   * is taken back with `\r`, so whatever prints next would land inside it. The
+   * two are separate calls because the tick handler settles one and repaints the
+   * other; folding them together would erase the row it is about to draw.
+   */
+  const settleRunning = (): void => {
+    running.settle();
+  };
+
   const settleThinking = (): void => {
     const block = thinking.settle();
     if (block === undefined) return;
@@ -913,7 +957,11 @@ async function runTurn(
     // The array form of streamMode yields [mode, payload] tuples; the typings do
     // not narrow that, so this is the one place we assert the shape.
     const stream = (await graph.stream(input, {
-      streamMode: ["messages", "values"],
+      // "custom" carries the tick a running command emits. Without it the
+      // console has nothing to say between "the model asked for Bash" and
+      // however many minutes later the result lands — and a silent minute and a
+      // hung command look exactly alike (`.scratch/external-bench/issues/07`).
+      streamMode: ["messages", "values", "custom"],
       recursionLimit: RECURSION_LIMIT,
       durability: DURABILITY,
       signal,
@@ -946,6 +994,9 @@ async function runTurn(
         // empty batch would auto-approve it.
         if (isClarifyRequest(value)) questions = value.questions;
         if (state.messages !== undefined) {
+          // A tool result is about to be printed, so the row that stood for it
+          // running has done its job.
+          settleRunning();
           // The block of reasoning that led to this structure ends here: the
           // model thought, then it reached for a tool.
           settleThinking();
@@ -956,6 +1007,17 @@ async function runTurn(
           markdown.flush();
           rendered = renderStructure(state.messages, rendered, closeDim, credits);
         }
+        continue;
+      }
+
+      if (mode === "custom") {
+        const tick = payload as CommandTick | undefined;
+        if (tick?.command === undefined) continue;
+        // Same contract as the subagent dot below: the live row is erased with
+        // `\r`, so anything printed while the thinking block is open lands
+        // inside it and is then wiped. Settle first, always.
+        settleThinking();
+        running.replace(runningRow(tick));
         continue;
       }
 
@@ -1012,6 +1074,10 @@ async function runTurn(
   } catch (caught) {
     error = caught;
   } finally {
+    // The running-command row goes first for the same reason, and it matters
+    // most here: an interrupt lands *while a command is running*, which is
+    // exactly when this row is the one open.
+    settleRunning();
     // Settled on every exit path, and for a sharper reason than the two below:
     // the live row is a row the terminal is still holding. An interrupt landing
     // mid-thought would otherwise leave it on screen, and the next thing printed

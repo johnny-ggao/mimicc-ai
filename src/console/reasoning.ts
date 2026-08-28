@@ -196,6 +196,16 @@ export interface StatusRow {
   /** Add more of the block being thought, and repaint. */
   push: (chunk: string) => void;
   /**
+   * Replace what the row shows, and repaint.
+   *
+   * The other content a live row carries is not a growing block of prose but a
+   * fact that keeps being restated — *this command has been running for 14s* —
+   * where appending would be wrong twice: the row would grow without bound, and
+   * the tail is not what the reader wants, the latest value is. Same row, same
+   * erase discipline, different content policy.
+   */
+  replace: (text: string) => void;
+  /**
    * End the block: erase the row and hand back everything it showed, or
    * `undefined` when no block was open.
    *
@@ -219,21 +229,30 @@ export function statusRow(io: StatusRowIO): StatusRow {
   let text = "";
   let open = false;
 
+  const paint = (): void => {
+    if (!open) {
+      io.write("\n");
+      open = true;
+    }
+    if (!io.isTTY) return;
+    const width = io.columns();
+    // One column held back. A row filled to the last column wraps on some
+    // terminals as soon as the next character would be written, and a wrapped
+    // row is two rows.
+    const body = rowFor(text, (width > 0 ? width : UNKNOWN_WIDTH) - 1);
+    io.write(io.styled ? `${CLEAR_ROW}${DIM}${body}${RESET}` : `${CLEAR_ROW}${body}`);
+  };
+
   return {
     push(chunk) {
       if (chunk === "") return;
       text += chunk;
-      if (!open) {
-        io.write("\n");
-        open = true;
-      }
-      if (!io.isTTY) return;
-      const width = io.columns();
-      // One column held back. A row filled to the last column wraps on some
-      // terminals as soon as the next character would be written, and a wrapped
-      // row is two rows.
-      const body = rowFor(text, (width > 0 ? width : UNKNOWN_WIDTH) - 1);
-      io.write(io.styled ? `${CLEAR_ROW}${DIM}${body}${RESET}` : `${CLEAR_ROW}${body}`);
+      paint();
+    },
+
+    replace(next) {
+      text = next;
+      paint();
     },
 
     settle() {

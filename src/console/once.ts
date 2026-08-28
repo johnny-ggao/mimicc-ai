@@ -130,7 +130,9 @@ export async function runOnce({
 
     try {
       const stream = await graph.stream(input, {
-        streamMode: ["messages", "values"],
+        // Drained, not read: nobody is watching a `--print` run, so the tick
+        // has no console to reach. Subscribed anyway because the type pins it.
+        streamMode: ["messages", "values", "custom"],
         recursionLimit: RECURSION_LIMIT,
         durability: DURABILITY,
         signal: controller.signal,

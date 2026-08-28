@@ -33,7 +33,12 @@ import {
 } from "../tools";
 import { decide, toolCallOf, type RuleSet } from "../tools/permission";
 import type { ModelUsage } from "../usage";
-import { markPinned, WINDOW_LIMIT, type WindowEvent, type WindowTuning } from "../context";
+import {
+  markPinned,
+  WINDOW_LIMIT,
+  type WindowEvent,
+  type WindowTuning,
+} from "../context";
 import { classify, failureMarker } from "./outcome";
 import { loopGuard, type TurnCapReason } from "./loopguard";
 import { turnBudget } from "./turnBudget";
@@ -299,7 +304,14 @@ export interface AgentGraph {
      */
     input: { messages: BaseMessage[] } | Command | null,
     options: {
-      streamMode: ["messages", "values"];
+      /**
+       * `custom` carries the tick a running command emits (`COMMAND_TICK_EVENT`).
+       * Pinned in the tuple like the other two rather than left optional: a
+       * caller that forgets it gets a console with nothing to say between "the
+       * model asked for Bash" and however many minutes later the result lands,
+       * and that silence is indistinguishable from a hang.
+       */
+      streamMode: ["messages", "values", "custom"];
       recursionLimit: number;
       /**
        * Required, not optional, and that is the point: it is a per-call option

@@ -1,6 +1,7 @@
 import { dirname } from "node:path";
 import { mkdir } from "node:fs/promises";
 
+import { dispatchCustomEvent } from "@langchain/core/callbacks/dispatch";
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 
@@ -16,6 +17,22 @@ const MAX_COMMAND_MS = 120_000;
 
 /** Command output goes into the next prompt, same as any other tool result. */
 const MAX_OUTPUT_BYTES = 32_000;
+
+/**
+ * How often a running command says it is still running.
+ *
+ * 🔑 **A timer, not the output.** Reporting on each chunk would go quiet exactly
+ * when it matters — a hung command produces nothing, and "no news" is the state
+ * being reported on. A tick that says *14s, 0 bytes* is the difference between
+ * a console that looks asleep and one that shows a command that is asleep.
+ */
+const TICK_MS = 1_000;
+
+/** The event a running command emits so a watching console can show it is alive. */
+export const COMMAND_TICK_EVENT = "mimicc_command_tick";
+
+/** What that event carries. */
+export type CommandTick = { command: string; elapsedMs: number; bytes: number };
 
 /** What {@link runCommand} saw. `code` is null exactly when the command was killed. */
 export type CommandOutcome = {
@@ -120,6 +137,7 @@ export async function runCommand(
   command: string,
   timeoutMs: number,
   signal?: AbortSignal,
+  onTick?: (tick: { elapsedMs: number; bytes: number }) => void,
 ): Promise<CommandOutcome> {
   const child = Bun.spawn(["/bin/sh", "-c", command], {
     cwd: ROOT,
@@ -150,6 +168,17 @@ export async function runCommand(
   // the kill working, not a failure the caller needs to hear about.
   void finished.catch(() => undefined);
 
+  const startedAt = Date.now();
+  const ticker =
+    onTick === undefined
+      ? undefined
+      : setInterval(() => {
+          onTick({
+            elapsedMs: Date.now() - startedAt,
+            bytes: out.reduce((sum, part) => sum + part.length, 0),
+          });
+        }, TICK_MS);
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<typeof TIMED_OUT>((resolve) => {
     timer = setTimeout(() => {
@@ -178,6 +207,7 @@ export async function runCommand(
     return { body, code: settled, timedOut: false };
   } finally {
     running.delete(child);
+    if (ticker !== undefined) clearInterval(ticker);
     clearTimeout(timer);
     signal?.removeEventListener("abort", onAbort);
   }
@@ -312,6 +342,16 @@ export const bashTool = tool(
       command,
       MAX_COMMAND_MS,
       (config as { signal?: AbortSignal } | undefined)?.signal,
+      (tick) => {
+        // Fire-and-forget, and swallowed on purpose: a console that is not
+        // listening must not be able to fail a command. The tick is a courtesy
+        // to whoever is watching, never part of the work.
+        void dispatchCustomEvent(
+          COMMAND_TICK_EVENT,
+          { command, ...tick },
+          config,
+        ).catch(() => undefined);
+      },
     );
 
     const clipped =

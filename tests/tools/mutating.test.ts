@@ -301,3 +301,26 @@ test("a finished command is not swept later", async () => {
     killRunningCommands();
   }).not.toThrow();
 });
+
+// The console half of this is `repro/49` on a real pty; this is the half that
+// produces the ticks. A timer, not the output: a hung command produces nothing,
+// and "still running, 0 bytes" is exactly what has to reach the screen.
+test("a running command says so about once a second", async () => {
+  const ticks: { elapsedMs: number; bytes: number }[] = [];
+  await runCommand("sleep 2.2; echo done", 10_000, undefined, (tick) =>
+    ticks.push(tick),
+  );
+
+  expect(ticks.length).toBeGreaterThanOrEqual(2);
+  expect(ticks[0]?.elapsedMs).toBeGreaterThan(0);
+  expect(ticks.at(-1)?.elapsedMs).toBeGreaterThan(ticks[0]?.elapsedMs ?? 0);
+  // Silence is the point: nothing was printed until the very end, and the ticks
+  // still arrived.
+  expect(ticks[0]?.bytes).toBe(0);
+});
+
+test("a command nobody is watching pays for no ticks", async () => {
+  // No callback, no timer. The courtesy is opt-in.
+  const outcome = await runCommand("echo quiet", 10_000);
+  expect(outcome.body).toContain("quiet");
+});
