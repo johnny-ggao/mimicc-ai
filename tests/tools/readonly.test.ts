@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { afterAll, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 import { globTool, grepTool, readTool, TOOLS } from "@/tools";
 
@@ -90,4 +91,65 @@ test("registers the six tools the prompt advertises, in order", () => {
     "Glob",
     "Grep",
   ]);
+});
+
+/* ---------- Read refuses what it cannot honestly return ---------- */
+
+const BIN = ".test-tmp/readonly-binary";
+afterAll(() => {
+  rmSync(BIN, { recursive: true, force: true });
+});
+
+function fixture(name: string, bytes: number[]): string {
+  mkdirSync(BIN, { recursive: true });
+  writeFileSync(`${BIN}/${name}`, Buffer.from(bytes));
+  return `${BIN}/${name}`;
+}
+
+// 🔴 The case this exists for. `chess-best-move` read a board image, got the
+// bytes decoded as UTF-8 with line numbers and `status: success`, and spent 660
+// seconds building a pixel classifier to see a picture nothing here could ever
+// show it. The refusal has to say that last part, because the limit is this
+// program's — no tool builds image content — not the model's.
+test("Read refuses an image and says nothing here can show it", async () => {
+  const message = await rejection(
+    read(fixture("board.png", [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2])),
+  );
+
+  expect(message).toContain("PNG image");
+  expect(message).toContain("no images");
+  // And it must not hand back a workaround: reaching for Bash is exactly what
+  // the model did on its own, for eleven minutes.
+  expect(message).not.toContain("Bash");
+});
+
+test("Read refuses other binary but points at a way through", async () => {
+  const message = await rejection(read(fixture("blob.bin", [1, 2, 0, 3, 4])));
+
+  expect(message).toContain("NUL");
+  expect(message).toContain("Bash");
+});
+
+test("Read names the format when it can", async () => {
+  expect(
+    await rejection(read(fixture("a.zip", [0x50, 0x4b, 0x03, 0x04, 0, 1]))),
+  ).toContain("ZIP archive");
+});
+
+// The control: a NUL-free file still reads, or the check would cost more than
+// the mojibake it prevents.
+test("Read still reads ordinary text", async () => {
+  mkdirSync(BIN, { recursive: true });
+  writeFileSync(`${BIN}/plain.txt`, "hello\nworld\n");
+  expect(await read(`${BIN}/plain.txt`)).toContain("1\thello");
+});
+
+// "no such file" about something that is right there sends the model looking
+// for a path problem it does not have.
+test("Read says a directory is a directory", async () => {
+  mkdirSync(`${BIN}/adir`, { recursive: true });
+  const message = await rejection(read(`${BIN}/adir`));
+
+  expect(message).toContain("is a directory");
+  expect(message).not.toContain("no such file");
 });
