@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { createUniversalAgent } from "./agents";
 import { JsonlSaver, resolveStateDir } from "./checkpoint";
 import { loadConfig } from "./config";
-import { setProcessDeadline } from "./deadline";
+import { setProcessDeadline, WRAP_UP_ROOM_MS } from "./deadline";
 import { OUTPUT_BUDGET, resolveModelConfig } from "./models";
 import { readProjectInstructions } from "./context";
 import { createLogger } from "./logger";
@@ -179,15 +179,18 @@ async function main(): Promise<void> {
     // interrupt does that job (see `setCommandCeiling`).
     setCommandCeiling(UNATTENDED_COMMAND_CEILING_MS);
     // 同一条判据的第二次使用：没人挂着，所以这次调用要有一个**总闸**（ADR 0010）。
-    // `--timeout` 是给它的值；没给就退到回合墙钟的配置值——退到那个数不是因为它对，
-    // 而是因为**在此之前它就是这条路上唯一写下来的时间数字**，换成别的数会凭空多一个常数。
+    // `--timeout` 是给它的值；没给就退到回合墙钟**加上收尾余地**——退到那个数不是因为
+    // 它对，而是因为**在此之前它就是这条路上唯一写下来的时间数字**。
+    // ⚠️ 加那一项不是保守，是不变式本身：总闸和回合预算取同一个数的话，内层的钟就不比
+    // 外层小，回合预算的两段式交卷**永远轮不到发生**。而 `turnBudget` 又拿同一个数从
+    // 剩余里减回去，所以默认路径上这两项抵消，回合预算还是配置的那个值。
     // ⚠️ 时刻在这里定下，不在 `runOnce` 里：从这一行起，工具层的夹取和这次调用的总闸
     // 减的是同一个数（`src/deadline.ts` 头部讲的就是这件事）。
     const deadlineAt =
       Date.now() +
       (start.timeoutSec !== undefined
         ? start.timeoutSec * 1000
-        : config.MIMICC_TURN_TIME_BUDGET_MS);
+        : config.MIMICC_TURN_TIME_BUDGET_MS + WRAP_UP_ROOM_MS);
     setProcessDeadline(deadlineAt);
     const result = await runOnce({ graph, task: start.task, deadlineAt });
     if (result.text !== "") process.stdout.write(`${result.text}\n`);

@@ -5,6 +5,7 @@ import {
   DeadlineExceeded,
   remainingMs,
   setProcessDeadline,
+  WRAP_UP_ROOM_MS,
 } from "../src/deadline";
 
 // 单例，和 `setCommandCeiling` 同源（`src/deadline.ts` 头部讲了为什么）。留着不清会
@@ -71,4 +72,18 @@ describe("超期是失败的一种，而且报得出是哪只钟", () => {
     expect(DeadlineExceeded.isInstance(new Error("nope"))).toBe(false);
     expect(DeadlineExceeded.isInstance(undefined)).toBe(false);
   });
+});
+
+/**
+ * 默认路径上那两项互相抵消 —— 这是 `WRAP_UP_ROOM_MS` 出现在两侧的全部理由。
+ *
+ * `--print` 没给 `--timeout` 时，总闸取「回合墙钟 + 收尾余地」；而回合预算又被
+ * 「总闸剩余 − 收尾余地」夹取。**结果正好还是配置的那个回合墙钟**，默认路径上没有
+ * 第二个常数被引入。这一格就是钉住这句话。
+ */
+test("总闸 = 墙钟 + 余地，夹回来还是墙钟", () => {
+  const now = 1_000_000;
+  const wall = 600_000;
+  setProcessDeadline(now + wall + WRAP_UP_ROOM_MS);
+  expect(clamp(wall, WRAP_UP_ROOM_MS, now)).toEqual({ ms: wall });
 });

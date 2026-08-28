@@ -1,6 +1,8 @@
 import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 import { createMiddleware, type AnyAgentMiddleware } from "langchain";
 
+import { clamp, WRAP_UP_ROOM_MS } from "../deadline";
+
 import { hintInjector } from "./hint";
 import type { TurnCapReason } from "./loopguard";
 
@@ -64,6 +66,7 @@ export function turnBudget(options: TurnBudgetOptions): AnyAgentMiddleware {
   const now = options.now ?? Date.now;
   let tokens = 0;
   let started = 0;
+  let timeBudgetMs = options.timeBudgetMs;
   let flagged = false;
   const inject = hintInjector();
 
@@ -72,6 +75,12 @@ export function turnBudget(options: TurnBudgetOptions): AnyAgentMiddleware {
     beforeAgent: () => {
       tokens = 0;
       started = now();
+      // 🔑 **这个预算也是内层的钟**（ADR 0010）。有总闸的时候（`--print`），配置里那个
+      // 十分钟可能比整次调用剩下的时间还长——那样它就永远轮不到响，而**轮不到响的预算
+      // 意味着交不出答案**：总闸到点是硬停，按定义没有最终答案。夹到「剩余 − 收尾余地」
+      // 之后，两段式还来得及走完，模型交得出手里已有的东西。
+      // ⚠️ 每回合重算，不是构造时算一次：剩余时间每一回合都在变。
+      timeBudgetMs = clamp(options.timeBudgetMs, WRAP_UP_ROOM_MS, now()).ms ?? 0;
       flagged = false;
       inject.reset();
     },
@@ -89,7 +98,7 @@ export function turnBudget(options: TurnBudgetOptions): AnyAgentMiddleware {
       if (last === undefined || !AIMessage.isInstance(last)) return;
 
       const hasCalls = (last.tool_calls ?? []).length > 0;
-      const over = tokens > options.tokenBudget || now() - started > options.timeBudgetMs;
+      const over = tokens > options.tokenBudget || now() - started > timeBudgetMs;
 
       if (flagged && hasCalls) {
         options.onCap?.("budget_exhausted");

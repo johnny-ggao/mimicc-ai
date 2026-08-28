@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 
 import { turnBudget } from "@/agents";
+import { setProcessDeadline, WRAP_UP_ROOM_MS } from "@/deadline";
 
 /**
  * The turn-budget tripwire, fired and not fired.
@@ -156,5 +157,60 @@ describe("the turn budget", () => {
     const message = (replaced?.messages ?? [])[0];
     expect(String((message as AIMessage).content)).toMatch(/FORCED STOP/);
     expect(capped).toEqual(["budget_exhausted"]);
+  });
+
+  /**
+   * 预算也是内层的钟（ADR 0010）。
+   *
+   * 配置里那个十分钟可能比整次调用剩下的时间还长，那样它就永远轮不到响——而**轮不到响的
+   * 预算意味着交不出答案**：总闸到点是硬停，按定义没有最终答案。夹过之后，两段式还来得及
+   * 走完，模型交得出手里已有的东西。
+   */
+  test("有总闸时，回合预算被夹到「剩余 − 收尾余地」", () => {
+    const capped: string[] = [];
+    let clock = 0;
+    // 剩余 200 秒 + 收尾余地，所以夹出来的预算正好是 200 秒——远小于配置的 600 秒。
+    setProcessDeadline(200_000 + WRAP_UP_ROOM_MS);
+    try {
+      const middleware = turnBudget({
+        tokenBudget: 1_000_000_000,
+        timeBudgetMs: 600_000,
+        now: () => clock,
+        onCap: (r) => capped.push(r),
+      });
+
+      beforeAgent(middleware)();
+      clock = 199_000;
+      expect(afterModel(middleware)({ messages: [aiWithTools()] })).toBeUndefined();
+      expect(capped).toEqual([]);
+
+      clock = 200_001;
+      expect(afterModel(middleware)({ messages: [aiWithTools()] })).toBeUndefined();
+      const replaced = afterModel(middleware)({ messages: [aiWithTools()] });
+      expect(String(((replaced?.messages ?? [])[0] as AIMessage).content)).toMatch(
+        /FORCED STOP/,
+      );
+      expect(capped).toEqual(["budget_exhausted"]);
+    } finally {
+      setProcessDeadline(undefined);
+    }
+  });
+
+  // 对照：同一个时钟读数，没有总闸就什么都不该发生——证明上面那格量的是夹取，不是别的。
+  test("没有总闸时，同样的读数一切照旧", () => {
+    const capped: string[] = [];
+    let clock = 0;
+    const middleware = turnBudget({
+      tokenBudget: 1_000_000_000,
+      timeBudgetMs: 600_000,
+      now: () => clock,
+      onCap: (r) => capped.push(r),
+    });
+
+    beforeAgent(middleware)();
+    clock = 200_001;
+    expect(afterModel(middleware)({ messages: [aiWithTools()] })).toBeUndefined();
+    expect(afterModel(middleware)({ messages: [aiWithTools()] })).toBeUndefined();
+    expect(capped).toEqual([]);
   });
 });
