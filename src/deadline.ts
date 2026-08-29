@@ -70,6 +70,28 @@ export class DeadlineExceeded extends Error {
  */
 export const WRAP_UP_ROOM_MS = 60_000;
 
+/**
+ * 这次 `--print` 调用一共有多少毫秒。
+ *
+ * `--timeout` 是给它的值；没给就退到回合墙钟**加上收尾余地**——退到那个数不是因为它对，
+ * 而是因为**在此之前它就是这条路上唯一写下来的时间数字**。
+ * ⚠️ 加那一项不是保守，是不变式本身（ADR 0010）：总闸和回合预算取同一个数的话，内层的钟
+ * 就不比外层小，回合预算的两段式交卷**永远轮不到发生**。
+ *
+ * 🔑 **抽成函数，是因为两个地方要用同一个数**：设总闸的那一行，和**告诉模型有多少时间**
+ * 的那一行（票 09）。各算一遍迟早会漂，而漂了的后果很难看——模型按一个数做计划，
+ * 另一个数把它掐断。
+ *
+ * ⚠️ 签名收成裸值而不是收 `PrintStart` / `Config`：`main.ts` 底部有 `main().catch(...)`，
+ * **import 它就会把程序跑起来**，所以住在那里的函数测不了。
+ */
+export function runBudgetMs(
+  timeoutSec: number | undefined,
+  turnTimeBudgetMs: number,
+): number {
+  return timeoutSec !== undefined ? timeoutSec * 1000 : turnTimeBudgetMs + WRAP_UP_ROOM_MS;
+}
+
 /** 绝对时刻（`Date.now()` 的刻度），或者「没有总闸」。 */
 let deadlineAt: number | undefined;
 

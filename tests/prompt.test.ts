@@ -86,3 +86,44 @@ test("the ask rule keeps its brake as well as its trigger", () => {
   expect(STATIC_PROMPT).toContain("Read, Glob or Grep would settle it");
   expect(STATIC_PROMPT).toContain("picking wrong costs one small edit");
 });
+
+// —— 票 09：这次调用有多少时间，模型得知道 ——
+//
+// 起因是量出来的：`cartpole-rl-training` 里模型给一条训练命令要了 `timeout: 600`，
+// 而那一刻这次调用只剩约 308 秒。它不是判断错，是**没有人告诉过它**。
+
+test("有总闸时，环境块说出这次调用有多少秒", () => {
+  const prompt = buildSystemPrompt({ ...ENV, runSeconds: 340 });
+  const tail = prompt.slice(STATIC_PROMPT.length);
+
+  expect(tail).toContain("Run deadline: about 340 seconds");
+  // 光给数字不够：还要说清到点会发生什么，否则「340」只是一个没有后果的数。
+  expect(tail).toContain("no final answer");
+});
+
+// 交互式没有总闸（人就是那把钟，CONTEXT.md「期限」）。那一格里这两句话一个字都不该出现
+// ——否则模型会为一个不存在的期限缩手缩脚。
+test("没有总闸时，环境块一个字都不提期限", () => {
+  const tail = buildSystemPrompt(ENV).slice(STATIC_PROMPT.length);
+
+  expect(tail).not.toContain("Run deadline");
+  expect(tail).not.toContain("no final answer");
+});
+
+// 期限那两行进的是环境块，不是静态段——静态段变一个字节，所有历史的缓存前缀全失效。
+test("期限不落在静态前缀里", () => {
+  expect(STATIC_PROMPT).not.toContain("Run deadline");
+  expect(buildSystemPrompt({ ...ENV, runSeconds: 340 }).startsWith(STATIC_PROMPT)).toBe(
+    true,
+  );
+});
+
+// —— 票 09 的另外两条：它们是**行为指令**，删掉不会有任何测试变红，所以在这里钉一下 ——
+
+test("动手之前先跑现成的检查，这句话还在", () => {
+  expect(STATIC_PROMPT).toContain("run it before you build anything");
+});
+
+test("跑得久的活要在中途留下产物，这句话还在", () => {
+  expect(STATIC_PROMPT).toContain("leave something usable on the way");
+});

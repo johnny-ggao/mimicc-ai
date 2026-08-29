@@ -4,6 +4,7 @@ import {
   clamp,
   DeadlineExceeded,
   remainingMs,
+  runBudgetMs,
   setProcessDeadline,
   WRAP_UP_ROOM_MS,
 } from "../src/deadline";
@@ -86,4 +87,30 @@ test("总闸 = 墙钟 + 余地，夹回来还是墙钟", () => {
   const wall = 600_000;
   setProcessDeadline(now + wall + WRAP_UP_ROOM_MS);
   expect(clamp(wall, WRAP_UP_ROOM_MS, now)).toEqual({ ms: wall });
+});
+
+/**
+ * 票 09：**模型被告知的数，必须就是真正会响的那个钟。**
+ *
+ * `main.ts` 两处用它：设总闸的那一行，和往环境块里写「这次调用有多少秒」的那一行。
+ * 这一格钉的是「同一个函数」这件事本身——两处各算一遍的话，模型会按一个数做计划，
+ * 另一个数把它掐断，而且不会有任何测试变红。
+ */
+describe("这次调用的总时长", () => {
+  test("给了 --timeout 就用它，一秒不改", () => {
+    expect(runBudgetMs(340, 600_000)).toBe(340_000);
+  });
+
+  test("没给就退到「回合墙钟 + 收尾余地」", () => {
+    expect(runBudgetMs(undefined, 600_000)).toBe(600_000 + WRAP_UP_ROOM_MS);
+  });
+
+  // 默认路径上这两项抵消，回合预算还是配置的那个值——上面那一格已经钉了 clamp 这一半，
+  // 这里钉的是它的另一半：总闸确实是「墙钟 + 余地」。
+  test("默认路径的总闸，正好能让回合预算夹回配置值", () => {
+    const wall = 600_000;
+    const now = 1_000_000;
+    setProcessDeadline(now + runBudgetMs(undefined, wall));
+    expect(clamp(wall, WRAP_UP_ROOM_MS, now)).toEqual({ ms: wall });
+  });
 });
