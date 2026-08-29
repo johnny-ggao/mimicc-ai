@@ -4,68 +4,60 @@
  * 运行：`bun repro/51-do-the-guards-fire-in-the-real-graph.ts`
  * **不花钱**：全程本地 stub。
  *
- * ## 起点：45 号挂住不是它烂了
+ * ## 结论：响。ADR 0009 那句「真正的护栏」是兑现的
  *
- * `repro/45` 单独跑十分钟什么都不回答。看起来像过期的探针该退役，**但它的工具旁挂
- * 拆穿了这个解释**：5583 圈、`intent` 与 `settlement` 各 5583 条全部善终，
- * **而旁挂没有被清空**——按 `repro/21` 量过的性质，跑完的回合会清空它。
- * 所以那个回合从来没有正常收尾。
+ * ```
+ * 甲 病态     54ms    5 圈  停下它的是：程序自己  onCap=loop_capped      [loop warning]=true
+ * 乙 门        6ms    1 圈  门拦下了=true
+ * 丁 健康地忙 2039ms 190 圈  停下它的是：程序自己  onCap=budget_exhausted [budget warning]=true
+ * 丙 判据    注入时钟推过预算 + 手搭消息直调 afterModel，强停=true
+ * ```
  *
- * ADR 0009 逐字写着：*真正的护栏 = 回合预算 + loop guard + stall guard + 墙钟*。
- * 45 号是这个仓库里唯一一个把真图推进**一个老实的无限工具循环**的东西——
- * 每一圈都是成功的、参数一模一样的工具调用，不病态、不失败，只是不停。
- * **它没被拦住，就是那句话没兑现。**
+ * **重复调用由 `loopGuard` 停，每圈都不一样的「健康地忙」由回合预算停，门照常拦。**
+ * 丁格是最要紧的一格——ADR 0009 删掉步数预算，护的正是这一种回合
+ * （csv-to-parquet 每圈修不同的 bug，被步数上限误杀过三次）。
  *
- * ## 为什么单测答不了这一问
+ * ## 🔴 但这个探针第一版说的是反话，而错在仪器
  *
- * `tests/turn-budget.test.ts` 直接拿手搭的 `AIMessage` 调 `afterModel`——**它证明的是
- * 判据对**。它证明不了判据**在装配好的图里被喂进了什么**。这正是这条线吃过两次的亏
- * （交接文档的教训 ①③：判据的观测面本身要在真环境里验一次）。
+ * 第一版的 stub 每次都回 `id: "stub"`。**`add_messages` 按 id upsert**，
+ * 于是每条新 AI 消息**覆写**上一条，整段历史长成这样：
  *
- * ## 三格
+ * ```
+ * [#1] n=2  human>ai
+ * [#2] n=3  human>ai>tool
+ * [#4] n=5  ai>tool>tool>tool
+ * [#5] n=6  tool>tool>tool>tool      ← 从此「最后一条」永远是 tool
+ * ```
  *
- *   甲 守卫：`auto: true`，stub 永远回同一个 `Read`。看 `onCap`，**并且看 stub 收到的
- *          请求里有没有出现警告语**——注入的提示只有真走到那一步才会出现在下一次请求里，
- *          那是比回调更硬的观测面（同 `tests/stallguard.test.ts` 的手法）。
+ * `turnBudget` / `loopGuard` 判的是 `state.messages` 的**最后一条**，
+ * 那句 `if (!AIMessage.isInstance(last)) return;` 于是每圈提前返回——
+ * **两个守卫一起假性哑掉，而被测的程序一点毛病没有。**
+ * 我据此写过一份「护栏在真图里不响」的报告，**整份都是错的**。
+ *
+ * 🔑 **教训不是「stub 要写对」，是这一条**：
+ * **一个只在 stub 上成立的失败，和一个真实的失败长得一模一样。**
+ * 这条线上一次栽在反方向（stub 太像成功、机制早就死了四天没人知道），
+ * 这次栽在正方向。**两次的解药是同一个：判据的观测面本身要有对照格。**
+ * 丙格（同一判据、手搭消息）就是那个对照——它当时是绿的，
+ * 而我把「甲红丙绿」读成了「装配有问题」，**没想到第三种解释：喂进去的东西不真实。**
+ *
+ * ## 四格
+ *
+ *   甲 病态：`auto: true`，stub 每圈回**同一个** `Read`。期待 `loop_capped`。
  *   乙 门：`auto: false`，stub 回一个 `Bash`。门是另一个 afterModel 使用者。
- *          **它拦不拦，决定这是「所有 afterModel 都瞎」还是「我们自己的守卫挑错了消息」。**
- *   丙 判据：手搭 `AIMessage` 直接调 `turnBudget` 的 `afterModel`，就像单测那样。
- *          它应该绿——**差别只在装配**。
+ *   丁 健康地忙：每圈换参数，绕开 `loopGuard`。**只有回合预算能停它。**
+ *   丙 判据：手搭 `AIMessage` 直接调 `turnBudget` 的 `afterModel`，像单测那样。
  *
- * ## 读数（2026-08-28）
+ * ⚠️ 观测面是**双份**：`onCap` 回调，**以及 stub 收到的请求里有没有出现警告语**
+ * ——注入的提示只有真走到那一步才会出现在下一次请求里，那比回调更硬
+ * （同 `tests/stallguard.test.ts` 的手法）。
  *
- * ```
- * 甲 守卫   12048ms  715 圈  停下它的是：探针的闸
- *          onCap=（没响）  请求里出现过 [budget warning]=false  [loop warning]=false
- * 乙 门         5ms    1 圈  门拦下了=true
- * 丙 判据  注入时钟推过预算 + 手搭消息直调 afterModel，强停=true
- * ```
+ * ## 顺带量到、没解释的一条
  *
- * **成立。** 预算配 2 秒，甲格跑了 715 圈、12 秒，`onCap` 一次没响，而且**注入的警告语
- * 从来没有出现在 stub 收到的任何一次请求里**——那两段式连第一段都没走。
- * 同一个判据在丙格里是好的，所以**差别只在装配**。
- *
- * 🔑 **乙格是这一票最要紧的一格**：门在 5 毫秒里就拦下了。所以**不是所有 afterModel
- * 都瞎**——问题不在 langchain 的钩子契约，在我们自己的守卫**挑哪一条消息**。
- * 给 `turnBudget.afterModel` 加打印看到的是：`beforeAgent` 只跑一次（对）、
- * `afterModel` 每圈都跑（对）、`elapsed` 涨到预算的 6.6 倍，**但从第二圈起
- * `state.messages` 的最后一条是 `ToolMessage` 而不是 `AIMessage`**，于是那句
- * `if (last === undefined || !AIMessage.isInstance(last)) return;` 每圈提前返回。
- *
- * ## ⚠️ 顺带量到、但**没解释**的一条：中止之后进程还要很久才退出
- *
- * 中止**确实把循环停住了**——闸落下时 722 圈，`serverA.stop()` 之后还是 722 圈，
- * stub 一次请求都没再收到。但从打印完到进程真的退出，单独跑三次是
- * **12.3s / 92.5s / 107.3s**（甲格自己三次都只报 12.1s）。
- *
- * 怀疑是 700 多圈攒下的状态在拆卸/GC，**但没有证据**，所以只记不判。
- * 它让冒烟变慢变吵（同一支探针在冒烟里报过 102 秒），**但它不改变本探针的读数**：
- * 三格的数字都是在 12.1 秒之前就产生的。
- * ⚠️ 别拿 `process.exit(0)` 把它盖掉——那会把一个还没被解释的现象变成看不见的。
- *
- * ⚠️ **本探针只钉住「不响」，不主张怎么修。** 「往回找最后一条 AIMessage」是显然的补法，
- * 但显然的补法正是这条线反复吃亏的地方——先量清楚 `loopGuard` / `emptyReplyGuard`
- * 是不是同一个病、以及为什么门不受影响，再定方案。
+ * 第一版（同 id、跑 700 多圈）里，中止**确实停住了循环**（闸落下 722 圈，
+ * stub 之后一次请求都没再收到），但**从打印完到进程真的退出要 80~95 秒且时快时慢**
+ * （12.3s / 92.5s / 107.3s）。修好 id 之后整个探针 2 秒跑完，这个现象跟着消失了——
+ * 所以它大概率是「700 圈攒下的状态在拆卸」，**但没有证据，只记不判**。
  */
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 
@@ -82,7 +74,12 @@ interface Seen {
   calls: number;
 }
 
-function stub(toolName: string, seen: Seen): ReturnType<typeof Bun.serve> {
+function stub(
+  toolName: string,
+  seen: Seen,
+  /** 每圈换一个参数：绕开 loopGuard（它数的是重复），把判据落到回合预算上。 */
+  vary = false,
+): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     port: 0,
     idleTimeout: 0,
@@ -93,7 +90,11 @@ function stub(toolName: string, seen: Seen): ReturnType<typeof Bun.serve> {
         if (typeof message.content === "string") seen.text += `\n${message.content}`;
       }
       return Response.json({
-        id: "stub",
+        // 🔴 **每次必须是新的 id。** `add_messages` 按 id upsert：所有回复都叫 `stub`
+        // 的话，每条新 AI 消息会**覆写**上一条，整段历史里永远只有一条 `ai`，
+        // 后面跟着一串 `tool`——于是「最后一条消息」永远不是 AI 消息，
+        // 任何读最后一条的判据都会假性哑掉。真 provider 每次回不同的 id。
+        id: `stub-${String(seen.calls)}`,
         object: "chat.completion",
         created: 0,
         model: "stub",
@@ -111,7 +112,10 @@ function stub(toolName: string, seen: Seen): ReturnType<typeof Bun.serve> {
                     name: toolName,
                     arguments:
                       toolName === "Read"
-                        ? JSON.stringify({ path: "package.json" })
+                        ? JSON.stringify({
+                            path: "package.json",
+                            ...(vary ? { offset: seen.calls } : {}),
+                          })
                         : JSON.stringify({ command: "echo hi" }),
                   },
                 },
@@ -203,6 +207,45 @@ clearTimeout(alarmB);
 const msB = Date.now() - startedB;
 await serverB.stop(true);
 
+// —— 丁：健康地忙。每圈参数都不同，loopGuard 数的是重复，所以它不该响；
+//        能停下这种回合的只有回合预算——ADR 0009 要护的正是这一格
+//        （csv-to-parquet 每圈都在修不同的 bug，三次被步数上限误杀）。——
+const seenD: Seen = { text: "", calls: 0 };
+const serverD = stub("Read", seenD, true);
+const capsD: string[] = [];
+const agentD = createUniversalAgent({
+  baseURL: `http://127.0.0.1:${String(serverD.port)}/v1`,
+  apiKey: "sk-stub",
+  model: "stub",
+  window: { limit: 1_000_000 },
+  auto: true,
+  turnBudget: { timeBudgetMs: BUDGET_MS },
+  onCap: (reason) => capsD.push(reason),
+});
+const controllerD = new AbortController();
+const alarmD = setTimeout(() => {
+  controllerD.abort(new Error("PROBE_PATIENCE"));
+}, PATIENCE_MS);
+const startedD = Date.now();
+let stoppedByD = "程序自己";
+try {
+  await agentD.invoke(
+    { messages: [new HumanMessage("go")] },
+    {
+      recursionLimit: RECURSION_LIMIT,
+      configurable: { thread_id: "probe-51-d" },
+      signal: controllerD.signal,
+    },
+  );
+} catch {
+  stoppedByD = controllerD.signal.aborted ? "探针的闸" : "程序自己（抛了）";
+}
+clearTimeout(alarmD);
+const msD = Date.now() - startedD;
+const callsD = seenD.calls;
+await serverD.stop(true);
+const budgetWarnedD = seenD.text.includes("[budget warning]");
+
 // —— 丙：判据本身。单测就是这么绿的 ——
 let clock = 0;
 const middleware = turnBudget({
@@ -232,6 +275,9 @@ console.log(
     `         onCap=${caps.length > 0 ? caps.join(",") : "（没响）"}  ` +
     `请求里出现过 [budget warning]=${String(budgetWarned)}  [loop warning]=${String(loopWarned)}\n` +
     `乙 门    ${String(msB).padStart(6)}ms  ${String(seenB.calls)} 圈  门拦下了=${String(gateParked)}\n` +
+    `丁 忙    ${String(msD).padStart(6)}ms  ${String(callsD)} 圈  停下它的是：${stoppedByD}\n` +
+    `         onCap=${capsD.length > 0 ? capsD.join(",") : "（没响）"}  ` +
+    `请求里出现过 [budget warning]=${String(budgetWarnedD)}\n` +
     `丙 判据  注入时钟推过预算 + 手搭消息直调 afterModel，强停=${String(criterionWorks)}\n` +
     `   （中止落下时 ${String(callsAtAbort)} 圈，stub 关掉时 ${String(callsAfterStop)} 圈）\n`,
 );
@@ -240,19 +286,20 @@ console.log(
 console.log(`   [exit] 打印完毕 @${String(Date.now() - startedA)}ms（从甲格起跑算）`);
 
 console.log("—— 判读 ——");
+const guardStopped = caps.includes("loop_capped");
+const budgetStopped = capsD.includes("budget_exhausted");
 if (!criterionWorks) {
-  console.log("🔴 丙格就不绿，判据本身坏了，甲格的读数另有解释。");
-} else if (caps.length === 0 && !budgetWarned) {
+  console.log("🔴 丙格就不绿，判据本身坏了，别的格另有解释。");
+} else if (guardStopped && budgetStopped && gateParked) {
   console.log(
-    `🔴 成立：预算 ${String(BUDGET_MS / 1000)} 秒，跑了 ${String(seenA.calls)} 圈、` +
-      `${String(Math.round(msA / 1000))} 秒，**一次都没响**，而同一个判据在丙格里是好的。\n` +
-      "   差别只在装配——ADR 0009 的「真正的护栏 = 回合预算 + loop guard」在真图里没兑现。\n" +
-      `   ⚠️ 而门在乙格里${gateParked ? "**照常拦下了**" : "也没拦"}：` +
-      `${gateParked ? "所以不是所有 afterModel 都瞎，是我们自己的守卫挑错了那条消息。" : "那范围比守卫更大，先查 afterModel 拿到的是什么。"}`,
+    "✅ 四格齐了：病态由 loopGuard 停（重复调用），健康地忙由回合预算停，门照常拦。\n" +
+      "   ADR 0009 那句「真正的护栏」在真图里兑现。",
   );
 } else {
   console.log(
-    `✅ 推翻：守卫响了（onCap=${caps.join(",")}，budget warning=${String(budgetWarned)}）。` +
-      "「护栏在真图里不响」这句话不成立，别写进票里。",
+    `🔴 有一格没兑现：loop_capped=${String(guardStopped)} ` +
+      `budget_exhausted=${String(budgetStopped)} 门=${String(gateParked)}。\n` +
+      "   ⚠️ 先查 stub：每次回复的 `id` 必须唯一，否则 `add_messages` 会按 id 覆写，\n" +
+      "   整段历史里只剩一条 `ai`，所有读「最后一条消息」的判据都会假性哑掉。",
   );
 }
