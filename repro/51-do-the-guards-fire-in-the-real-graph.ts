@@ -52,6 +52,17 @@
  * `state.messages` 的最后一条是 `ToolMessage` 而不是 `AIMessage`**，于是那句
  * `if (last === undefined || !AIMessage.isInstance(last)) return;` 每圈提前返回。
  *
+ * ## ⚠️ 顺带量到、但**没解释**的一条：中止之后进程还要很久才退出
+ *
+ * 中止**确实把循环停住了**——闸落下时 722 圈，`serverA.stop()` 之后还是 722 圈，
+ * stub 一次请求都没再收到。但从打印完到进程真的退出，单独跑三次是
+ * **12.3s / 92.5s / 107.3s**（甲格自己三次都只报 12.1s）。
+ *
+ * 怀疑是 700 多圈攒下的状态在拆卸/GC，**但没有证据**，所以只记不判。
+ * 它让冒烟变慢变吵（同一支探针在冒烟里报过 102 秒），**但它不改变本探针的读数**：
+ * 三格的数字都是在 12.1 秒之前就产生的。
+ * ⚠️ 别拿 `process.exit(0)` 把它盖掉——那会把一个还没被解释的现象变成看不见的。
+ *
  * ⚠️ **本探针只钉住「不响」，不主张怎么修。** 「往回找最后一条 AIMessage」是显然的补法，
  * 但显然的补法正是这条线反复吃亏的地方——先量清楚 `loopGuard` / `emptyReplyGuard`
  * 是不是同一个病、以及为什么门不受影响，再定方案。
@@ -149,7 +160,11 @@ try {
 }
 clearTimeout(alarmA);
 const msA = Date.now() - startedA;
+// 中止之后它还在不在跑？stub 是最硬的观测面：把闸落下那一刻的圈数记住，
+// 后面再看一次，涨了就说明**中止没有把循环停下来**。
+const callsAtAbort = seenA.calls;
 await serverA.stop(true);
+const callsAfterStop = seenA.calls;
 
 const budgetWarned = seenA.text.includes("[budget warning]");
 const loopWarned = seenA.text.includes("[loop warning]");
@@ -212,13 +227,17 @@ const forced = afterHook({ messages: [withCalls()] }); // 第二次：应该强�
 const criterionWorks = JSON.stringify(forced ?? {}).includes("FORCED STOP");
 
 console.log(
-  `\n甲 守卫  ${String(msA).padStart(6)}ms  ${String(seenA.calls)} 圈  ` +
+  `\n甲 守卫  ${String(msA).padStart(6)}ms  ${String(callsAtAbort)} 圈  ` +
     `停下它的是：${stoppedByA}\n` +
     `         onCap=${caps.length > 0 ? caps.join(",") : "（没响）"}  ` +
     `请求里出现过 [budget warning]=${String(budgetWarned)}  [loop warning]=${String(loopWarned)}\n` +
     `乙 门    ${String(msB).padStart(6)}ms  ${String(seenB.calls)} 圈  门拦下了=${String(gateParked)}\n` +
-    `丙 判据  注入时钟推过预算 + 手搭消息直调 afterModel，强停=${String(criterionWorks)}\n`,
+    `丙 判据  注入时钟推过预算 + 手搭消息直调 afterModel，强停=${String(criterionWorks)}\n` +
+    `   （中止落下时 ${String(callsAtAbort)} 圈，stub 关掉时 ${String(callsAfterStop)} 圈）\n`,
 );
+// 进程能不能干净地退出，本身是一个读数：如果这一行之后还要等很久，
+// 说明中止之后还有东西在跑（实测单独跑两次：12.3s 与 116.0s，而甲格两次都只报 12s）。
+console.log(`   [exit] 打印完毕 @${String(Date.now() - startedA)}ms（从甲格起跑算）`);
 
 console.log("—— 判读 ——");
 if (!criterionWorks) {
