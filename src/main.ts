@@ -127,7 +127,7 @@ async function main(): Promise<void> {
     outputBudget: model.maxTokens ?? OUTPUT_BUDGET,
     // The window limit is a per-model fact from the registry, not the global
     // `WINDOW_LIMIT` constant that only described DeepSeek.
-    window: { limit: model.windowLimit },
+    window: { limit: model.windowLimit, overflowCodes: model.overflowCodes },
     systemPrompt,
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
     checkpointer: new JsonlSaver(stateDir),

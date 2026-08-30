@@ -4,6 +4,7 @@ import { loadConfig } from "../src/config";
 import { OUTPUT_BUDGET, PROVIDERS, resolveModelConfig } from "../src/models";
 import {
   CONTEXT_SAFETY_TOKENS,
+  isOverflow,
   MIN_OUTPUT_TOKENS,
   outputCeiling,
   TRIGGER_FRACTION,
@@ -193,5 +194,53 @@ describe("the clamp keeps a request inside the window, whatever the budget is", 
     expect(outputCeiling(OUTPUT_BUDGET, used, limit)).toBe(OUTPUT_BUDGET);
     // One token more of history and the answer has to give one token back.
     expect(outputCeiling(OUTPUT_BUDGET, used + 1, limit)).toBe(OUTPUT_BUDGET - 1);
+  });
+});
+
+/**
+ * The registry's overflow codes, and the thing that breaks without them.
+ *
+ * 🔴 **A provider langchain does not recognise loses its overflow protection
+ * silently.** `compaction.ts` never inspects the failure itself — it asks whether
+ * langchain built a `ContextOverflowError`, and langchain builds one by matching
+ * three English phrases. 智谱 answers `{"code":"1261","message":"Prompt exceeds
+ * max length"}` and matches none, so the summarise-and-retry path simply never
+ * ran: the turn failed instead. Measured end to end in
+ * `repro/53-does-the-overflow-reach-us.ts`; pinned here so it cannot regress
+ * without a red test.
+ */
+describe("overflow codes travel from the registry to the judge", () => {
+  // The shape the OpenAI SDK actually hands us, measured: a `BadRequestError`
+  // with `status` and `code` on it, no `ContextOverflowError` anywhere.
+  const zhipuOverflow = Object.assign(new Error("400 Prompt exceeds max length"), {
+    status: 400,
+    code: "1261",
+  });
+
+  it("does not recognise a 智谱 overflow without the registry's codes", () => {
+    expect(isOverflow(zhipuOverflow)).toBe(false);
+  });
+
+  it("recognises it with them", () => {
+    expect(isOverflow(zhipuOverflow, ["1261"])).toBe(true);
+  });
+
+  it("carries them onto the resolved model, so main.ts has something to pass", () => {
+    const r = resolveModelConfig(
+      loadConfig({ LLM_PROVIDER: "zhipu-cn", LLM_ZHIPU_CN_API_KEY: "zk" }),
+    );
+    expect(r.overflowCodes).toEqual(["1261"]);
+  });
+
+  it("is empty for a provider langchain already recognises", () => {
+    // Not an oversight: DeepSeek's refusal says `maximum context length`, which
+    // langchain matches. Empty means checked, not skipped.
+    const r = resolveModelConfig(loadConfig({ LLM_DEEPSEEK_API_KEY: "dk" }));
+    expect(r.overflowCodes).toEqual([]);
+  });
+
+  it("ignores a code-shaped field that is not a code", () => {
+    const weird = Object.assign(new Error("nope"), { code: { nested: true } });
+    expect(isOverflow(weird, ["1261"])).toBe(false);
   });
 });

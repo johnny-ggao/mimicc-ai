@@ -239,7 +239,22 @@ export class ReasoningEchoCompletions extends ChatOpenAICompletions {
       const chunk = this._convertCompletionsDeltaToBaseMessageChunk(
         delta,
         data,
-        defaultRole,
+        // 🔴 **`?? "assistant"` is not tidying — without it a whole provider is
+        // unusable.** The converter picks the chunk class from `delta.role ??
+        // defaultRole`, and `defaultRole` is only whatever an earlier delta
+        // carried. OpenAI and DeepSeek open every stream with a role-bearing
+        // delta, so it is always set by the time one arrives without a role.
+        // 智谱 does not: its `tool_calls` delta carries no `role` at all, and it
+        // can be the **first** delta of the stream — measured 2026-08-30,
+        // `{"delta":{"tool_calls":[…]}}` with nothing before it. `defaultRole`
+        // is then still `undefined`, the converter falls back to
+        // `ChatMessageChunk`, and the accumulated reply is no longer an
+        // `AIMessage` — langchain's own AgentNode rejects it with *expected
+        // AIMessage or Command, got object* and the turn dies before any tool
+        // runs. A completions stream has exactly one author, so naming it is
+        // safe for every provider and load-bearing for this one.
+        // `tests/streaming-role.test.ts` pins it.
+        defaultRole ?? "assistant",
       );
       defaultRole = delta.role ?? defaultRole;
       const newTokenIndices = {

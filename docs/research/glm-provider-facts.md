@@ -202,7 +202,7 @@ impossible `max_tokens` with a 400 before anything is generated — on an empty
 ### Errors, and the protection that was not there
 
 Live overflow refusal, through this program's own stack
-(`repro/48-does-the-overflow-reach-us.ts`):
+(`repro/53-does-the-overflow-reach-us.ts`):
 
 ```
 [0] BadRequestError status=400 code=1261
@@ -266,7 +266,7 @@ for no reason other than which delta arrived first.
   requirement, and the tool loop completes with it on — same position as
   DeepSeek: a safety net, not a requirement.
 - ✅ **`clear_thinking: false` is not required, and cost nothing measurable**
-  (`repro/49-what-clear-thinking-costs.ts`): both arms' second lap returned 200,
+  (`repro/54-what-clear-thinking-costs.ts`): both arms' second lap returned 200,
   and the token difference was inside the noise. So this program keeps sending no
   `thinking` field at all. ⚠️ Valid for _short_ conversations only — the price of
   retaining a chain of thought is a function of history length, and this probe's

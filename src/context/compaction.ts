@@ -324,6 +324,17 @@ export interface ContextWindowOptions {
    * nobody needs.
    */
   agent: string;
+  /**
+   * Provider codes that mean "the prompt was past the window", for a provider
+   * langchain does not recognise on its own.
+   *
+   * Handed in for the same reason {@link ContextWindowOptions.outputBudget} is:
+   * **this module knows nothing about providers.** The list lives in the
+   * registry (`models.ts`, `ProviderSpec.overflowCodes`), which is where every
+   * other per-provider fact lives, and arrives here through `main.ts` with the
+   * window limit it belongs to.
+   */
+  overflowCodes?: readonly string[];
   // ⚠️ A doc comment describing a `pins: readonly string[]` field used to sit
   // here. That field is gone — pinning is a mark the message carries now, see
   // `PINNED` in ./projection — and the comment outlived it, describing an
@@ -635,7 +646,7 @@ export function contextWindow(options: ContextWindowOptions): AnyAgentMiddleware
         // a hard failure into a slow turn. Once, though: a second failure means
         // summarising did not help, and pretending otherwise burns money on a
         // request that cannot succeed.
-        if (!isOverflow(error)) throw error;
+        if (!isOverflow(error, options.overflowCodes)) throw error;
 
         // Maximum pressure, so take the free reduction here too — the estimate
         // that let this request out was wrong, and a synopsis is the one lever
@@ -692,13 +703,22 @@ function update(response: unknown, cut: Cut): Command {
  * Whether this failure is the window being exceeded.
  *
  * The provider says so in prose, and the framework recognises it by matching
- * four hard-coded phrases written for a different vendor. That this repository's
- * provider happens to hit one of them (`maximum context length`) was verified
- * rather than assumed — the same shortcut has cost this project four times
- * elsewhere. The cause chain is walked because middleware wraps errors on the
- * way out.
+ * three hard-coded phrases written for a different vendor
+ * (`@langchain/openai/dist/utils/client.js:5-9`). That DeepSeek happens to hit
+ * one of them (`maximum context length`) was verified rather than assumed — the
+ * same shortcut has cost this project four times elsewhere.
+ *
+ * 🔴 **And the third provider is where "happens to" ran out.** 智谱 answers
+ * `{"code":"1261","message":"Prompt exceeds max length"}`, which matches no
+ * phrase, so `ContextOverflowError` is never constructed and this returned
+ * `false` for a textbook overflow — measured end to end in
+ * `repro/53-does-the-overflow-reach-us.ts`. `codes` is that gap closed, and it
+ * is deliberately **not** a list of phrases: 智谱's docs and its wire disagree
+ * about the message already, while the code is what its 错误码 page contracts.
+ *
+ * The cause chain is walked because middleware wraps errors on the way out.
  */
-function isOverflow(error: unknown): boolean {
+export function isOverflow(error: unknown, codes: readonly string[] = []): boolean {
   let current: unknown = error;
   for (
     let depth = 0;
@@ -706,6 +726,18 @@ function isOverflow(error: unknown): boolean {
     depth += 1
   ) {
     if (ContextOverflowError.isInstance(current)) return true;
+    if (typeof current === "object" && "code" in current && codes.length > 0) {
+      // 智谱 sends it as the string "1261"; a provider that sends a number is
+      // the same fact. Anything else is not a code and must not be stringified
+      // into one — `[object Object]` matching nothing is luck, not a guard.
+      const code = (current as { code?: unknown }).code;
+      if (
+        (typeof code === "string" || typeof code === "number") &&
+        codes.includes(String(code))
+      ) {
+        return true;
+      }
+    }
     current =
       typeof current === "object" && "cause" in current ? current.cause : undefined;
   }

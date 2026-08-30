@@ -92,6 +92,29 @@ export interface ProviderSpec {
   legacyKeyEnvVar?: "LLM_API_KEY";
   defaultModel: string;
   models: Record<string, ModelSpec>;
+  /**
+   * Business codes this provider returns when the prompt is past the window.
+   *
+   * 🔴 **Without this the overflow protection is silently absent.**
+   * `context/compaction.ts` does not recognise overflow itself — it asks
+   * langchain, and langchain matches three hard-coded English phrases written
+   * for OpenAI (`@langchain/openai/dist/utils/client.js:5-9`). DeepSeek happens
+   * to hit `maximum context length`; 智谱 answers
+   * `{"code":"1261","message":"Prompt exceeds max length"}` and hits none, so the
+   * summarise-and-retry path never runs and the turn just fails. Measured
+   * through this program's own stack: `repro/53-does-the-overflow-reach-us.ts`.
+   *
+   * **A code, not a phrase, and that is the point.** 智谱's own docs print the
+   * message as `Prompt 超长` while the live API says `Prompt exceeds max length`
+   * — the prose is already known to drift between doc and wire, and matching it
+   * would hang the protection on an uncontracted sentence. The numeric code is
+   * the part the 错误码 page actually contracts.
+   *
+   * Omitted for a provider that langchain already recognises. Empty is not a
+   * bet that overflow cannot happen — it is a statement that the library's
+   * phrases were checked against this provider and matched.
+   */
+  overflowCodes?: readonly string[];
 }
 
 export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
@@ -174,6 +197,9 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     baseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
     keyEnvVar: "LLM_ZHIPU_CN_API_KEY",
     defaultModel: "glm-5.3-flash",
+    // 1261 = "Prompt 超长" in the 错误码 page, "Prompt exceeds max length" on the
+    // wire. See the field's doc above for why this exists and what breaks without it.
+    overflowCodes: ["1261"],
     models: {
       // 🔴 **Neither number is measured.** Both come from 智谱's docs, and the
       // probe that would confirm them cannot run: the account behind
@@ -216,6 +242,11 @@ export interface ResolvedModelConfig {
   maxOutputTokens: number;
   /** True when the key came from the deprecated `LLM_API_KEY` alias. */
   usedLegacyKey: boolean;
+  /**
+   * This provider's own overflow signals, always an array — empty means
+   * langchain's phrases were checked and matched. See {@link ProviderSpec.overflowCodes}.
+   */
+  overflowCodes: readonly string[];
 }
 
 /**
@@ -271,6 +302,7 @@ export function resolveModelConfig(env: Config): ResolvedModelConfig {
         : Math.min(OUTPUT_BUDGET, spec.maxOutputTokens),
     maxOutputTokens: spec.maxOutputTokens,
     windowLimit: spec.windowLimit,
+    overflowCodes: provider.overflowCodes ?? [],
     usedLegacyKey: canonicalKey === undefined && legacyKey !== undefined,
   };
 }

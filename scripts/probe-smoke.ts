@@ -53,6 +53,12 @@ const PAID: Record<string, string> = {
   "40-does-freezing-memory-pay.ts":
     "约 26 万 in（三臂 × 二复本 × 五轮，走真 agent），跑两版共约 53 万",
   "32-what-the-provider-allows.ts": "不花 token（每发都是 400），列在这里只为不打网络",
+  // 48 同样**不花 token**——唯一那一发必然超窗，400，零计费。列在这里的理由和 32 一样：
+  // 否则冒烟要打真网络、要一把有效 key，还要传一个 8MB 的请求体。
+  "53-does-the-overflow-reach-us.ts":
+    "不花 token（唯一一发必然 400），列在这里只为不打网络",
+  "54-what-clear-thinking-costs.ts":
+    "两臂 × 两回合共四发小请求，约 1.5 万 in / 几百 out",
   "33-does-output-share-the-window.ts": "两发各约 86 万未命中输入，实测 $0.1 量级",
   "35-how-wrong-is-our-estimate.ts": "六发各约 6k，合计约 3 万 in，$0.01 量级",
   "37-does-position-change-adherence.ts":
