@@ -92,8 +92,12 @@ async function main(): Promise<void> {
 
   // 🔑 **提示词在这里拼，不在上面。** 它要带上这次调用的总闸（票 09），而总闸只有读完
   // 参数才知道。搬下来是安全的：中间那几样（instructions / rules / stateDir）谁也不读它。
+  // 两个落点，一个来源：不注册的工具既要从工具清单里去掉，也要从提示词里去掉。
+  // 只做前者，正文还在教它，模型会去调一个不存在的工具（`agents/prompt.ts`）。
+  const excludeTools = start.excludeTools ?? [];
   const systemPrompt = buildSystemPrompt({
     ...describeEnvironment(),
+    ...(excludeTools.length > 0 ? { excludedTools: excludeTools } : {}),
     ...(start.kind === "print"
       ? {
           runSeconds: Math.round(
@@ -140,6 +144,7 @@ async function main(): Promise<void> {
     rules,
     // `--auto` flips the gate's baseline ask to allow (deny still holds).
     auto: start.auto,
+    ...(excludeTools.length > 0 ? { excludeTools } : {}),
     // One line per request to the provider. This is the scale every
     // context-engineering change is weighed on, so it is wired up before the
     // first such change rather than after.
@@ -221,6 +226,8 @@ interface PrintStart {
   kind: "print";
   task: string;
   auto: boolean;
+  /** `--exclude-tools`：不注册的工具名。见 `agents/loop.ts` 的 `excludeTools`。 */
+  excludeTools?: readonly string[];
   /** `--timeout <秒>`：这次调用的总闸。缺省时退到回合墙钟的配置值。 */
   timeoutSec?: number;
 }
@@ -248,7 +255,14 @@ async function resolveStart(stateDir: string): Promise<Start | PrintStart> {
 
   const found = await resolveSession(stateDir, invocation.prefix);
   if (found.kind === "one") {
-    return { kind: "session", session: found.session, auto: invocation.auto };
+    return {
+      kind: "session",
+      session: found.session,
+      auto: invocation.auto,
+      ...(invocation.excludeTools !== undefined
+        ? { excludeTools: invocation.excludeTools }
+        : {}),
+    };
   }
   if (found.kind === "none") {
     process.stderr.write(`no session starts with ${invocation.prefix}\n`);

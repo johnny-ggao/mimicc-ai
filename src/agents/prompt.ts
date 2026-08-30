@@ -216,6 +216,126 @@ If you cannot do something, say so in one sentence and say what you can do inste
 /** 与会话无关的部分。改动它会让所有历史缓存前缀失效。 */
 export const STATIC_PROMPT = SECTIONS.join("\n\n");
 
+/**
+ * 一处「把某个工具从提示词里拿掉」的改写。
+ *
+ * 🔴 **找不到就抛**：提示词是散文，改写靠逐字匹配。哪天正文改了而这里没跟上，
+ * 我们要的是一声巨响，不是一份**仍然在教一个不存在的工具**的提示词——那正是票 07
+ * 「工具不许说谎」的反面：**提示词也不许说谎**。
+ */
+interface Rewrite {
+  /** 逐字要换掉的一段。 */
+  find?: string;
+  /** 或者：从 `from` 到 `to`（含两端）之间的一整段。 */
+  from?: string;
+  to?: string;
+  replace: string;
+}
+
+/** 把一条改写落到文本上。**匹配不到就抛**，理由见 {@link Rewrite}。 */
+function applyRewrite(text: string, name: string, rule: Rewrite): string {
+  if (rule.find !== undefined) {
+    if (!text.includes(rule.find)) {
+      throw new Error(
+        `the prompt rewrite for ${name} no longer matches: "${rule.find.slice(0, 60)}…". ` +
+          `The prose moved; move the rewrite with it.`,
+      );
+    }
+    return text.replace(rule.find, rule.replace);
+  }
+  const start = rule.from === undefined ? -1 : text.indexOf(rule.from);
+  const endAt = rule.to === undefined ? -1 : text.indexOf(rule.to, start);
+  if (start < 0 || endAt < 0) {
+    throw new Error(
+      `the prompt rewrite for ${name} no longer matches the span ` +
+        `"${rule.from ?? "?"}…${rule.to ?? "?"}". The prose moved; move the rewrite with it.`,
+    );
+  }
+  return (
+    text.slice(0, start) + rule.replace + text.slice(endAt + (rule.to ?? "").length)
+  );
+}
+
+const CLARIFY_REWRITES: readonly Rewrite[] = [
+  {
+    find: "You have nine: Read, Write, Edit, Bash, Glob, Grep, Task, Skill, Clarify.",
+    replace: "You have eight: Read, Write, Edit, Bash, Glob, Grep, Task, Skill.",
+  },
+  {
+    find:
+      "\n- **Clarify** — put a decision to the user as numbered options, **before you start" +
+      " working**. For what the repository cannot answer: a stack or library nobody named, a" +
+      " requirement that reads two ways, a constraint that decides the design. Never for" +
+      " anything Read or Grep would settle, and never for a choice that costs one small edit" +
+      " to get wrong.",
+    replace: "",
+  },
+  {
+    find:
+      "If anything in the third group would change what you build — a stack nobody named, a" +
+      " requirement that reads two ways, a constraint that decides the design — call" +
+      " **Clarify first, before any Bash, Write or Edit**. Asking after you have started is" +
+      " the failure this step exists to prevent: by then the work already assumes an answer.",
+    replace:
+      "**Nobody is attached to this run, so nothing in the third group can be answered** —" +
+      " decide it yourself, take the reading that is cheapest to undo, and say which" +
+      " assumption you made.",
+  },
+  {
+    // 「不确定怎么办」这一整节是围着「问」写的。没有人可问的时候，它不是少一句话，
+    // 是**整节的前提没了**——所以整段换掉，而不是删掉几处「Clarify」了事。
+    // 🔑 用区间而不是抄一遍原文：原文只写在 SECTIONS 里一处，抄第二遍必然漂
+    // （`workspace.ts` 那条注释说过）。
+    from: "Do every part of the task that is unambiguous",
+    to: "Do not ask again.",
+    replace: `Do every part of the task that is unambiguous, then decide the part that is not: nobody is attached to this run, so there is no one to ask.
+
+**Decide it yourself and say what you assumed.** Name the ambiguity in one line, say which reading you took, and put both in your final reply. An assumption stated is one the reader can correct; an assumption buried in the work is one they find by being surprised.
+
+Which reading to take — weigh this, do not score how hard the task looks:
+
+- if Read, Glob or Grep would settle it, look first. That is not an assumption, it is a fact you did not have yet;
+- if the answer changes the shape of what you build — a stack, a storage model, an interface other code will depend on — take the reading that is cheapest to undo;
+- if the request reads two ways and both lead to real work, do the part both readings share first;
+- if picking wrong costs one small edit, pick, and say which you picked.`,
+  },
+];
+
+/** 每个「拿得掉」的工具，配一组改写。不在这张表里的工具**拿不掉**。 */
+const PROMPT_REMOVALS: Readonly<Record<string, readonly Rewrite[]>> = {
+  Clarify: CLARIFY_REWRITES,
+};
+
+/**
+ * 去掉这些工具之后的静态提示词。
+ *
+ * 🔑 **排除集为空时逐字等于 {@link STATIC_PROMPT}**——缓存前缀不受这条改动影响，
+ * 有单测钉着。
+ */
+export function staticPromptFor(excluded: ReadonlySet<string>): string {
+  let text = STATIC_PROMPT;
+  for (const name of excluded) {
+    const rewrites = PROMPT_REMOVALS[name];
+    if (rewrites === undefined) {
+      throw new Error(
+        `cannot exclude ${name}: the system prompt still teaches it, and there is no ` +
+          `rewrite for it in src/agents/prompt.ts. A prompt that describes a tool the ` +
+          `model does not have is a lie the model will act on.`,
+      );
+    }
+    for (const rule of rewrites) {
+      text = applyRewrite(text, name, rule);
+    }
+  }
+  // 兜底：改写表可能漏掉一处。名字还在正文里，就等于还在教它。
+  for (const name of excluded) {
+    if (new RegExp(`\\b${name}\\b`).test(text)) {
+      throw new Error(`the prompt still names ${name} after it was excluded`);
+    }
+  }
+  return text;
+}
+
 /** 每会话变化的事实。模型没有时钟，也不知道自己被跑在哪里。 */
 export interface PromptEnvironment {
   cwd: string;
@@ -240,6 +360,14 @@ export interface PromptEnvironment {
    * 而那一刻这次调用只剩约 308 秒（票 09）。它不是判断错，是**没有人告诉过它**。
    */
   runSeconds?: number;
+  /**
+   * 这次调用被 `--exclude-tools` 拿掉的工具。
+   *
+   * 🔑 **它必须传到这里，不能只在装配工具时用**：提示词逐字教了每个工具怎么用，
+   * 少注册一个而正文照旧，等于**留下一段谎话**——模型会去调一个不存在的工具，
+   * 而那个失败长得像模型的错。见 {@link staticPromptFor}。
+   */
+  excludedTools?: readonly string[];
 }
 
 /**
@@ -261,5 +389,6 @@ export function buildSystemPrompt(env: PromptEnvironment): string {
     "</environment>",
   ].join("\n");
 
-  return `${STATIC_PROMPT}\n\n${environment}`;
+  const staticPart = staticPromptFor(new Set(env.excludedTools ?? []));
+  return `${staticPart}\n\n${environment}`;
 }

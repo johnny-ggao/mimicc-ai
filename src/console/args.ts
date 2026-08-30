@@ -13,11 +13,11 @@
 
 /** What the arguments asked for. `auto` is the auto-approve posture switch. */
 export type Invocation =
-  | { kind: "new"; auto: boolean }
+  | { kind: "new"; auto: boolean; excludeTools?: readonly string[] }
   /** `--resume`, bare: show the picker before the first prompt. */
-  | { kind: "pick"; auto: boolean }
+  | { kind: "pick"; auto: boolean; excludeTools?: readonly string[] }
   /** `--resume <id>`: an id, or the front of one. */
-  | { kind: "resume"; prefix: string; auto: boolean }
+  | { kind: "resume"; prefix: string; auto: boolean; excludeTools?: readonly string[] }
   /**
    * `--print <task>`: run one turn on a fresh thread and exit.
    *
@@ -31,17 +31,25 @@ export type Invocation =
    * switch (CONTEXT.md 「自动模式」). Without it, a run with nobody attached
    * refuses every call the gate would have asked about — see `once.ts`.
    */
-  | { kind: "print"; task: string; auto: boolean; timeoutSec?: number }
+  | {
+      kind: "print";
+      task: string;
+      auto: boolean;
+      timeoutSec?: number;
+      excludeTools?: readonly string[];
+    }
   | { kind: "error"; message: string };
 
 const USAGE =
-  "usage: mimicc [--auto] [--resume [<session-id>]] [--print <task> [--timeout <seconds>]]";
+  "usage: mimicc [--auto] [--exclude-tools <names>] [--resume [<session-id>]] " +
+  "[--print <task> [--timeout <seconds>]]";
 
 export function parseArgs(argv: string[]): Invocation {
   let auto = false;
   let resume: { prefix: string } | "bare" | undefined = undefined;
   let task: string | undefined = undefined;
   let timeoutSec: number | undefined = undefined;
+  let excludeTools: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -88,6 +96,29 @@ export function parseArgs(argv: string[]): Invocation {
       continue;
     }
 
+    // 不注册哪些工具，逗号分隔。**它同时改提示词**（`agents/prompt.ts` 的
+    // `staticPromptFor`）：正文逐字教了每个工具，只不注册而正文照旧，等于留下一段
+    // 谎话。名字对不对、拿不拿得掉，都在那两处判——这里只负责切开和去空白。
+    const excluded = /^--exclude-tools(?:=([\s\S]+))?$/.exec(arg);
+    if (excluded !== null) {
+      const raw = excluded[1] ?? argv[i + 1];
+      if (excluded[1] === undefined) i += 1;
+      const names = (raw ?? "")
+        .split(",")
+        .map((one) => one.trim())
+        .filter((one) => one.length > 0);
+      // 同 `--timeout`：拒绝，不要退回默认值。一个写了却没生效的 `--exclude-tools`
+      // 会让调用方以为工具已经拿掉了。
+      if (names.length === 0) {
+        return {
+          kind: "error",
+          message: `--exclude-tools needs at least one tool name\n${USAGE}`,
+        };
+      }
+      excludeTools = [...excludeTools, ...names];
+      continue;
+    }
+
     // 这次调用的总闸，秒。它是 ADR 0010 那个「最外层必须有一个真的钟」的入口。
     const timeout = /^--timeout(?:=([\s\S]+))?$/.exec(arg);
     if (timeout !== null) {
@@ -123,6 +154,7 @@ export function parseArgs(argv: string[]): Invocation {
       kind: "print",
       task,
       auto,
+      ...(excludeTools.length > 0 ? { excludeTools } : {}),
       ...(timeoutSec !== undefined ? { timeoutSec } : {}),
     };
   }
@@ -133,7 +165,9 @@ export function parseArgs(argv: string[]): Invocation {
     return { kind: "error", message: `--timeout only applies to --print\n${USAGE}` };
   }
 
-  if (resume === undefined) return { kind: "new", auto };
-  if (resume === "bare") return { kind: "pick", auto };
-  return { kind: "resume", prefix: resume.prefix, auto };
+  // 空数组也不带：省得每一处比较对象的测试都要写一个空数组，同 `timeoutSec` 的写法。
+  const excluded = excludeTools.length > 0 ? { excludeTools } : {};
+  if (resume === undefined) return { kind: "new", auto, ...excluded };
+  if (resume === "bare") return { kind: "pick", auto, ...excluded };
+  return { kind: "resume", prefix: resume.prefix, auto, ...excluded };
 }

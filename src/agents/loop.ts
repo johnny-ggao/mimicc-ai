@@ -270,6 +270,14 @@ export interface AgentOptions {
    * still hold (see `decide` in tools/permission.ts).
    */
   auto?: boolean;
+  /**
+   * 不注册的工具名（`--exclude-tools`）。
+   *
+   * ⚠️ **它有两个落点，缺一处就是留下一段谎话**：这里（不注册工具、连带摘掉它的
+   * 中间件）和系统提示词（`prompt.ts` 的 `staticPromptFor`）。提示词逐字教了每个
+   * 工具怎么用，只在这里拿掉，模型会照着提示词去调一个不存在的工具。
+   */
+  excludeTools?: readonly string[];
 }
 
 /**
@@ -618,6 +626,27 @@ export function pinRejections(gate: AnyAgentMiddleware): AnyAgentMiddleware {
 export function registeredTools(
   environment: AgentEnvironment,
   skills?: SkillRegistry,
+  exclude?: readonly string[],
+): ClientTool[] {
+  const all = allRegisteredTools(environment, skills);
+  if (exclude === undefined || exclude.length === 0) return all;
+  const names = new Set(all.map((t) => t.name));
+  for (const name of exclude) {
+    // 打错的名字要出声。静默忽略等于让调用方以为自己拿掉了一个工具，
+    // 而它还在——同 `--timeout` 那条：**拒绝，不要退回默认值**。
+    if (!names.has(name)) {
+      throw new Error(
+        `--exclude-tools: no tool named ${name}. Registered: ${[...names].join(", ")}`,
+      );
+    }
+  }
+  const excluded = new Set(exclude);
+  return all.filter((tool) => !excluded.has(tool.name));
+}
+
+function allRegisteredTools(
+  environment: AgentEnvironment,
+  skills?: SkillRegistry,
 ): ClientTool[] {
   return [
     ...TOOLS,
@@ -818,6 +847,7 @@ export function assertLoopGuardBeforeGate(stack: AnyAgentMiddleware[]): void {
  * design" was always claiming and now demonstrates.
  */
 export function createUniversalAgent(options: AgentOptions) {
+  const excludedTools = new Set(options.excludeTools ?? []);
   // Built once and shared: the same model answers turns and writes summaries.
   // A summary decides what every later turn can see, which is a poor place to
   // economise, and this is a single-model program besides.
@@ -896,7 +926,9 @@ export function createUniversalAgent(options: AgentOptions) {
     // question *and* wanted to run a command leaves the gate nothing to stop.
     // The reverse order produces two interrupts in one turn — a confirmation and
     // a question — and the console can only hold one.
-    clarifyGate(),
+    // Clarify 被拿掉时它也走：一个永远不会被调用的工具的门，留着只是死代码，
+    // 而死代码会让下一个人以为这条路还活着。
+    ...(excludedTools.has(CLARIFY_TOOL_NAME) ? [] : [clarifyGate()]),
     confirmationGate(options.rules, options.auto ?? false),
   ];
 
@@ -908,7 +940,7 @@ export function createUniversalAgent(options: AgentOptions) {
 
   const graph = createAgent({
     model,
-    tools: registeredTools(env, options.skills),
+    tools: registeredTools(env, options.skills, options.excludeTools),
     // Wrapped, not handed over as a string, and the difference is on the wire.
     // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
     // string into `new SystemMessage({ content: [{ type: "text", text }] })` —

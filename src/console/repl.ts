@@ -76,9 +76,14 @@ export interface ReplOptions {
  * the flag and another for the command.
  */
 export type Start =
-  | { kind: "new"; auto: boolean }
-  | { kind: "session"; session: Session; auto: boolean }
-  | { kind: "pick"; auto: boolean };
+  | { kind: "new"; auto: boolean; excludeTools?: readonly string[] }
+  | {
+      kind: "session";
+      session: Session;
+      auto: boolean;
+      excludeTools?: readonly string[];
+    }
+  | { kind: "pick"; auto: boolean; excludeTools?: readonly string[] };
 
 /** One tool call waiting on a human. Shape comes from `__interrupt__`. */
 interface ActionRequest {
