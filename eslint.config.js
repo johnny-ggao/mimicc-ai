@@ -23,6 +23,12 @@ export default tseslint.config(
       "bench-work/**",
       "bench/**",
       "repro/**",
+      // The agent's own workspace: session history plus the throwaway checkouts
+      // the probes drive it against (.mimicc/probe-*/). None of it is this
+      // checkout's source and none of it is in tsconfig's project (observed
+      // 2026-08-30: 935 of 941 lint errors came from here, 928 of them from a
+      // single bundled probe artifact; the 6 real ones were in tests/).
+      ".mimicc/**",
       // Background tasks get their own git worktree under here. It is a second
       // checkout of this repository — its files are not this checkout's source,
       // and linting them makes `bun run check` fail on work that is not in this

@@ -330,13 +330,15 @@ test("a Write that fails to land stamps nothing", async () => {
   // Write onto an existing file throws in the tool; the engine turns the throw
   // into an error ToolMessage. That error must not carry a mark, or a later
   // Edit would hold a fake stamp for bytes that were never written.
-  const handler = async (): Promise<ToolMessage> =>
-    new ToolMessage({
-      tool_call_id: "call_1",
-      name: "Write",
-      content: "Error: already exists and Write never overwrites",
-      status: "error",
-    });
+  const handler = (): Promise<ToolMessage> =>
+    Promise.resolve(
+      new ToolMessage({
+        tool_call_id: "call_1",
+        name: "Write",
+        content: "Error: already exists and Write never overwrites",
+        status: "error",
+      }),
+    );
   const request = {
     toolCall: {
       name: "Write",

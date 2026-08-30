@@ -57,11 +57,17 @@ async function round(
     request: { messages: unknown[] },
     handler: (request: { messages: unknown[] }) => Promise<AIMessage>,
   ) => Promise<unknown>;
-  await wrap({ messages: [] }, async (request) => {
+  await wrap({ messages: [] }, (request) => {
     seen = request;
-    return aiUsage(usage);
+    return Promise.resolve(aiUsage(usage));
   });
   return seen;
+}
+
+/** MessageContent is a string or an array of blocks; narrow before matching. */
+function contentOf(message: AIMessage | HumanMessage): string {
+  const content = message.content;
+  return typeof content === "string" ? content : JSON.stringify(content);
 }
 
 /** The afterModel hook, unwrapped from the function-or-{hook} union. */
@@ -115,14 +121,14 @@ describe("the turn budget", () => {
     const warned = await round(middleware, 0);
     const lastMessage = warned.messages[warned.messages.length - 1];
     expect(lastMessage).toBeInstanceOf(HumanMessage);
-    expect(String((lastMessage as HumanMessage).content)).toMatch(/budget/i);
+    expect(contentOf(lastMessage as HumanMessage)).toMatch(/budget/i);
 
     // The model ignores the warning and calls tools again: stripped + canned + capped.
     const replaced = afterModel(middleware)({ messages: [aiWithTools()] });
     const message = (replaced?.messages ?? [])[0];
     expect(message).toBeInstanceOf(AIMessage);
     expect((message as AIMessage).tool_calls).toHaveLength(0);
-    expect(String((message as AIMessage).content)).toMatch(/FORCED STOP/);
+    expect(contentOf(message as AIMessage)).toMatch(/FORCED STOP/);
     expect(capped).toEqual(["budget_exhausted"]);
   });
 
@@ -173,7 +179,7 @@ describe("the turn budget", () => {
     expect(afterModel(middleware)({ messages: [aiWithTools()] })).toBeUndefined(); // flagged
     const replaced = afterModel(middleware)({ messages: [aiWithTools()] });
     const message = (replaced?.messages ?? [])[0];
-    expect(String((message as AIMessage).content)).toMatch(/FORCED STOP/);
+    expect(contentOf(message as AIMessage)).toMatch(/FORCED STOP/);
     expect(capped).toEqual(["budget_exhausted"]);
   });
 
@@ -205,7 +211,7 @@ describe("the turn budget", () => {
       clock = 200_001;
       expect(afterModel(middleware)({ messages: [aiWithTools()] })).toBeUndefined();
       const replaced = afterModel(middleware)({ messages: [aiWithTools()] });
-      expect(String(((replaced?.messages ?? [])[0] as AIMessage).content)).toMatch(
+      expect(contentOf((replaced?.messages ?? [])[0] as AIMessage)).toMatch(
         /FORCED STOP/,
       );
       expect(capped).toEqual(["budget_exhausted"]);
