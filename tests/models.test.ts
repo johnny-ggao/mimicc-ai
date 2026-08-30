@@ -72,6 +72,34 @@ describe("resolveModelConfig", () => {
     expect(r.windowLimit).toBe(262_144);
   });
 
+  it("resolves 智谱 with its only registered model", () => {
+    const r = resolveModelConfig(
+      loadConfig({ LLM_PROVIDER: "zhipu-cn", LLM_ZHIPU_CN_API_KEY: "zk" }),
+    );
+
+    expect(r.provider).toBe("zhipu-cn");
+    expect(r.model).toBe("glm-5.3-flash");
+    expect(r.baseURL).toBe("https://open.bigmodel.cn/api/coding/paas/v4");
+    expect(r.apiKey).toBe("zk");
+    expect(r.maxTokens).toBe(OUTPUT_BUDGET);
+    expect(r.maxOutputTokens).toBe(131_072);
+    // 🔴 Documented, not measured — and deliberately the *low* reading of the
+    // docs' "1M". `src/models.ts` carries the argument; this pins the number so
+    // that replacing it with a measured one is a visible edit rather than a
+    // silent drift.
+    expect(r.windowLimit).toBe(1_000_000);
+  });
+
+  it("does not read the DeepSeek legacy alias for another provider", () => {
+    // `LLM_API_KEY` means DeepSeek and only DeepSeek. A provider registered
+    // without a `legacyKeyEnvVar` must not quietly borrow it.
+    expect(() =>
+      resolveModelConfig(
+        loadConfig({ LLM_PROVIDER: "zhipu-cn", LLM_API_KEY: "legacy" }),
+      ),
+    ).toThrow(/LLM_ZHIPU_CN_API_KEY/);
+  });
+
   it("honours the LLM_BASE_URL override", () => {
     const r = resolveModelConfig(
       loadConfig({
@@ -85,7 +113,7 @@ describe("resolveModelConfig", () => {
 
   it("throws for an unknown provider, listing the allowed ones", () => {
     expect(() => resolveModelConfig(loadConfig({ LLM_PROVIDER: "openai" }))).toThrow(
-      /deepseek, moonshot-cn/,
+      /deepseek, moonshot-cn, zhipu-cn/,
     );
   });
 
@@ -117,6 +145,9 @@ describe("resolveModelConfig", () => {
     expect(() =>
       resolveModelConfig(loadConfig({ LLM_PROVIDER: "moonshot-cn" })),
     ).toThrow(/LLM_MOONSHOT_CN_API_KEY/);
+    expect(() => resolveModelConfig(loadConfig({ LLM_PROVIDER: "zhipu-cn" }))).toThrow(
+      /LLM_ZHIPU_CN_API_KEY/,
+    );
   });
 });
 

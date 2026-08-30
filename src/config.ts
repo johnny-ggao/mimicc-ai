@@ -35,6 +35,7 @@ const envSchema = z.object({
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_DEEPSEEK_API_KEY: z.string().min(1).optional(),
   LLM_MOONSHOT_CN_API_KEY: z.string().min(1).optional(),
+  LLM_ZHIPU_CN_API_KEY: z.string().min(1).optional(),
 
   // Turn-budget overrides (turn-budget ticket 02). The work budget lives on the
   // token/time axis — there is no step budget. Defaults: token budget = the

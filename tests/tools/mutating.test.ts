@@ -209,14 +209,15 @@ test("Bash says something when a command prints nothing", async () => {
 
 // Tool output goes straight to the model. A command that can read a key out of
 // its own environment makes every other guard in this file decorative. All three
-// names — the two per-provider keys and the legacy alias — must be stripped.
+// names — the three per-provider keys and the legacy alias — must be stripped.
 test("Bash does not hand the API keys to the commands it runs", async () => {
   const result = await bashTool.invoke({
     command:
-      'echo "a=[${LLM_API_KEY:-unset}] b=[${LLM_DEEPSEEK_API_KEY:-unset}] c=[${LLM_MOONSHOT_CN_API_KEY:-unset}]"',
+      'echo "a=[${LLM_API_KEY:-unset}] b=[${LLM_DEEPSEEK_API_KEY:-unset}] ' +
+      'c=[${LLM_MOONSHOT_CN_API_KEY:-unset}] d=[${LLM_ZHIPU_CN_API_KEY:-unset}]"',
   });
 
-  expect(result).toContain("a=[unset] b=[unset] c=[unset]");
+  expect(result).toContain("a=[unset] b=[unset] c=[unset] d=[unset]");
 });
 
 /* ---------- Bash: the deadline ---------- */

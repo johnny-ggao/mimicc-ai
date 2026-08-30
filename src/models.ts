@@ -14,7 +14,7 @@ import type { Config } from "./config";
  * rather than run with a guessed window.
  */
 
-export type ProviderId = "deepseek" | "moonshot-cn";
+export type ProviderId = "deepseek" | "moonshot-cn" | "zhipu-cn";
 
 export interface ModelSpec {
   /** The context-window ceiling, in tokens. Measured or documented, never guessed. */
@@ -86,7 +86,8 @@ export interface ProviderSpec {
   /** baseURL sent to ChatOpenAI, including any required `/v1` suffix. */
   baseURL: string;
   /** The env var whose value is this provider's API key. */
-  keyEnvVar: "LLM_DEEPSEEK_API_KEY" | "LLM_MOONSHOT_CN_API_KEY";
+  keyEnvVar:
+    "LLM_DEEPSEEK_API_KEY" | "LLM_MOONSHOT_CN_API_KEY" | "LLM_ZHIPU_CN_API_KEY";
   /** Deprecated alias for `keyEnvVar`, read only when `keyEnvVar` is unset. */
   legacyKeyEnvVar?: "LLM_API_KEY";
   defaultModel: string;
@@ -152,6 +153,49 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       },
       "kimi-k2.7-code": { windowLimit: 262_144, maxOutputTokens: 32_768 },
       "kimi-k2.6": { windowLimit: 262_144, maxOutputTokens: 32_768 },
+    },
+  },
+  "zhipu-cn": {
+    id: "zhipu-cn",
+    // 🔴 **The Coding Plan endpoint, not the pay-as-you-go one.** 智谱 serves the
+    // OpenAI protocol at two different paths and the account decides which one
+    // answers: `/api/paas/v4` bills against balance, `/api/coding/paas/v4` against
+    // a Coding Plan subscription. Measured 2026-08-30 with this project's key —
+    // the pay-as-you-go path returns
+    // `429 {"code":"1113","message":"余额不足或无可用资源包"}` for *every* request,
+    // valid ones included, while the coding path answers 200. The registry names
+    // the one this project actually runs on; a balance-billed account sets
+    // `LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4` and that is exactly what
+    // the escape hatch is for.
+    //
+    // ⚠️ China platform only. `open.bigmodel.cn` and the international `z.ai` are
+    // separate platforms with separate keys that 401 against each other — the
+    // `-cn` suffix is the only warning anyone gets, same as `moonshot-cn`.
+    baseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
+    keyEnvVar: "LLM_ZHIPU_CN_API_KEY",
+    defaultModel: "glm-5.3-flash",
+    models: {
+      // 🔴 **Neither number is measured.** Both come from 智谱's docs, and the
+      // probe that would confirm them cannot run: the account behind
+      // `LLM_ZHIPU_CN_API_KEY` answers every request — valid ones included —
+      // with `429 {"code":"1113","message":"余额不足或无可用资源包"}`. That
+      // check fires *before* parameter validation, so even `repro/32`'s free 400 is
+      // out of reach here, unlike DeepSeek and Moonshot. Re-run
+      // `bun repro/32-what-the-provider-allows.ts` once the account has balance.
+      //
+      // - output 131_072: 对话补全 API reference states `max_tokens` range
+      //   [1, 131072]; the model card's "128K output" is the same number written
+      //   the other way (128 × 1024). Documented, and the two doc pages agree.
+      // - window 1_000_000: the docs say only "1M" and never spell the integer.
+      //   Two readings, 48,576 tokens apart. **Taken low on purpose**: this
+      //   number sets when compaction starts summarising, and on this provider
+      //   overshooting it is not a caught error — 智谱 reports overflow as
+      //   `{"code":"1261","message":"Prompt 超长"}`, which matches none of the
+      //   four English phrases langchain recognises, so the request would fail
+      //   uncaught rather than trigger the summary path. Under-reading "1M"
+      //   costs a slightly early summary; over-reading it costs the run.
+      //   See `docs/research/glm-provider-facts.md` §6.
+      "glm-5.3-flash": { windowLimit: 1_000_000, maxOutputTokens: 131_072 },
     },
   },
 };

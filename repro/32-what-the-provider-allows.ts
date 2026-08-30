@@ -46,10 +46,24 @@ if (key === undefined) {
   process.exit(1);
 }
 
-/** 从拒绝文案里把上界抠出来。抠不到就原样打印,别猜。 */
+/**
+ * 从拒绝文案里把上界抠出来。抠不到就原样打印,别猜。
+ *
+ * ⚠️ **两句文案,因为拒绝是各写各的。** DeepSeek / Moonshot 说
+ * *the valid range of max_tokens is [1, 393216]*;智谱说
+ * *max_tokens参数非法:限制数值范围[1,131072]*(2026-08-30 实测)。第一版只认英文那句,
+ * 于是对着一个把数字明明白白写在眼前的 400 打印「读不出」——**探针的洞,不是 provider 的**。
+ * 这正是这个文件顶上那段警告说的事:解析挂在没有契约的文案上,provider 换个说法就静默失效。
+ * 多认一句不能取消那个风险,只能让今天这三家都读得出来。
+ */
 function ceilingFrom(body: string): number | undefined {
-  const match = /range of max_(?:tokens|completion_tokens) is \[\d+,\s*(\d+)\]/.exec(body);
-  return match?.[1] === undefined ? undefined : Number(match[1]);
+  const match =
+    /range of max_(?:tokens|completion_tokens) is \[\d+,\s*(\d+)\]|限制数值范围\s*\[\d+,\s*(\d+)\]/.exec(
+      body,
+    );
+  if (match === null) return undefined;
+  const value = match[1] ?? match[2];
+  return value === undefined ? undefined : Number(value);
 }
 
 // `LLM_BASE_URL` wins when set, so `scripts/probe-smoke.ts` can point this at its

@@ -165,15 +165,23 @@ baseURL、默认模型、API key 变量，每个模型自带窗口上限和 maxT
 
 | 变量                      | 必填           | 默认值                 | 说明                                     |
 | ------------------------- | -------------- | ---------------------- | ---------------------------------------- |
-| `LLM_PROVIDER`            | 否             | `deepseek`             | `deepseek` 或 `moonshot-cn`              |
+| `LLM_PROVIDER`            | 否             | `deepseek`             | `deepseek` / `moonshot-cn` / `zhipu-cn`  |
 | `LLM_DEEPSEEK_API_KEY`    | 选 DeepSeek 时 | 无                     | DeepSeek key；`LLM_API_KEY` 是其弃用别名 |
 | `LLM_MOONSHOT_CN_API_KEY` | 选 Moonshot 时 | 无                     | Moonshot 中国区 key                      |
+| `LLM_ZHIPU_CN_API_KEY`    | 选智谱时       | 无                     | 智谱开放平台 key（国内区）               |
 | `LLM_MODEL`               | 否             | 该 provider 的默认模型 | 必须是注册过的模型，未知即启动报错       |
 | `LLM_BASE_URL`            | 否             | provider 注册表里的值  | 代理 / 自建端点的逃生门                  |
 
 DeepSeek 默认模型 `deepseek-v4-flash`；Moonshot 中国区默认 `kimi-k3`，另有 `kimi-k2.7-code`、
 `kimi-k2.6`（`https://api.moonshot.cn/v1`，`/v1` 必带，与中国区 `.cn` / 国际区 `.ai` 是两套
-平台两套 key）。
+平台两套 key）；智谱只注册了 `glm-5.3-flash`（`https://open.bigmodel.cn/api/paas/v4`，路径前缀
+必带，国内 `open.bigmodel.cn` 与国际 `z.ai` 同样是两套平台两套 key）。
+
+⚠️ **智谱那两个数是文档值，不是实测值**，窗口还刻意取了「1M」的低读法——原因写在
+`src/models.ts` 的条目注释和 `docs/research/glm-provider-facts.md`：智谱的超长报错是
+`{"code":"1261","message":"Prompt 超长"}`，不匹配 langchain 认溢出的那四句英文，所以窗口读高
+了不是「触发摘要」而是「请求直接失败」。等账户有余额后跑
+`bun repro/32-what-the-provider-allows.ts` 换成实测值。
 
 `LLM_MODEL` 必须是注册表里写明的模型：窗口上限是溢出保护靠它算的，而对一个没核实过窗口的别名
 猜一个数，正是这里拒绝的事。

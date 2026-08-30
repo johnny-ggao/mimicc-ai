@@ -198,6 +198,7 @@ export async function runCommand(
       LLM_API_KEY: undefined,
       LLM_DEEPSEEK_API_KEY: undefined,
       LLM_MOONSHOT_CN_API_KEY: undefined,
+      LLM_ZHIPU_CN_API_KEY: undefined,
     },
   });
 
