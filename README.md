@@ -174,14 +174,18 @@ baseURL、默认模型、API key 变量，每个模型自带窗口上限和 maxT
 
 DeepSeek 默认模型 `deepseek-v4-flash`；Moonshot 中国区默认 `kimi-k3`，另有 `kimi-k2.7-code`、
 `kimi-k2.6`（`https://api.moonshot.cn/v1`，`/v1` 必带，与中国区 `.cn` / 国际区 `.ai` 是两套
-平台两套 key）；智谱只注册了 `glm-5.3-flash`（`https://open.bigmodel.cn/api/paas/v4`，路径前缀
-必带，国内 `open.bigmodel.cn` 与国际 `z.ai` 同样是两套平台两套 key）。
+平台两套 key）；智谱只注册了 `glm-5.3-flash`，窗口 1,048,576、输出上限 131,072（**都是实测**）。
 
-⚠️ **智谱那两个数是文档值，不是实测值**，窗口还刻意取了「1M」的低读法——原因写在
-`src/models.ts` 的条目注释和 `docs/research/glm-provider-facts.md`：智谱的超长报错是
-`{"code":"1261","message":"Prompt 超长"}`，不匹配 langchain 认溢出的那四句英文，所以窗口读高
-了不是「触发摘要」而是「请求直接失败」。等账户有余额后跑
-`bun repro/32-what-the-provider-allows.ts` 换成实测值。
+⚠️ **智谱有两条 OpenAI 端点，账号类型决定哪条应答。** 注册表写的是 **Coding Plan** 那条
+`https://open.bigmodel.cn/api/coding/paas/v4`；按量付费的账号走
+`https://open.bigmodel.cn/api/paas/v4`，用 `LLM_BASE_URL` 覆盖即可。拿 Coding Plan 的 key
+去打按量付费那条，**每一发都回 `429 1113 余额不足`**，包括合法请求——文档只写了后一条，
+所以这个坑不查是踩定的。国内 `open.bigmodel.cn` 与国际 `z.ai` 同样是两套平台两套 key。
+
+⚠️ **智谱的超窗报错 langchain 认不出来**（`{"code":"1261","message":"Prompt exceeds max length"}`，
+不匹配它写死的三句英文），所以注册表额外给它登记了 `overflowCodes`——没有这一条，溢出保护
+对这家是空转的。词表里叫**溢出码**（见 `CONTEXT.md`），来龙去脉在 `src/models.ts` 的条目
+注释和 `docs/research/glm-provider-facts.md`。
 
 `LLM_MODEL` 必须是注册表里写明的模型：窗口上限是溢出保护靠它算的，而对一个没核实过窗口的别名
 猜一个数，正是这里拒绝的事。
