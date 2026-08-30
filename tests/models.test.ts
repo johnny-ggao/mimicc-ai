@@ -84,11 +84,9 @@ describe("resolveModelConfig", () => {
     expect(r.apiKey).toBe("zk");
     expect(r.maxTokens).toBe(OUTPUT_BUDGET);
     expect(r.maxOutputTokens).toBe(131_072);
-    // 🔴 Documented, not measured — and deliberately the *low* reading of the
-    // docs' "1M". `src/models.ts` carries the argument; this pins the number so
-    // that replacing it with a measured one is a visible edit rather than a
-    // silent drift.
-    expect(r.windowLimit).toBe(1_000_000);
+    // Measured, not documented: 1,021,379 tokens of input answered 200 and a
+    // shot past 2^20 answered 400 (`repro/55`). The docs only ever say "1M".
+    expect(r.windowLimit).toBe(1_048_576);
   });
 
   it("does not read the DeepSeek legacy alias for another provider", () => {

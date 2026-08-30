@@ -59,7 +59,12 @@ const PAID: Record<string, string> = {
     "不花 token（唯一一发必然 400），列在这里只为不打网络",
   "54-what-clear-thinking-costs.ts":
     "两臂 × 两回合共四发小请求，约 1.5 万 in / 几百 out",
-  "33-does-output-share-the-window.ts": "两发各约 86 万未命中输入，实测 $0.1 量级",
+  // 55 的**标定**那一发一定花钱（约 3 万 in）；真正的那一发，注册表没低报时是 400、不计费，
+  // 低报了才会花掉整整一个窗口的输入。代价的不对称写在探针头部。
+  "55-is-the-registered-window-the-real-one.ts":
+    "标定约 3 万 in；主发注册表没低报时 400 不计费，低报了约一个窗口的 in",
+  "33-does-output-share-the-window.ts":
+    "先标定约 3 万 in，再两发各约一个「窗口 − 输出上限」的未命中输入",
   "35-how-wrong-is-our-estimate.ts": "六发各约 6k，合计约 3 万 in，$0.01 量级",
   "37-does-position-change-adherence.ts":
     "三臂 × 两档 × 5 采样 × 2 面，深档每臂约 31.7 万 in",

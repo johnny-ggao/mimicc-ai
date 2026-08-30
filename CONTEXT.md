@@ -230,24 +230,47 @@ _Avoid_: 快照（通用概念，且它说的是「某一刻的副本」，而�
 _Avoid_: 消息列表、transcript（中文里）
 
 **窗口上限（window limit）**：
-一次请求装得下多少 token。`deepseek-v4-flash` 是 **1,048,576**（实测，撞上去是硬 400）。
+一次请求装得下多少 token。`deepseek-v4-flash` 与 `glm-5.3-flash` 都是 **1,048,576**
+（两个都是实测，撞上去是硬 400）。
 **它约束的是单次请求，不是一条 session 的总和**——六次请求各花 3000，不等于用掉了 18000。
 单次请求 = 常驻段（系统提示词 + 工具定义）+ 这条 thread 至今的全部历史
-**+ 这次请求为回复预留的额度（`max_tokens`）**，所以 **thread 越长、单次请求越大**，
-这才是窗口会满的机制。
-🔑 **预留的输出额度是从同一个窗口里扣的，不是额外的。** 2026-08-24 实测，provider 逐字：
-_maximum context length is 1048576 tokens. However, you requested 1249764 tokens
-(856548 in the messages, 393216 in the completion)_
-（`repro/33-does-output-share-the-window.ts`，带对照组）。所以**要多少输出，就少多少历史**
-——这条决定了发到线上的输出额度必须远小于压缩阈值留下的余量。**这个数只能从 provider 的文档或
-实测拿**：API 不返回它，SDK 会替你编一个。
-_Avoid_: 上下文长度、context size、context window（指上限时）
+**（在有些 provider 上还要加上这次为回复预留的额度 `max_tokens`）**，所以
+**thread 越长、单次请求越大**，这才是窗口会满的机制。
+🔑 **预留的输出额度算不算进窗口，是 provider 的选择，不是窗口的定义**——这一句到
+2026-08-30 之前一直写成后者，而第三家把它推翻了（`repro/33`，每家都带对照组）：
+
+- DeepSeek **算**。逐字：_maximum context length is 1048576 tokens. However, you
+  requested 1249764 tokens (856548 in the messages, 393216 in the completion)_。
+  所以在它上面**要多少输出，就少多少历史**。
+- 智谱 **不算**。971,327 的输入配 `max_tokens: 131,072`，两者之和 1,102,399 已经超过
+  同样是 1,048,576 的窗口，**照样 200**。
+  ⚠️ **所以这条约束要按最严的那家写**：发到线上的输出额度必须远小于压缩阈值留下的余量——
+  在不算的那家上这只是浪费一点余量，在算的那家上这是溢出保护来不来得及触发的分界。
+  **这个数只能从 provider 的文档或实测拿**：API 不返回它，SDK 会替你编一个。
+  ⚠️ **文档给的「1M」不是这个数**：智谱所有页面只写 1M，而 1,000,000 与 1,048,576 差 48,576。
+  注册表一度取了低读法（在溢出码认不出来的 provider 上，读高了是请求直接失败），
+  `repro/55-is-the-registered-window-the-real-one.ts` 证明那是错的。**保守的猜测仍然是猜测。**
+  _Avoid_: 上下文长度、context size、context window（指上限时）
 
 **溢出保护（overflow protection）**：
 为了不撞上窗口而做的裁剪，与**成本优化**是两件事，判据相反——**成本优化按期望值算，划不来就
 不做；溢出保护按最坏情况算，一年触发一次也要正确**。把两者混在一个阈值里，会得到一个既不省钱
 又守不住的数。
 _Avoid_: 上下文压缩、省 token（指这类机制的目的时）
+
+**溢出码（overflow code）**：
+provider 用来说「这次的 prompt 超窗了」的那个业务码。**它是溢出保护的触发条件**——
+保护本身不认错误，它只问框架有没有把这次失败判成溢出，而框架靠匹配几句写死的英文来判。
+🔴 **「恰好命中」不是机制。** DeepSeek 的拒绝里有 `maximum context length`，正好是那几句
+之一——那是核过的，不是设计出来的；智谱回的是 `400 code=1261 "Prompt exceeds max length"`，
+一句不沾，于是**一次教科书式的超窗被判成普通失败，摘要一次都不会跑**
+（`repro/53-does-the-overflow-reach-us.ts`）。**认不出溢出的溢出保护，不是弱一点，是没有。**
+🔑 **认码，不认文案。** 同一个 1261，错误码页印的是「Prompt 超长」，线上发的是英文——
+文案在文档和线之间就已经漂了,而码是那一页真正承诺的东西。
+⚠️ **它是 provider 知识，所以住在注册表**（`ProviderSpec.overflowCodes`），和窗口上限一起
+递进 `contextWindow`；`src/context/compaction.ts` 到今天仍然不认识任何一家 provider，
+这条边界是故意的。⚠️ **一家的码是空的，不等于没查**——等于查过、框架自己认得。
+_Avoid_: 错误码（太泛，指的是整张表）、超长报错（那是文案，不是判据）
 
 **思考过程（reasoning）**：
 模型在给出回复之前产生的那段推理，provider 放在 `reasoning_content` 里，与**回复正文**

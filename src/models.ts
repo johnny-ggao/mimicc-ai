@@ -30,10 +30,16 @@ export interface ModelSpec {
    * ceiling out of the refusal.
    *
    * 🔴 **This is the capability, and it is not what goes on the wire.** What we
-   * ask for is {@link OUTPUT_BUDGET}, which is far smaller and has to be — the
-   * window counts messages and completion together. This field's job is to cap
-   * that budget for a model too small to honour it, and to stop anyone having to
-   * guess the number later.
+   * ask for is {@link OUTPUT_BUDGET}, which is far smaller and has to be — on
+   * **some** providers the window counts messages and completion together. This
+   * field's job is to cap that budget for a model too small to honour it, and to
+   * stop anyone having to guess the number later.
+   *
+   * ⚠️ "Some" is load-bearing and was written as "the" until 2026-08-30: DeepSeek
+   * counts the completion, 智谱 does not (`repro/33`, both measured). The budget
+   * is small enough to be safe either way, which is why the difference costs
+   * nothing — but a claim about *the window* that is really a claim about *one
+   * provider* is how the other two defects in this file's history started.
    */
   maxOutputTokens: number;
   /**
@@ -74,6 +80,13 @@ export interface ModelSpec {
  * `context/compaction.ts` starts summarising**, so the request would be refused
  * before the overflow protection ever ran. `repro/33-does-output-share-the-window.ts`
  * is that experiment, control group included.
+ *
+ * ⚠️ **And it is DeepSeek's arithmetic, not the window's.** Measured 2026-08-30:
+ * 智谱 accepted 971,327 input tokens alongside `max_tokens: 131_072` — a total of
+ * 1,102,399 against a 1,048,576 window — with a 200. Two providers, two opposite
+ * answers, so the paragraph above justifies this number **for the provider that
+ * needs it**, and this one is a want on the other. Keeping it small is safe on
+ * both; a fourth provider gets `repro/33` run at it before anyone assumes.
  *
  * That danger is now handled where it belongs, per request, so the number is
  * free to describe what an answer needs instead of what a full window survives.
@@ -212,16 +225,22 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       // - output 131_072: 对话补全 API reference states `max_tokens` range
       //   [1, 131072]; the model card's "128K output" is the same number written
       //   the other way (128 × 1024). Documented, and the two doc pages agree.
-      // - window 1_000_000: the docs say only "1M" and never spell the integer.
-      //   Two readings, 48,576 tokens apart. **Taken low on purpose**: this
-      //   number sets when compaction starts summarising, and on this provider
-      //   overshooting it is not a caught error — 智谱 reports overflow as
-      //   `{"code":"1261","message":"Prompt 超长"}`, which matches none of the
-      //   four English phrases langchain recognises, so the request would fail
-      //   uncaught rather than trigger the summary path. Under-reading "1M"
-      //   costs a slightly early summary; over-reading it costs the run.
-      //   See `docs/research/glm-provider-facts.md` §6.
-      "glm-5.3-flash": { windowLimit: 1_000_000, maxOutputTokens: 131_072 },
+      // - window 1_048_576: measured, and it cost a million tokens to learn.
+      //   The docs only ever write "1M", never the integer, and the two readings
+      //   are 48,576 apart. This entry first took the **low** reading on purpose
+      //   — on this provider an over-read is not a caught overflow but a failed
+      //   request — and `repro/55-is-the-registered-window-the-real-one.ts`
+      //   showed that was wrong: **1,021,379 tokens of input answered 200**, and
+      //   a shot above 1,048,576 answers 400. So the window is 2^20, the same
+      //   convention the docs use when they write "128K" for a limit their API
+      //   reference states as 131,072.
+      //
+      //   ⚠️ **The cheap outcome and the informative one are opposite here.**
+      //   A refusal is free and a success is billed at a full window, so a
+      //   provider that under-reports quietly is expensive to catch — which is
+      //   the argument for measuring once and writing the number down, not for
+      //   guessing conservatively and moving on.
+      "glm-5.3-flash": { windowLimit: 1_048_576, maxOutputTokens: 131_072 },
     },
   },
 };

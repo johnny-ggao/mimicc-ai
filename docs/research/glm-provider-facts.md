@@ -3,13 +3,18 @@
 Research notes for adding 智谱开放平台 (BigModel) as a **third** OpenAI-compatible
 provider next to DeepSeek and Moonshot, running `glm-5.3-flash`.
 
-🔴 **Everything in §1–§6 is doc-derived. Nothing here has been measured yet.**
-The distinction is the point of this file: the registry in `src/models.ts` may
-only carry measured or documented numbers, and "documented" has to be traceable
-to the sentence it came from. §7 is the list the probes have to close, and
-"Measured against the live API" — the section that made
-`moonshot-provider-facts.md` worth writing, because it **overturned three of that
-file's doc-derived claims** — does not exist here yet.
+🔴 **§1–§6 are doc-derived; §6.5 is what the live API actually did, and where
+the two disagree §6.5 wins.** The distinction is the point of this file: the
+registry in `src/models.ts` may only carry measured or documented numbers, and
+"documented" has to be traceable to the sentence it came from — so the doc-derived
+sections are kept **as written**, wrong parts included, rather than quietly
+corrected. Reading them against §6.5 is how you see which kinds of doc claim are
+worth trusting next time.
+
+⚠️ The scoreboard, since that is the only reason to keep the wrong version around:
+**six of the claims below were overturned by measurement**, two of them outages
+that made the provider unusable. `moonshot-provider-facts.md` scored three.
+**Assume this file is wrong until §6.5 says otherwise.**
 
 Primary sources (智谱's own docs, `docs.bigmodel.cn`):
 
@@ -35,7 +40,7 @@ Secondary (international platform, same model): <https://docs.z.ai/guides/vlm/gl
   streaming, and function calling with `tools` / `tool_choice` / `message.tool_calls`.
   The compat page hedges — "certain scenarios still have differences … does not
   affect overall compatibility" — without enumerating the differences, so the
-  hedge is worth nothing and §7 has to close it by measurement.
+  hedge is worth nothing and §6.5 closes it by measurement instead.
 
 - ⚠️ **Two platforms, two key namespaces.** 国内 `open.bigmodel.cn` (docs at
   `docs.bigmodel.cn`) and 海外 `z.ai` (`docs.z.ai`) are separate platforms; a key
@@ -53,7 +58,7 @@ variant to prefer, so registering it advertises nothing the tools cannot reach.
 
 |                    | documented                                                                        | source            |
 | ------------------ | --------------------------------------------------------------------------------- | ----------------- |
-| Context window     | "1M" — **the exact integer is 未查到**                                            | 模型卡            |
+| Context window     | "1M" — **the exact integer is 未查到** (measured: 1,048,576, §6.5)                | 模型卡            |
 | Max output tokens  | 模型卡 says 128K; the API reference gives `max_tokens` range **[1, 131072]**      | 模型卡 + 对话补全 |
 | Parameter name     | **`max_tokens`** (not `max_completion_tokens`)                                    | 对话补全          |
 | Thinking           | `thinking.type` **仅支持 `enabled`，不支持关闭思考**                              | 模型卡            |
@@ -62,10 +67,12 @@ variant to prefer, so registering it advertises nothing the tools cannot reach.
 | Sampling           | recommends `temperature: 1`, `top_p: 0.95`                                        | 模型卡            |
 | Tool calling       | yes; streaming doc recommends `stream: true` **and** `tool_stream: true` together | 模型卡            |
 
-Two contradictions inside 智谱's own docs, both live in §7:
+Two contradictions inside 智谱's own docs, both since settled in §6.5:
 
 - 🔴 **128K vs 131072.** These are the same number if "128K" means 131,072, and
   differ if it means 128,000. `maxOutputTokens` is not a field to round.
+  **Settled: 131,072** — the refusal names it, and the window turned out to use
+  the same 1024-based convention.
 - 🔴 **`temperature` recommended as `1`, while the OpenAI-compat page says the
   range is `(0,1)`** — an open interval that excludes the recommended value.
   Low stakes for us: `ChatOpenAI` declares `temperature` with no initializer and
@@ -125,8 +132,8 @@ Two consequences, and they point opposite ways:
 - **No echo-back requirement is documented.** Moonshot demands the assistant
   message be replayed with its `reasoning_content`; 智谱's docs say nothing. Our
   `ReasoningEchoCompletions` is unconditional in `createChatModel`, so GLM gets
-  it whether or not it wants it — §7 asks whether that is harmless, not whether
-  it is required.
+  it whether or not it wants it — the question was whether that is harmless, not
+  whether it is required. **Settled in §6.5: harmless.**
 - `clear_thinking` is the inverse of Moonshot's `thinking.keep`: `true` (the
   default) drops the chain across turns, `false` keeps it. The doc recommends
   `false`, i.e. **carry every turn's full chain of thought in history** — which
@@ -193,11 +200,24 @@ impossible `max_tokens` with a 400 before anything is generated — on an empty
   provider's** — fixed by teaching it the second wording, which does not remove
   the risk the probe's own header warns about, only spreads it across the three
   providers we actually have.
-- ⚠️ **`windowLimit` is still documented-not-measured.** The overflow refusal
-  carries no numbers (below), so the DeepSeek trick — read the window out of the
-  refusal prose — has nothing to read. Distinguishing 1,000,000 from 1,048,576
-  needs a prompt that _fits_, i.e. roughly a million billable input tokens. Not
-  spent. The registry takes the low reading and says why.
+- ✅ **`windowLimit` = 1,048,576, measured — and the first answer was wrong.**
+  The refusal carries no numbers, so the DeepSeek trick (read the window out of
+  the refusal prose) has nothing to read; the only way is to send a prompt and
+  see. This entry first took the **low** reading of the docs' "1M", on the
+  argument that over-reading is unrecoverable on a provider whose overflow code
+  langchain cannot see. `repro/55-is-the-registered-window-the-real-one.ts`
+  showed the low reading was simply wrong: **1,021,379 input tokens answered
+  200**, and 1,069,547 answered 400. So the window is 2^20 — the same convention
+  as writing "128K" for 131,072. 🔴 **A conservative guess is still a guess**,
+  and it sat in the registry looking like a decision.
+- 🔴 **The completion does _not_ count against the window here** — the opposite
+  of DeepSeek. 971,327 input tokens plus `max_tokens: 131_072` is 1,102,399
+  against a 1,048,576 window, and it returned **200** (`repro/33`, which now
+  sizes its own shots per provider instead of hard-coding DeepSeek's). The whole
+  argument for `OUTPUT_BUDGET` sitting far below the provider ceiling is
+  therefore DeepSeek's argument, not the window's. The budget stays small because
+  small is safe on both — but the claim in the code has been narrowed to the
+  provider it is true of.
 
 ### Errors, and the protection that was not there
 
@@ -279,17 +299,16 @@ true`; tool calls arrive and parse without it.
 
 ## 7. Still unmeasured
 
-Two, both for the same reason, and both cheap to state honestly:
+**Nothing.** Both entries that stood here — the exact window, and whether the
+completion shares it — were measured on 2026-08-30 at a cost of roughly two
+million input tokens, and **both overturned what this file predicted**:
 
-1. **Exact `windowLimit`** — 1,000,000 or 1,048,576. The refusal names no number,
-   so the only way to tell them apart is a prompt that _fits_ the larger reading,
-   which bills roughly a million input tokens. The registry takes the low reading
-   deliberately (see the entry's comment): on this provider an over-read is not a
-   caught overflow, it is a failed request.
-2. **Does the completion count against the window?** True for DeepSeek —
-   `repro/33` — and the argument for `OUTPUT_BUDGET` being 16,384 rests on it.
-   Same cost shape as (1): the informative outcome is the expensive one.
+| predicted                                            | measured        |
+| ---------------------------------------------------- | --------------- |
+| window is 1,000,000 (the low reading of "1M")        | **1,048,576**   |
+| completion counts against the window, as on DeepSeek | **it does not** |
 
-Everything else in this file has been measured. When either of these is worth a
-million tokens, `repro/33-does-output-share-the-window.ts` is the probe to point
-at 智谱.
+⚠️ **Running score for this provider: of the claims this file carried before
+anything was measured, six turned out wrong.** Treat what is left as leads, not
+as facts — and when it matters, re-run the probe rather than quoting the
+paragraph.
