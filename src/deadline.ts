@@ -89,7 +89,9 @@ export function runBudgetMs(
   timeoutSec: number | undefined,
   turnTimeBudgetMs: number,
 ): number {
-  return timeoutSec !== undefined ? timeoutSec * 1000 : turnTimeBudgetMs + WRAP_UP_ROOM_MS;
+  return timeoutSec !== undefined
+    ? timeoutSec * 1000
+    : turnTimeBudgetMs + WRAP_UP_ROOM_MS;
 }
 
 /** 绝对时刻（`Date.now()` 的刻度），或者「没有总闸」。 */
@@ -131,7 +133,8 @@ export function clamp(
   now: number = Date.now(),
 ): Clamped {
   const remaining = remainingMs(now);
-  if (remaining === undefined) return want === undefined ? { ms: undefined } : { ms: want };
+  if (remaining === undefined)
+    return want === undefined ? { ms: undefined } : { ms: want };
 
   const room = Math.max(0, remaining - marginMs);
   if (want === undefined) return { ms: room };

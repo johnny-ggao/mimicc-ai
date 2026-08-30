@@ -25,7 +25,9 @@ import { setProcessDeadline, WRAP_UP_ROOM_MS } from "@/deadline";
 const aiWithTools = () =>
   new AIMessage({
     content: "planning",
-    tool_calls: [{ name: "Bash", args: { command: "ls" }, id: "c1", type: "tool_call" }],
+    tool_calls: [
+      { name: "Bash", args: { command: "ls" }, id: "c1", type: "tool_call" },
+    ],
   });
 
 const aiFinal = () => new AIMessage({ content: "done, here is the answer" });
@@ -65,9 +67,9 @@ async function round(
 /** The afterModel hook, unwrapped from the function-or-{hook} union. */
 function afterModel(middleware: ReturnType<typeof turnBudget>) {
   const hook = middleware.afterModel;
-  return (typeof hook === "function" ? hook : hook?.hook) as (
-    state: { messages?: unknown[] },
-  ) => { messages?: unknown[] } | undefined;
+  return (typeof hook === "function" ? hook : hook?.hook) as (state: {
+    messages?: unknown[];
+  }) => { messages?: unknown[] } | undefined;
 }
 
 /** The beforeAgent hook, unwrapped the same way. */
@@ -79,7 +81,11 @@ function beforeAgent(middleware: ReturnType<typeof turnBudget>) {
 describe("the turn budget", () => {
   test("a turn under budget passes through untouched", () => {
     const capped: string[] = [];
-    const middleware = turnBudget({ tokenBudget: 1_000, timeBudgetMs: 60_000, onCap: (r) => capped.push(r) });
+    const middleware = turnBudget({
+      tokenBudget: 1_000,
+      timeBudgetMs: 60_000,
+      onCap: (r) => capped.push(r),
+    });
 
     beforeAgent(middleware)();
     const state = { messages: [aiWithTools()] };
@@ -89,7 +95,11 @@ describe("the turn budget", () => {
 
   test("an over-budget turn is warned once, then capped when tools keep coming", async () => {
     const capped: string[] = [];
-    const middleware = turnBudget({ tokenBudget: 100, timeBudgetMs: 60_000, onCap: (r) => capped.push(r) });
+    const middleware = turnBudget({
+      tokenBudget: 100,
+      timeBudgetMs: 60_000,
+      onCap: (r) => capped.push(r),
+    });
 
     beforeAgent(middleware)();
 
@@ -118,7 +128,11 @@ describe("the turn budget", () => {
 
   test("a model that hands in an answer after the warning ends the turn cleanly", async () => {
     const capped: string[] = [];
-    const middleware = turnBudget({ tokenBudget: 100, timeBudgetMs: 60_000, onCap: (r) => capped.push(r) });
+    const middleware = turnBudget({
+      tokenBudget: 100,
+      timeBudgetMs: 60_000,
+      onCap: (r) => capped.push(r),
+    });
 
     beforeAgent(middleware)();
     await round(middleware, 150);
@@ -131,7 +145,11 @@ describe("the turn budget", () => {
 
   test("crossing the budget on the final answer does not intervene", async () => {
     const capped: string[] = [];
-    const middleware = turnBudget({ tokenBudget: 100, timeBudgetMs: 60_000, onCap: (r) => capped.push(r) });
+    const middleware = turnBudget({
+      tokenBudget: 100,
+      timeBudgetMs: 60_000,
+      onCap: (r) => capped.push(r),
+    });
 
     beforeAgent(middleware)();
     await round(middleware, 150);

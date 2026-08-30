@@ -236,7 +236,10 @@ test("every registered tool has an explicit confirmation decision", () => {
 // registry it gains Skill, after Task in the order the prompt advertises.
 test("the Skill tool is registered when a registry exists, after Task", () => {
   const registered = registeredTools(
-    { model: new FakeListChatModel({ responses: ["unused"] }), modelFor: () => new FakeListChatModel({ responses: ["unused"] }) },
+    {
+      model: new FakeListChatModel({ responses: ["unused"] }),
+      modelFor: () => new FakeListChatModel({ responses: ["unused"] }),
+    },
     new SkillRegistry([]),
   ).map((tool) => tool.name);
 

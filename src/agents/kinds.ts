@@ -168,8 +168,17 @@ export function agentStack(
   identity: string,
   environment: AgentEnvironment,
 ): AnyAgentMiddleware[] {
-  const { model, modelFor, outputBudget, instructions, memory, onUsage, onWindow, window, rules } =
-    environment;
+  const {
+    model,
+    modelFor,
+    outputBudget,
+    instructions,
+    memory,
+    onUsage,
+    onWindow,
+    window,
+    rules,
+  } = environment;
 
   const stack = [
     // Outside the meter, because it decides which messages are sent — and the

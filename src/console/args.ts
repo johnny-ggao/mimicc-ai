@@ -119,7 +119,12 @@ export function parseArgs(argv: string[]): Invocation {
         message: `--print cannot be combined with --resume\n${USAGE}`,
       };
     }
-    return { kind: "print", task, auto, ...(timeoutSec !== undefined ? { timeoutSec } : {}) };
+    return {
+      kind: "print",
+      task,
+      auto,
+      ...(timeoutSec !== undefined ? { timeoutSec } : {}),
+    };
   }
 
   // 交互式没有总闸，因为人就是那把钟（CONTEXT.md「期限」）。一个在这里被静默忽略的

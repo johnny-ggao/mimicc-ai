@@ -96,7 +96,10 @@ describe("resolveModelConfig", () => {
   it("throws for an unknown model, listing the allowed ones", () => {
     expect(() =>
       resolveModelConfig(
-        loadConfig({ LLM_DEEPSEEK_API_KEY: "dk", LLM_MODEL: "deepseek-v9-nonexistent" }),
+        loadConfig({
+          LLM_DEEPSEEK_API_KEY: "dk",
+          LLM_MODEL: "deepseek-v9-nonexistent",
+        }),
       ),
     ).toThrow(/deepseek-v4-flash/);
   });

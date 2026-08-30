@@ -145,7 +145,11 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       // from `.env` on 2026-08-24 and nothing here can reach that API today.
       // Run `bun repro/32-what-the-provider-allows.ts` with a Moonshot key to
       // replace them with measured values.
-      "kimi-k3": { windowLimit: 1_048_576, maxOutputTokens: 131_072, sendsMaxTokens: false },
+      "kimi-k3": {
+        windowLimit: 1_048_576,
+        maxOutputTokens: 131_072,
+        sendsMaxTokens: false,
+      },
       "kimi-k2.7-code": { windowLimit: 262_144, maxOutputTokens: 32_768 },
       "kimi-k2.6": { windowLimit: 262_144, maxOutputTokens: 32_768 },
     },

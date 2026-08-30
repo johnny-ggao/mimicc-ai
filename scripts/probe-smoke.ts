@@ -244,7 +244,9 @@ for (const file of files) {
 
 const failed = results.filter((result) => !result.ok);
 const retiredNote =
-  files.length === live.length ? "" : `（另有 ${String(files.length - live.length)} 个已退役）`;
+  files.length === live.length
+    ? ""
+    : `（另有 ${String(files.length - live.length)} 个已退役）`;
 process.stdout.write(
   `\n${failed.length === 0 ? `✅ 全部起得来${retiredNote}` : `🔴 ${String(failed.length)} 个起不来${retiredNote}`}\n`,
 );

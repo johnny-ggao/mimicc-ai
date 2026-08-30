@@ -99,7 +99,10 @@ export function assertBlocksInFrequencyOrder(
     if (middleware === undefined || middleware.beforeAgent === undefined) continue;
     const freq = blocks[middleware.name ?? ""];
     if (freq === undefined || freq === "notABlock") continue;
-    if (previous !== undefined && FREQ_ORDER.indexOf(freq) < FREQ_ORDER.indexOf(previous.freq)) {
+    if (
+      previous !== undefined &&
+      FREQ_ORDER.indexOf(freq) < FREQ_ORDER.indexOf(previous.freq)
+    ) {
       throw new Error(
         `${middleware.name ?? "an unnamed middleware"} ("${freq}", index ${index}) sits after ${previous.name} ("${previous.freq}", index ${previous.index}). Blocks are ordered least-changing first: never, then rare, then perTurn.`,
       );

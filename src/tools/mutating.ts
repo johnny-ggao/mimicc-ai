@@ -431,7 +431,10 @@ function resolveTimeoutMs(timeout: number | undefined): Clamped {
       );
     }
   }
-  return clamp(timeout === undefined ? ceilingMs : timeout * 1000, RUN_DEADLINE_MARGIN_MS);
+  return clamp(
+    timeout === undefined ? ceilingMs : timeout * 1000,
+    RUN_DEADLINE_MARGIN_MS,
+  );
 }
 
 export const bashTool = tool(

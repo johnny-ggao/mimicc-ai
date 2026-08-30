@@ -58,7 +58,8 @@ export interface TurnBudgetOptions {
 
 /** How many input tokens one model call consumed, or 0 when the reply carries none. */
 function inputTokensOf(message: BaseMessage): number {
-  const usage = (message as { usage_metadata?: { input_tokens?: number } }).usage_metadata;
+  const usage = (message as { usage_metadata?: { input_tokens?: number } })
+    .usage_metadata;
   return usage?.input_tokens ?? 0;
 }
 
