@@ -11,8 +11,14 @@ import {
 } from "../src/context/compaction";
 
 describe("resolveModelConfig", () => {
+  // `LLM_PROVIDER` is spelled out in every DeepSeek case below. It used to be
+  // implied — the schema's default was `deepseek` until 2026-08-30 — and leaving
+  // it implied after the default moved would have quietly re-pointed these
+  // assertions at 智谱 while the test names still said DeepSeek.
   it("resolves DeepSeek defaults from the canonical key", () => {
-    const r = resolveModelConfig(loadConfig({ LLM_DEEPSEEK_API_KEY: "dk" }));
+    const r = resolveModelConfig(
+      loadConfig({ LLM_PROVIDER: "deepseek", LLM_DEEPSEEK_API_KEY: "dk" }),
+    );
 
     expect(r.provider).toBe("deepseek");
     expect(r.model).toBe("deepseek-v4-flash");
@@ -25,7 +31,9 @@ describe("resolveModelConfig", () => {
   });
 
   it("falls back to the legacy LLM_API_KEY for DeepSeek and flags it", () => {
-    const r = resolveModelConfig(loadConfig({ LLM_API_KEY: "legacy" }));
+    const r = resolveModelConfig(
+      loadConfig({ LLM_PROVIDER: "deepseek", LLM_API_KEY: "legacy" }),
+    );
 
     expect(r.apiKey).toBe("legacy");
     expect(r.usedLegacyKey).toBe(true);
@@ -33,7 +41,11 @@ describe("resolveModelConfig", () => {
 
   it("prefers the canonical key over the legacy alias", () => {
     const r = resolveModelConfig(
-      loadConfig({ LLM_DEEPSEEK_API_KEY: "canonical", LLM_API_KEY: "legacy" }),
+      loadConfig({
+        LLM_PROVIDER: "deepseek",
+        LLM_DEEPSEEK_API_KEY: "canonical",
+        LLM_API_KEY: "legacy",
+      }),
     );
 
     expect(r.apiKey).toBe("canonical");
@@ -73,10 +85,11 @@ describe("resolveModelConfig", () => {
     expect(r.windowLimit).toBe(262_144);
   });
 
-  it("resolves 智谱 with its only registered model", () => {
-    const r = resolveModelConfig(
-      loadConfig({ LLM_PROVIDER: "zhipu-cn", LLM_ZHIPU_CN_API_KEY: "zk" }),
-    );
+  it("resolves 智谱 with its only registered model — and it is the default", () => {
+    // No `LLM_PROVIDER` here on purpose: 智谱 is the schema default since
+    // 2026-08-30, so the default gets a case of its own rather than only ever
+    // being the thing every other case spells out to avoid.
+    const r = resolveModelConfig(loadConfig({ LLM_ZHIPU_CN_API_KEY: "zk" }));
 
     expect(r.provider).toBe("zhipu-cn");
     expect(r.model).toBe("glm-5.3-flash");
@@ -102,6 +115,7 @@ describe("resolveModelConfig", () => {
   it("honours the LLM_BASE_URL override", () => {
     const r = resolveModelConfig(
       loadConfig({
+        LLM_PROVIDER: "deepseek",
         LLM_DEEPSEEK_API_KEY: "dk",
         LLM_BASE_URL: "https://proxy.example/v1",
       }),
@@ -124,6 +138,7 @@ describe("resolveModelConfig", () => {
     expect(() =>
       resolveModelConfig(
         loadConfig({
+          LLM_PROVIDER: "deepseek",
           LLM_DEEPSEEK_API_KEY: "dk",
           LLM_MODEL: "deepseek-v9-nonexistent",
         }),
@@ -133,14 +148,23 @@ describe("resolveModelConfig", () => {
 
   it("resolves deepseek-v4-pro, which GET /models lists alongside flash", () => {
     const r = resolveModelConfig(
-      loadConfig({ LLM_DEEPSEEK_API_KEY: "dk", LLM_MODEL: "deepseek-v4-pro" }),
+      loadConfig({
+        LLM_PROVIDER: "deepseek",
+        LLM_DEEPSEEK_API_KEY: "dk",
+        LLM_MODEL: "deepseek-v4-pro",
+      }),
     );
     expect(r.model).toBe("deepseek-v4-pro");
     expect(r.windowLimit).toBe(1_048_576);
   });
 
   it("throws for a missing key, naming the variable", () => {
-    expect(() => resolveModelConfig(loadConfig({}))).toThrow(/LLM_DEEPSEEK_API_KEY/);
+    expect(() => resolveModelConfig(loadConfig({ LLM_PROVIDER: "deepseek" }))).toThrow(
+      /LLM_DEEPSEEK_API_KEY/,
+    );
+    // The empty environment lands on 智谱 now, and pinning that is the point:
+    // this line is what a `.env`-less run actually does.
+    expect(() => resolveModelConfig(loadConfig({}))).toThrow(/LLM_ZHIPU_CN_API_KEY/);
     expect(() =>
       resolveModelConfig(loadConfig({ LLM_PROVIDER: "moonshot-cn" })),
     ).toThrow(/LLM_MOONSHOT_CN_API_KEY/);
@@ -233,7 +257,9 @@ describe("overflow codes travel from the registry to the judge", () => {
   it("is empty for a provider langchain already recognises", () => {
     // Not an oversight: DeepSeek's refusal says `maximum context length`, which
     // langchain matches. Empty means checked, not skipped.
-    const r = resolveModelConfig(loadConfig({ LLM_DEEPSEEK_API_KEY: "dk" }));
+    const r = resolveModelConfig(
+      loadConfig({ LLM_PROVIDER: "deepseek", LLM_DEEPSEEK_API_KEY: "dk" }),
+    );
     expect(r.overflowCodes).toEqual([]);
   });
 

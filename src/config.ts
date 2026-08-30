@@ -17,7 +17,19 @@ const envSchema = z.object({
   // Which provider the program runs on. Validated against the registry in
   // `resolveModelConfig`, not here — the registry is the single source of truth
   // for the provider list, and a `z.enum` here would be a second copy to drift.
-  LLM_PROVIDER: z.string().min(1).default("deepseek"),
+  //
+  // ⚠️ **The default moved from `deepseek` to `zhipu-cn` on 2026-08-30**, which
+  // changes what an *empty* environment does, not just what the docs say. Two
+  // consequences worth knowing before moving it again:
+  //   - `LLM_API_KEY`, the deprecated alias, is DeepSeek's key and only
+  //     DeepSeek's. An environment carrying nothing but that used to run; now it
+  //     fails with "missing API key for provider zhipu-cn" until `LLM_PROVIDER`
+  //     names DeepSeek. That is the deprecation working, not a regression — but
+  //     it is a failure at startup, so it should surprise nobody twice.
+  //   - Every test that wants DeepSeek now has to say so. Three in
+  //     `tests/models.test.ts` used to get it by default and would otherwise
+  //     have started asserting 智谱's numbers under a DeepSeek name.
+  LLM_PROVIDER: z.string().min(1).default("zhipu-cn"),
   // Optional: defaults to the selected provider's default model. Must name a
   // model registered for that provider — an unknown name fails at startup,
   // because the window limit a model's overflow protection depends on is a

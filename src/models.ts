@@ -138,6 +138,13 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     // `LLM_API_KEY` was the program's only key before providers existed; it
     // meant DeepSeek. Kept as a narrow, logged alias rather than breaking every
     // existing .env and CI on the day a second provider landed.
+    //
+    // ⚠️ **It stopped being sufficient on its own on 2026-08-30**, when the
+    // schema default moved to `zhipu-cn`: an environment carrying only this
+    // variable no longer selects DeepSeek, it selects 智谱 and then fails for a
+    // missing 智谱 key. The alias still works — `LLM_PROVIDER=deepseek` has to
+    // be set alongside it. Deliberate: an alias that keeps silently steering the
+    // provider choice is not deprecated, it is just undocumented.
     legacyKeyEnvVar: "LLM_API_KEY",
     defaultModel: "deepseek-v4-flash",
     // `GET /models` lists three ids: these two and `deepseek-v4-flash-vision-exp`.

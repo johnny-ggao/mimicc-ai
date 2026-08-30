@@ -10,7 +10,7 @@ describe("loadConfig", () => {
 
     expect(config.NODE_ENV).toBe("development");
     expect(config.LOG_LEVEL).toBe("info");
-    expect(config.LLM_PROVIDER).toBe("deepseek");
+    expect(config.LLM_PROVIDER).toBe("zhipu-cn");
     expect(config.LLM_MODEL).toBeUndefined();
     expect(config.LLM_BASE_URL).toBeUndefined();
   });

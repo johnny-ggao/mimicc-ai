@@ -165,7 +165,7 @@ baseURL、默认模型、API key 变量，每个模型自带窗口上限和 maxT
 
 | 变量                      | 必填           | 默认值                 | 说明                                     |
 | ------------------------- | -------------- | ---------------------- | ---------------------------------------- |
-| `LLM_PROVIDER`            | 否             | `deepseek`             | `deepseek` / `moonshot-cn` / `zhipu-cn`  |
+| `LLM_PROVIDER`            | 否             | `zhipu-cn`             | `zhipu-cn` / `deepseek` / `moonshot-cn`  |
 | `LLM_DEEPSEEK_API_KEY`    | 选 DeepSeek 时 | 无                     | DeepSeek key；`LLM_API_KEY` 是其弃用别名 |
 | `LLM_MOONSHOT_CN_API_KEY` | 选 Moonshot 时 | 无                     | Moonshot 中国区 key                      |
 | `LLM_ZHIPU_CN_API_KEY`    | 选智谱时       | 无                     | 智谱开放平台 key（国内区）               |
@@ -189,6 +189,11 @@ DeepSeek 默认模型 `deepseek-v4-flash`；Moonshot 中国区默认 `kimi-k3`�
 
 `LLM_MODEL` 必须是注册表里写明的模型：窗口上限是溢出保护靠它算的，而对一个没核实过窗口的别名
 猜一个数，正是这里拒绝的事。
+
+⚠️ **默认 provider 2026-08-30 从 `deepseek` 改成了 `zhipu-cn`**，这改的是**空环境**的行为，
+不只是文档：只带 `LLM_API_KEY`（DeepSeek 的弃用别名）的环境以前能跑，现在会在启动时报
+「missing API key for provider "zhipu-cn"」，要一并设 `LLM_PROVIDER=deepseek`。
+**这是弃用在生效，不是回归**——但它发生在启动那一刻，所以写在这里，别让人踩第二次。
 
 ## 控制台
 
