@@ -50,11 +50,12 @@ src/
   checkpoint/    落盘：session 文件、旁挂的工具流水、消息编解码
   session/       盘上的 session：列出、打开、前缀解析
   console/       用户面对的终端：REPL、渲染、选择器、输入队列、花费
-  tools/         工具与它们的护栏
-  skills/        外部装的技能：读取、目录、Skill 工具
+  tools/         工具与它们的护栏（含 WebSearch 的后端接缝、WebFetch 的外化与 SSRF 地板）
+  skills/        技能：读取、目录、Skill 工具；外部装的与随产品内嵌的走同一条解析路径
   memory/        跨 session 的记忆
+skills/          内嵌技能的正本（research）：`bun build` 时编译进产物，零安装
 tests/           与 src 同构，`bun test` 全量跑
-docs/adr/        判过的架构决定（八条）
+docs/adr/        判过的架构决定（十条）
 repro/           复现探针：每个脚本回答一个「当时不知道」的问题
 bench/           量测基线
 learn/           教学工作区（已在 prettier / eslint 里排除）
@@ -230,6 +231,39 @@ DeepSeek 默认模型 `deepseek-v4-flash`；Moonshot 中国区默认 `kimi-k3`�
 **被 Ctrl+C 打断的回复不会进入历史**：状态只在节点边界提交，已经流出来的正文只存在于终端上。
 
 日志走 stderr，所以 `LOG_LEVEL=warn` 能得到干净的对话记录，`bun run chat 2>/dev/null` 也行。
+
+## 联网与调研
+
+主 agent 带两个网络工具，都是**客户端第一性工具**——搜索刻意不走模型供应商的服务端内嵌搜索：
+服务端搜索绕过秤、工具流水与权限门，这个取舍写在 `src/tools/websearch.ts` 的头注里。
+
+| 工具        | 注册条件         | 作用                                                                                                                                                                                                      |
+| ----------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WebFetch`  | 无条件           | 抓公网页面转 markdown。私网/内网地址一律拒（SSRF 地板）；超 12k 字符的页面落盘 `$TMPDIR/mimicc-web/`，上下文只留确定性摘要+路径，模型自己 `Read` 全文；抓回内容做控制标签中和（`src/tools/untrusted.ts`） |
+| `WebSearch` | 配置解析出后端时 | 搜索。后端可换——`src/tools/websearch.ts` 的 `SearchBackend` 是接缝，一次只养活一个后端。没配后端：工具不注册，**提示词也不教**（同一个开关，摘除走 `--exclude-tools` 的改写机器）                         |
+
+| 变量                        | 必填 | 默认值             | 说明                                     |
+| --------------------------- | ---- | ------------------ | ---------------------------------------- |
+| `MIMICC_WEB_SEARCH_BACKEND` | 否   | `zhipu-web-search` | 搜索后端；`off` 关闭；名字打错启动即报错 |
+
+后端 `zhipu-web-search` 复用 `LLM_ZHIPU_CN_API_KEY`，打智谱**独立搜索 API**
+（`POST /api/paas/v4/web_search`，¥0.01/次）。⚠️ **它按次计费走平台余额，不走 Coding Plan
+套餐**——套餐 key 没充余额时每发 `429 1113`，错误原话会到模型面前（`repro/56` 两轮实测：
+充值前 429、充值后 200）。
+
+**Research 子 agent**：`Task` 有两种 kind——`explore` 查这个仓库，`research` 查公网
+（白名单 `WebSearch / WebFetch / Read`，只读，ADR 0003 照守；`Read` 在场是为读回 WebFetch
+外化落盘的大页面）。research 与 WebSearch 同一个开关：没有搜索后端就不提供这个 kind。
+种类是 `src/agents/kinds.ts` 里的数据；「派遣不得提权」（子 agent 白名单 ⊆ 主 agent 在册工具）
+有装配期断言钉着。
+
+**内嵌技能**：`skills/research/SKILL.md`（调研方法论）在 `bun build` 时编译进产物，零安装；
+优先级 `~/.mimicc/skills` > 内嵌 > `~/.claude/skills`，先见者胜、被遮蔽的写
+`skill_shadowed` 日志。技能的 frontmatter 可声明 `requires:`（逗号分隔的工具名）——
+声明了而本次运行给不了的技能**不进目录**，`skill_unavailable` 日志写明缺了什么；
+不声明的照旧放行。
+
+「何时搜、何时派」都只是系统提示词里的软判据——**组合靠模型推断，产品里没有场景检测的硬逻辑**。
 
 ## 循环
 
