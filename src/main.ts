@@ -13,7 +13,7 @@ import { resolveMemoryDirs } from "./memory";
 import { buildSystemPrompt, type PromptEnvironment } from "./agents";
 import { parseArgs, runOnce, runRepl, type Start } from "./console";
 import { resolveSession } from "./session";
-import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
+import { defaultSkills, SkillRegistry } from "./skills";
 import {
   killRunningCommands,
   resolveSearchBackend,
@@ -136,9 +136,10 @@ async function main(): Promise<void> {
 
   // Same reasoning as the instructions above: read once, here, so the agent
   // builder never touches the filesystem. Skills come from outside the working
-  // directory (~/.mimicc/skills and ~/.claude/skills), which is also why they
-  // are read by name here and not reachable through the Read tool.
-  const skills = new SkillRegistry(loadSkills(defaultSkillRoots(), log));
+  // directory (~/.mimicc/skills and ~/.claude/skills) plus the set bundled into
+  // the program itself — precedence and the bundling story live in
+  // `skills/index.ts`.
+  const skills = new SkillRegistry(defaultSkills(log));
 
   const graph = createUniversalAgent({
     baseURL: model.baseURL,

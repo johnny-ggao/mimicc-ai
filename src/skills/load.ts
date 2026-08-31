@@ -55,25 +55,39 @@ export interface Skill {
  * there is nothing more to say about it. A root that does not exist, a directory
  * with no `SKILL.md`, and a file that will not parse are all skipped rather than
  * fatal: one broken skill must not take down the whole list it sits in.
+ */
+export function loadSkills(roots: string[], log: Logger): Skill[] {
+  return mergeSkills(
+    roots.map((root) =>
+      listSkillDirs(root)
+        .map((dir) => readSkill(dir, log))
+        .filter((skill): skill is Skill => skill !== undefined),
+    ),
+    log,
+  );
+}
+
+/**
+ * First group wins on a name collision, and the loser is warned by name and
+ * origin — shadowing is a feature, silent shadowing is a mystery. Groups exist
+ * because a precedence slot is not always a directory: the bundled skills
+ * (`bundled.ts`) sit between the user's mimicc root and the borrowed Claude
+ * root, and they were never on disk.
  *
  * Sorted by name, because the catalogue rides in the injected context and a
  * stable order is what keeps it byte-identical between runs.
  */
-export function loadSkills(roots: string[], log: Logger): Skill[] {
+export function mergeSkills(groups: readonly Skill[][], log: Logger): Skill[] {
   const byName = new Map<string, Skill>();
-
-  for (const root of roots) {
-    for (const dir of listSkillDirs(root)) {
-      const skill = readSkill(dir, log);
-      if (skill === undefined) continue;
+  for (const group of groups) {
+    for (const skill of group) {
       if (byName.has(skill.name)) {
-        log.warn("skill_shadowed", { name: skill.name, dir, root });
+        log.warn("skill_shadowed", { name: skill.name, dir: skill.dir });
         continue;
       }
       byName.set(skill.name, skill);
     }
   }
-
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -109,7 +123,21 @@ function listSkillDirs(root: string): string[] {
 function readSkill(dir: string, log: Logger): Skill | undefined {
   const raw = readRaw(dir, log);
   if (raw === undefined) return undefined;
+  return skillFromRaw(raw, dir, siblingFiles(dir), log);
+}
 
+/**
+ * One skill from its raw SKILL.md text. The seam the bundled skills come
+ * through (`bundled.ts`): parsing, validation and clipping are identical
+ * whether the bytes came off disk or out of the compiled bundle, so `requires`
+ * filtering and the catalogue never learn the difference.
+ */
+export function skillFromRaw(
+  raw: string,
+  dir: string,
+  files: string[],
+  log: Logger,
+): Skill | undefined {
   const parsed = parseFrontmatter(raw);
   if (parsed === undefined) {
     log.warn("skill_no_frontmatter", { dir });
@@ -128,7 +156,7 @@ function readSkill(dir: string, log: Logger): Skill | undefined {
     ...(parsed.requires !== undefined ? { requires: parsed.requires } : {}),
     dir,
     body: clip(parsed.body.trim()),
-    files: siblingFiles(dir),
+    files,
   };
 }
 

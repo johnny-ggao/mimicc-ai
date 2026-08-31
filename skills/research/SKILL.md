@@ -4,19 +4,6 @@ description: Structured deep research on a question the repository cannot answer
 requires: WebSearch, WebFetch
 ---
 
-<!--
-mimicc 自己的 research skill（research-kind 票 02 的「替换半」）。
-
-正本在仓库 `skills/research/`，安装位是 `~/.mimicc/skills/research/`——装在那里
-才「在册」，且按 defaultSkillRoots 的先后遮蔽 `~/.claude/skills/research`（借来的
-那份写给 Claude Code，在这里承诺兑现不了；frontmatter 的 `requires` 机制管的就是
-这一类）。两处内容以正本为准，改动后手动同步，直到「随产品捆绑的 skill 根」被判。
-
-形状抄 deer-flow `skills/public/deep-research/SKILL.md`（@5d520e44）的机制：分阶段、
-信息类型多样性、时间精度表；常数与语气不抄。**它是打法不是硬功能**：何时搜、何时派
-始终是模型的判断——这份文件只是把好判断的形状写下来。
--->
-
 A method, not a mandate: size the depth to the question. One fresh fact needs one
 search; a real investigation earns the phases below.
 

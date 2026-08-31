@@ -3,8 +3,11 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  BUNDLED_DIR,
+  bundledSkills,
   createSkillTool,
   loadSkills,
+  mergeSkills,
   parseSkillCommand,
   renderSkillList,
   skillActivationMessage,
@@ -486,5 +489,56 @@ describe("declared requirements", () => {
     expect(research?.requires).toEqual(["WebSearch", "WebFetch"]);
     expect(research?.modelInvokable).toBe(true);
     expect(research?.body).toContain("[citation:Title](URL)");
+  });
+});
+
+/**
+ * Bundled skills (research-kind ticket 02, reshaped on the user's call): the
+ * research skill ships inside the compiled program — no install step, no path
+ * to break — and takes the same parsing path as an installed skill.
+ */
+describe("bundled skills", () => {
+  test("the research skill rides in the binary, parsed like any other", () => {
+    const bundled = bundledSkills(recorder().log);
+    const research = bundled.find((skill) => skill.name === "research");
+
+    expect(research?.requires).toEqual(["WebSearch", "WebFetch"]);
+    expect(research?.modelInvokable).toBe(true);
+    // No directory, no auxiliary files: the sentinel keeps readFile's
+    // confinement meaningless rather than dangerous.
+    expect(research?.dir).toBe(BUNDLED_DIR);
+    expect(research?.files).toEqual([]);
+  });
+
+  test("precedence: the user's own skill beats bundled, bundled beats borrowed", () => {
+    const stub = (name: string, dir: string) => ({
+      name,
+      description: `from ${dir}`,
+      modelInvokable: true,
+      dir,
+      body: "b",
+      files: [],
+    });
+    const { log, lines } = recorder();
+
+    const merged = mergeSkills(
+      [
+        [stub("research", "/user")],
+        bundledSkills(log),
+        [stub("research", "/borrowed")],
+      ],
+      log,
+    );
+    expect(merged.find((skill) => skill.name === "research")?.dir).toBe("/user");
+
+    const withoutUser = mergeSkills(
+      [[], bundledSkills(log), [stub("research", "/borrowed")]],
+      log,
+    );
+    expect(withoutUser.find((skill) => skill.name === "research")?.dir).toBe(
+      BUNDLED_DIR,
+    );
+    // The loser is named, both times — silent shadowing is a mystery.
+    expect(lines.filter((line) => line.includes("skill_shadowed")).length).toBe(3);
   });
 });
