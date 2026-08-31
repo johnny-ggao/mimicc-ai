@@ -148,6 +148,16 @@ describe("the WebSearch tool", () => {
     expect(text).toContain("2. Two\n   https://b\n   second");
   });
 
+  test("a hit without a URL says so instead of rendering a blank line", async () => {
+    // Measured on the live backend (2026-08-31): within one response some hits
+    // carry `link` and some do not, varying by source. The model needs to know
+    // which results it cannot WebFetch.
+    const { backend } = fake([{ title: "NoLink", url: "", content: "text" }]);
+    const text = await createWebSearchTool(backend).invoke({ query: "q" });
+
+    expect(text).toContain("(no URL from the backend for this hit)");
+  });
+
   test("no hits says so — distinguishable from an error and from silence", async () => {
     const { backend } = fake([]);
     expect(await createWebSearchTool(backend).invoke({ query: "xyzzy" })).toBe(

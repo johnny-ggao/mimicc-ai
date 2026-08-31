@@ -22,12 +22,12 @@ import { neutralizeControlTags } from "./untrusted";
  * for thirteen community adapters and got "one swappable web_search" back,
  * which is the trade this seam takes without the thirteen.
  *
- * ⚠️ The shipped backend (智谱 standalone Web Search API) is implemented and
- * **known unreachable on the current key**: `repro/56` measured `429 1113` —
- * the Coding Plan subscription does not cover the standalone search endpoint,
- * which bills per call from the platform balance. The tool registers anyway
- * when the key exists, and the 1113 message reaches the model verbatim on use:
- * a tool that fails out loud beats a capability that silently vanished.
+ * The shipped backend is 智谱's standalone Web Search API. It bills per call
+ * from the *platform balance*, not the Coding Plan the chat endpoint runs on —
+ * `repro/56` measured `429 1113` on an unfunded account, and `200` after a
+ * small top-up (2026-08-31). When the account runs dry again the 1113 message
+ * reaches the model verbatim: a tool that fails out loud beats a capability
+ * that silently vanished.
  */
 
 /** One search result, normalised across backends. */
@@ -192,7 +192,12 @@ export function createWebSearchTool(backend: SearchBackend) {
       const rendered = hits
         .map((hit, index) => {
           const date = hit.publishDate === undefined ? "" : ` (${hit.publishDate})`;
-          return `${String(index + 1)}. ${hit.title}${date}\n   ${hit.url}\n   ${hit.content}`;
+          // 智谱 search_std 逐条地有时不给 link（实测 2026-08-31：同一响应里
+          // 有的条目带、有的不带，随来源变）。空行是无声的谎——说出来，模型
+          // 才知道这一条没法 WebFetch 跟进。
+          const url =
+            hit.url === "" ? "(no URL from the backend for this hit)" : hit.url;
+          return `${String(index + 1)}. ${hit.title}${date}\n   ${url}\n   ${hit.content}`;
         })
         .join("\n");
       // Search snippets are remote content — the same neutralisation WebFetch
