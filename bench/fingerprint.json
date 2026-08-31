@@ -1,0 +1,13 @@
+{
+  "why": "bench 冻结面的指纹。改动这里列的任何文件 = 作废全部历史基线（bench/README.md）。有意作废时：bun scripts/bench-fingerprint.ts --write，新指纹与改动一起提交，提交信息写明「作废基线」。",
+  "files": {
+    "fixture-agents-md/AGENTS.md": "d8eed4f24ba74c1b83a768f8249711aece0eae38d5c0f1297ee9866f3fb04e6a",
+    "fixture-edit/scheduler.ts": "ec368343a48db7a5751794001bccbc5d8b9e4af0b8476ff075de02251de6904a",
+    "fixture/backoff.ts": "bdfbcacaad42b6c4e1ca125d8ce725e62ae0b9208dfb8eeb0a974c461cec5325",
+    "fixture/settings.ts": "17448264ab51f7d952a9da2f51b952d19858f5720c63e0bfef3a65bf7cfde078",
+    "fixture/telemetry.ts": "7d8708b83827fde321a47f3089d9a7d30c72b02576b750565728d961bdc58c1f",
+    "measure-agents-md.ts": "7f947aa16dea71a1a79c9d229b41bf06a8e28619690e451480824b96ad285b6a",
+    "measure-reread.ts": "b48696f84836006c0b51d3102a543b3afb9e9858ee988f6b63fd63b3b1a71325",
+    "measure.ts": "fd9036b9bc12b66e12e6e316dc27fa3c1328bdca830db0ad89939b28c60e581b"
+  }
+}

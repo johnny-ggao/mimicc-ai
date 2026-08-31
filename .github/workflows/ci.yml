@@ -37,4 +37,9 @@ jobs:
       # 花钱的三个跑在本地 stub 上，CI 不会掏钱。
       - run: bun run probes:smoke
 
+      # bench/ 不进 lint / typecheck / 冒烟（bench/README.md 的决定），是守卫的三不管
+      # 地带。这一步对账冻结面的指纹：手改 fixture 或 measure 脚本 = 作废历史基线，
+      # 必须在 git 里看得见，不许无声通过。
+      - run: bun run bench:fingerprint
+
       - run: bun run build

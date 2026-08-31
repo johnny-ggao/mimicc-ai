@@ -22,6 +22,10 @@ bun bench/measure.ts
   要加场景就新开一个文件（`measure-agents-md.ts` 就是这么来的）。
 - 因此这个目录**不进 prettier / eslint / tsconfig**：一次重排就够毁掉可比性。它进 git 是因为
   它是 `docs/adr/` 与 `CONTEXT.md` 里那些结论的证据，不是因为它是产品代码。
+- 上面两条自 2026-08-31 起有指纹对账：`bun run bench:fingerprint`（CI 每次 push 跑，
+  守卫在 `scripts/bench-fingerprint.ts`）。**有意作废基线**时 `--write` 重打指纹，
+  与改动一起提交并在提交信息里写明——挡的是无声改，不是改。
+- 外部 benchmark（Terminal-Bench）的标准配置与断线记账在 [`external.md`](external.md)。
 
 ## 判据挂在哪
 
