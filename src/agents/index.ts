@@ -33,9 +33,11 @@ export { turnBudget } from "./turnBudget";
 export type { TurnCapReason } from "./loopguard";
 export {
   agentStack,
+  assertDispatchNeverEscalates,
   assertMeterInsideWindow,
   EXPLORE_PROMPT,
   EXPLORE_TOOLS,
+  RESEARCH_PROMPT,
   subagentSpecs,
   type AgentEnvironment,
 } from "./kinds";

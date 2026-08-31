@@ -4,10 +4,14 @@ import type { AnyAgentMiddleware } from "langchain";
 import { pinTurnTask, projectInstructions } from "../context";
 import { injectMemory, type MemoryStore } from "../memory";
 import { OUTPUT_BUDGET } from "../models";
+import type { ClientTool } from "@langchain/core/tools";
+
 import {
+  createWebSearchTool,
   globTool,
   grepTool,
   readTool,
+  webFetchTool,
   type SearchBackend,
   type SubagentSpec,
 } from "../tools";
@@ -79,6 +83,37 @@ Report like this:
 Write the report in the language of the task you were given.`;
 
 /**
+ * The Research agent's system prompt.
+ *
+ * The skeleton is pi's `scout.md` (checked @46bb9a2c3): a read-only tool
+ * whitelist, a thoroughness knob with a default, the one constraint that shapes
+ * everything — whoever reads the report has not seen what the agent read — and
+ * a forced structure for what comes back. The citation shape is deer-flow's
+ * (`subagents/builtins/general_purpose.py:49-58`).
+ *
+ * The word "Research" appearing here is load-bearing the same way "Explore" is
+ * above: tests tell a subagent's request from its parent's by the system message.
+ */
+export const RESEARCH_PROMPT = `You are a Research agent: a read-only subagent dispatched by mimicc to investigate one question against the public web.
+
+You have three tools: WebSearch, WebFetch, Read. Search to find sources; fetch to actually read one — a large page is saved to a file and returned as a synopsis, and Read on the reported path gets you the rest. You cannot change files, run commands, or dispatch subagents of your own. Do not offer to.
+
+Thoroughness: the task may name a level. quick — one search, answer from the best snippets. medium — follow the two or three most promising results and read them. thorough — search from several angles and cross-check claims across sources. Default to medium.
+
+Your working notes are discarded. Only your final message is returned, and whoever reads it has NOT seen anything you searched or read. Anything you leave out is lost.
+
+Report like this:
+
+- Answer the question you were given, first, in one or two sentences.
+- Cite every claim as [citation:Title](URL), with the publish date when timing matters. A claim without a source is not usable.
+- Facts age: prefer the newest source that answers the question, and say when each was published.
+- Flag what rests on a single source, and say what you could not establish, plainly. "No official figure published" is a finding; silence is not.
+- Do not narrate your searching. Which queries you tried and which results were dead ends are noise to the reader.
+- Stay under fifty lines. Quote a source only when the exact wording matters.
+
+Write the report in the language of the task you were given.`;
+
+/**
  * Everything a kind of agent is built from that is not the kind itself.
  *
  * One interface for the main agent and for subagents, because there was never a
@@ -133,10 +168,12 @@ export interface AgentEnvironment {
   /**
    * The live web-search backend, when configuration resolved one.
    *
-   * Main-agent-only today, like memory: `EXPLORE_TOOLS` does not include the
-   * web pair — an Explore investigates *this repository*. The kind that does
-   * carry them is the Research kind (`.scratch/research-kind/`), which will
-   * read this same field when it lands.
+   * Read in two places, and absent means the same thing in both: the main
+   * agent's WebSearch tool is not registered (`registeredTools`), and the
+   * Research kind is not offered ({@link subagentSpecs}) — a research agent
+   * that cannot search is a name pretending to a capability. `EXPLORE_TOOLS`
+   * still does not include the web pair: an Explore investigates *this
+   * repository*.
    */
   webSearch?: SearchBackend;
   /**
@@ -329,6 +366,7 @@ export function subagentSpecs(environment: AgentEnvironment): SubagentSpec[] {
   // billed as something other than what the model dispatched would be a log
   // nobody can join back up.
   const explore = "explore";
+  const research = "research";
 
   return [
     {
@@ -350,5 +388,57 @@ export function subagentSpecs(environment: AgentEnvironment): SubagentSpec[] {
       // where it expected a report.
       middleware: agentStack(explore, environment),
     },
+    // Offered only when a search backend resolved — the same honest default as
+    // the WebSearch tool itself: a research agent that cannot search is a name
+    // pretending to a capability. Read is in the list because WebFetch
+    // externalises big pages to disk; the report-writer has to be able to read
+    // them back. Not in the list, deliberately: Glob/Grep (it investigates the
+    // web, not this repository), Bash, and anything that writes — the kind
+    // stays inside docs/adr/0003, findings come back as text and the parent
+    // decides what lands on disk.
+    ...(environment.webSearch !== undefined
+      ? [
+          {
+            name: research,
+            description:
+              "Read-only web researcher for a question the repository cannot answer. Tools: WebSearch, WebFetch, Read. It cannot change files or run commands. Use it when answering means reading many pages or cross-checking several sources — its reading fills its own context, not this one — and you only need the findings.",
+            prompt: RESEARCH_PROMPT,
+            tools: [createWebSearchTool(environment.webSearch), webFetchTool, readTool],
+            // Same reasoning as Explore's window, only more so: one thorough
+            // dispatch can fetch several externalised pages and Read them back.
+            middleware: agentStack(research, environment),
+          },
+        ]
+      : []),
   ];
+}
+
+/**
+ * Refuses a kind whose whitelist reaches past its parent.
+ *
+ * A dispatch must never escalate: whatever a subagent can do, its parent could
+ * have done directly — that is what makes ADR 0003's "cannot ask, so must not
+ * act" hold transitively, and it is deer-flow's invariant too (parent∩child in
+ * `task_tool.py:166-174`, checked @5d520e44). The failure this guards is quiet
+ * and one edit away: a kind gains a tool in `subagentSpecs` that the assembling
+ * caller does not register on the parent, and the subagent can now do something
+ * the confirmation gate has never heard of. By name, like
+ * {@link assertMeterInsideWindow}, and throwing at assembly for the same
+ * reason: a test runs in CI, an assertion runs on every construction.
+ */
+export function assertDispatchNeverEscalates(
+  specs: readonly SubagentSpec[],
+  parentTools: readonly ClientTool[],
+): void {
+  const parent = new Set(parentTools.map((tool) => tool.name));
+  for (const spec of specs) {
+    for (const tool of spec.tools) {
+      if (!parent.has(tool.name)) {
+        throw new Error(
+          `the ${spec.name} kind carries ${tool.name}, which the parent does not register — ` +
+            `a dispatch must never escalate past its dispatcher`,
+        );
+      }
+    }
+  }
 }

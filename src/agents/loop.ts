@@ -11,7 +11,12 @@ import {
   type InterruptOnConfig,
 } from "langchain";
 
-import { agentStack, subagentSpecs, type AgentEnvironment } from "./kinds";
+import {
+  agentStack,
+  assertDispatchNeverEscalates,
+  subagentSpecs,
+  type AgentEnvironment,
+} from "./kinds";
 import { assertBlocksInFrequencyOrder } from "./blockOrder";
 import { createChatModel } from "./model";
 import { toolRecovery } from "./recovery";
@@ -475,12 +480,14 @@ export const CONFIRMATION_POLICY: Record<string, InterruptOnConfig> = {
     allowedDecisions: ["approve", "reject"],
     description: "Change one span of a file",
   },
-  // An explore agent carries only the three read-only tools, so dispatching one
-  // can do nothing a Read could not. The baseline in `decide` allows it; this
-  // entry exists so the exhaustiveness test still sees every registered tool.
+  // Every dispatchable kind is read-only, so dispatching one can do nothing a
+  // Read or a WebFetch could not — and the escalation assertion in
+  // `allRegisteredTools` keeps that transitively true. The baseline in `decide`
+  // allows it; this entry exists so the exhaustiveness test still sees every
+  // registered tool.
   [TASK_TOOL_NAME]: {
     allowedDecisions: ["approve", "reject"],
-    description: "Dispatch a read-only explore agent",
+    description: "Dispatch a read-only subagent",
   },
   [SKILL_TOOL_NAME]: {
     allowedDecisions: ["approve", "reject"],
@@ -654,10 +661,21 @@ export function registeredTools(
   skills?: SkillRegistry,
   exclude?: readonly string[],
 ): ClientTool[] {
-  const all = allRegisteredTools(environment, skills);
-  if (exclude === undefined || exclude.length === 0) return all;
+  const excluded = new Set(exclude ?? []);
+  // 摘 WebSearch 不能只过滤清单：research kind 里还揣着自己的那份实例，留下它就是
+  // 「派遣提权」——子 agent 能做派遣者被摘掉的事，正是 assertDispatchNeverEscalates
+  // 防的那件。所以在**源头**摘：环境里不带后端，工具和携带它的 kind 一起消失，
+  // 一个开关，所有落点（提示词那一路 main.ts 已用同一个开关走了改写）。
+  const stripped =
+    excluded.has(WEB_SEARCH_TOOL_NAME) && environment.webSearch !== undefined;
+  const effective = stripped ? withoutWebSearch(environment) : environment;
+
+  const all = allRegisteredTools(effective, skills);
+  if (excluded.size === 0) return all;
   const names = new Set(all.map((t) => t.name));
-  for (const name of exclude) {
+  for (const name of excluded) {
+    // 源头摘掉的那个名字当然不在清单里——那是排除生效了，不是打错了。
+    if (name === WEB_SEARCH_TOOL_NAME && stripped) continue;
     // 打错的名字要出声。静默忽略等于让调用方以为自己拿掉了一个工具，
     // 而它还在——同 `--timeout` 那条：**拒绝，不要退回默认值**。
     if (!names.has(name)) {
@@ -666,17 +684,25 @@ export function registeredTools(
       );
     }
   }
-  const excluded = new Set(exclude);
   return all.filter((tool) => !excluded.has(tool.name));
+}
+
+/** The same environment minus the search backend — see the strip note above. */
+function withoutWebSearch(environment: AgentEnvironment): AgentEnvironment {
+  const { webSearch: _stripped, ...rest } = environment;
+  return rest;
 }
 
 function allRegisteredTools(
   environment: AgentEnvironment,
   skills?: SkillRegistry,
 ): ClientTool[] {
-  return [
+  // Hoisted so the escalation assertion below sees the same specs the Task tool
+  // was built from — two calls to `subagentSpecs` would let them drift.
+  const subagents = subagentSpecs(environment);
+  const all: ClientTool[] = [
     ...TOOLS,
-    createTaskTool({ model: environment.model, subagents: subagentSpecs(environment) }),
+    createTaskTool({ model: environment.model, subagents }),
     // After Task: the six the prompt names keep their pinned order, and Skill
     // joins as the eighth in the same order the prompt lists it. Absent when the
     // program was started with no skills — a tool with nothing to load is a
@@ -710,6 +736,12 @@ function allRegisteredTools(
       ? createMemoryTools({ store: environment.memory })
       : []),
   ];
+  // A dispatch must never escalate past its dispatcher (docs/adr/0003's
+  // property, held transitively). Asserted on the *full* list, after every
+  // conditional joined — a subset check against a partial registration would
+  // pass exactly when it matters most.
+  assertDispatchNeverEscalates(subagents, all);
+  return all;
 }
 
 /**

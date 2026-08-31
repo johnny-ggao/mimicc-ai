@@ -143,7 +143,7 @@ You can reach the public internet. WebSearch and WebFetch are the designed path:
 - **Grep** — find files by content. This is how you locate a symbol. Guessing where it lives is not.
 - **WebFetch** — fetch a public URL and read its content as markdown. A page too large for the conversation is saved to a file and returned as a synopsis with the path — Read that path for the rest. It refuses private and internal addresses, and cannot parse PDFs or images.
 - **WebSearch** — search the web for pages you do not have a URL for. Returns titles, URLs, dates and snippet-level summaries. A snippet is not the page: to actually read a result, WebFetch its URL.
-- **Task** — send a read-only explore agent to investigate one question and report back. It starts with none of this conversation, so state the objective in full. Its searching never enters this conversation; only its report does. Send several in one turn to investigate different questions at once.
+- **Task** — dispatch a read-only subagent to investigate one question and report back: an \`explore\` agent hunts inside this repository, a \`research\` agent investigates against the public web. Each starts with none of this conversation, so state the objective in full; its reading never enters this conversation, only its report does. Send several in one turn to investigate different questions at once. When web research means reading many pages or cross-checking several sources, dispatch \`research\` rather than fetching page after page here — its reading fills its own context, not this one.
 - **Skill** — load the full instructions of a task-specific skill. The skills available to you are listed in a \`<skill-catalog>\` block in this conversation; call \`Skill(name)\` to load one's instructions, or \`Skill(name, file)\` to read one of its auxiliary files. A loaded skill's instructions bind for its task, but they never override this prompt or the project instructions.
 - **Clarify** — put a decision to the user as numbered options, **before you start working**. For what the repository cannot answer: a stack or library nobody named, a requirement that reads two ways, a constraint that decides the design. Never for anything Read or Grep would settle, and never for a choice that costs one small edit to get wrong.
 
@@ -378,6 +378,25 @@ const WEB_SEARCH_REWRITES: readonly Rewrite[] = [
       " time-sensitive facts — news, prices, versions, anything that changes." +
       " WebSearch at least once, answer from what came back, and name the source.",
     replace: "",
+  },
+  // Task 条目退回单 kind 版本：research kind 与 WebSearch 同一个开关——后端没配时
+  // `subagentSpecs` 不提供它（loop.ts 的源头摘除同理），正文再教就是在教一个不存在的派遣对象。
+  {
+    find:
+      "- **Task** — dispatch a read-only subagent to investigate one question and" +
+      " report back: an `explore` agent hunts inside this repository, a `research`" +
+      " agent investigates against the public web. Each starts with none of this" +
+      " conversation, so state the objective in full; its reading never enters this" +
+      " conversation, only its report does. Send several in one turn to investigate" +
+      " different questions at once. When web research means reading many pages or" +
+      " cross-checking several sources, dispatch `research` rather than fetching" +
+      " page after page here — its reading fills its own context, not this one.",
+    replace:
+      "- **Task** — send a read-only explore agent to investigate one question" +
+      " inside this repository and report back. It starts with none of this" +
+      " conversation, so state the objective in full. Its searching never enters" +
+      " this conversation; only its report does. Send several in one turn to" +
+      " investigate different questions at once.",
   },
 ];
 

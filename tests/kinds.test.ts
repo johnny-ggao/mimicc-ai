@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import { FakeListChatModel } from "@langchain/core/utils/testing";
 
-import { agentStack, assertMeterInsideWindow, subagentSpecs } from "@/agents";
+import {
+  agentStack,
+  assertDispatchNeverEscalates,
+  assertMeterInsideWindow,
+  RESEARCH_PROMPT,
+  subagentSpecs,
+} from "@/agents";
 import { usageMeter } from "@/usage";
 import { contextWindow } from "@/context";
 
@@ -141,5 +147,93 @@ describe("the read-before-write gate is fitted to every kind", () => {
     expect(names.indexOf("PermissionGate")).toBeLessThan(
       names.indexOf("ReadBeforeWrite"),
     );
+  });
+});
+
+/**
+ * The Research kind (research-kind ticket 01). A capability the same way memory
+ * and WebSearch are: offered exactly when its dependency resolved, and read-only
+ * by whitelist rather than by promise.
+ */
+describe("the research kind", () => {
+  const backend = { id: "fake", search: () => Promise.resolve([]) };
+
+  test("offered exactly when a search backend resolved", () => {
+    const without = subagentSpecs({ model, modelFor }).map((spec) => spec.name);
+    const withBackend = subagentSpecs({ model, modelFor, webSearch: backend }).map(
+      (spec) => spec.name,
+    );
+
+    // A research agent that cannot search is a name pretending to a capability.
+    expect(without).toEqual(["explore"]);
+    expect(withBackend).toEqual(["explore", "research"]);
+  });
+
+  test("the whitelist is closed: search, fetch, read — nothing that writes", () => {
+    const research = subagentSpecs({ model, modelFor, webSearch: backend }).find(
+      (spec) => spec.name === "research",
+    );
+
+    // Read is there because WebFetch externalises big pages to disk and the
+    // report-writer must read them back. Everything else is deliberately out:
+    // Glob/Grep hunt this repository (that is Explore's job), and anything that
+    // writes would leave docs/adr/0003.
+    expect(research?.tools.map((tool) => tool.name)).toEqual([
+      "WebSearch",
+      "WebFetch",
+      "Read",
+    ]);
+  });
+
+  test("its stack is assembled by the shared assembler, labelled with its own name", () => {
+    const research = subagentSpecs({ model, modelFor, webSearch: backend }).find(
+      (spec) => spec.name === "research",
+    );
+
+    expect(research?.middleware?.map((middleware) => middleware.name)).toEqual([
+      "ContextWindow",
+      "UsageMeter",
+      "PinTurnTask",
+      "PermissionGate",
+      "ReadBeforeWrite",
+      "StaleReads",
+    ]);
+  });
+
+  test("the prompt names the kind and the file-reading reason Read is aboard", () => {
+    // "Research" is load-bearing the way "Explore" is: tests tell a subagent's
+    // request from its parent's by the system message.
+    expect(RESEARCH_PROMPT).toContain("You are a Research agent");
+    expect(RESEARCH_PROMPT).toContain("Read on the reported path");
+  });
+});
+
+/**
+ * The escalation assertion: whatever a subagent can do, its parent could have
+ * done directly. Handed a deliberately escalating spec because from the shipped
+ * call sites the check can never fire — same reasoning as
+ * `assertMeterInsideWindow` being exported.
+ */
+describe("a dispatch never escalates", () => {
+  const specOf = (tools: { name: string }[]) =>
+    [
+      { name: "escalator", description: "d", prompt: "p", tools },
+    ] as unknown as Parameters<typeof assertDispatchNeverEscalates>[0];
+
+  test("a kind carrying a tool the parent does not register is refused", () => {
+    expect(() =>
+      assertDispatchNeverEscalates(specOf([{ name: "Bash" }]), [
+        { name: "Read" },
+      ] as never),
+    ).toThrow(/escalate past its dispatcher/);
+  });
+
+  test("a kind inside the parent's set passes", () => {
+    expect(() =>
+      assertDispatchNeverEscalates(specOf([{ name: "Read" }]), [
+        { name: "Read" },
+        { name: "Bash" },
+      ] as never),
+    ).not.toThrow();
   });
 });

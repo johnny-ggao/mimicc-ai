@@ -128,3 +128,38 @@ describe("系统提示词", () => {
     expect(text).not.toMatch(/\bClarify\b/);
   });
 });
+
+describe("摘 WebSearch 连带摘 research kind（派遣不得提权）", () => {
+  const backend = { id: "fake", search: () => Promise.resolve([]) };
+
+  test("有后端时 Task 广告 research；摘掉 WebSearch 后不再广告", () => {
+    const withBackend = registeredTools(
+      { ...environment, webSearch: backend },
+      undefined,
+    );
+    const task = withBackend.find((tool) => tool.name === "Task");
+    expect(task?.description).toContain("research");
+
+    const stripped = registeredTools(
+      { ...environment, webSearch: backend },
+      undefined,
+      ["WebSearch"],
+    );
+    expect(stripped.map((tool) => tool.name)).not.toContain("WebSearch");
+    const strippedTask = stripped.find((tool) => tool.name === "Task");
+    // research kind 与 WebSearch 同一个开关：留下它，子 agent 就能做派遣者被摘掉的事。
+    expect(strippedTask?.description).not.toContain("research");
+  });
+
+  test("排除 WebSearch 之后，正文里也没有 research 派遣对象", () => {
+    const text = staticPromptFor(new Set(["WebSearch"]));
+    expect(text).not.toContain("research");
+    // explore 的派遣照旧教。
+    expect(text).toContain("explore agent");
+  });
+
+  test("默认正文教两种派遣对象与「何时派 research」", () => {
+    expect(STATIC_PROMPT).toContain("`research`");
+    expect(STATIC_PROMPT).toContain("its reading fills its own context, not this one");
+  });
+});
