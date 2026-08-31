@@ -32,6 +32,10 @@ jobs:
 
       - run: bun run test:coverage
 
+      # repro/15/26/30/49 用 expect 起 pty 驱动真 REPL（终端行为量得出来，
+      # 判据是 stub 收到几次请求）。macOS 自带 expect，ubuntu-24.04 镜像不带。
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq expect
+
       # 探针不在 tsconfig 里（repro/README.md 的决定），所以改接口打死它们时
       # 上面那一步是全绿的。这一步跑它们一遍，只问「还起得来吗」。
       # 花钱的三个跑在本地 stub 上，CI 不会掏钱。
