@@ -276,6 +276,9 @@ test("every memory tool has an explicit confirmation decision", () => {
       model: new FakeListChatModel({ responses: ["unused"] }),
       modelFor: () => new FakeListChatModel({ responses: ["unused"] }),
       memory: store,
+      // WebSearch is conditional the same way memory is — supplied so the
+      // policy comparison sees the full registrable set.
+      webSearch: { id: "fake", search: () => Promise.resolve([]) },
     },
     new SkillRegistry([]),
   ).map((tool) => tool.name);

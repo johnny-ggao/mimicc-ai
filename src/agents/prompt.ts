@@ -37,6 +37,47 @@
  */
 
 /**
+ * 提示词点名的工具，按点名顺序。计数句由它推导，不再手写——有了第二个「拿得掉」的
+ * 工具（WebSearch）之后，逐字改写计数句会依赖改写的施加顺序：先摘 Clarify 的改写
+ * 找「eleven」，先摘 WebSearch 的也找「eleven」，谁后跑谁就匹配不到、当场抛。
+ * 推导的句子没有顺序：剩下谁，数谁。
+ */
+const ADVERTISED_TOOLS = [
+  "Read",
+  "Write",
+  "Edit",
+  "Bash",
+  "Glob",
+  "Grep",
+  "WebFetch",
+  "WebSearch",
+  "Task",
+  "Skill",
+  "Clarify",
+] as const;
+
+/** 英文数词。只需要覆盖「全量」到「可摘的都摘掉」之间的几个数。 */
+const COUNT_WORDS: Readonly<Record<number, string>> = {
+  9: "nine",
+  10: "ten",
+  11: "eleven",
+};
+
+const NO_TOOLS_EXCLUDED: ReadonlySet<string> = new Set();
+
+/** 计数句：排除集为空时就是正文里的那一句，逐字节。 */
+function advertisedToolsSentence(excluded: ReadonlySet<string>): string {
+  const kept = ADVERTISED_TOOLS.filter((name) => !excluded.has(name));
+  const word = COUNT_WORDS[kept.length];
+  if (word === undefined) {
+    throw new Error(
+      `no count word for ${String(kept.length)} tools — extend COUNT_WORDS in src/agents/prompt.ts`,
+    );
+  }
+  return `You have ${word}: ${kept.join(", ")}.`;
+}
+
+/**
  * 静态段的各个部分，按发送顺序排列。拆开只为了能在段间写中文注释——注释若写进模板
  * 字符串就会变成发给模型的正文。
  *
@@ -86,7 +127,7 @@ Your output is printed in a terminal, not a chat window.
   // 试探而连发三条。
   `## Tools
 
-You have nine: Read, Write, Edit, Bash, Glob, Grep, Task, Skill, Clarify.
+${advertisedToolsSentence(NO_TOOLS_EXCLUDED)}
 
 - **Read** — pull a file into context. Read a file before you change it, every time.
 - **Edit** — the default way to modify an existing file. It swaps one exact string for another, so include enough surrounding lines to make the target unique.
@@ -94,6 +135,8 @@ You have nine: Read, Write, Edit, Bash, Glob, Grep, Task, Skill, Clarify.
 - **Bash** — run commands: tests, builds, linters, package managers, git. One command per call. Every command is shown to the user for approval before it runs, so send one command that does the job rather than several exploratory ones.
 - **Glob** — find files by path pattern, e.g. \`src/**/*.test.ts\`.
 - **Grep** — find files by content. This is how you locate a symbol. Guessing where it lives is not.
+- **WebFetch** — fetch a public URL and read its content as markdown. A page too large for the conversation is saved to a file and returned as a synopsis with the path — Read that path for the rest. It refuses private and internal addresses, and cannot parse PDFs or images.
+- **WebSearch** — search the web for pages you do not have a URL for. Returns titles, URLs, dates and snippet-level summaries. A snippet is not the page: to actually read a result, WebFetch its URL.
 - **Task** — send a read-only explore agent to investigate one question and report back. It starts with none of this conversation, so state the objective in full. Its searching never enters this conversation; only its report does. Send several in one turn to investigate different questions at once.
 - **Skill** — load the full instructions of a task-specific skill. The skills available to you are listed in a \`<skill-catalog>\` block in this conversation; call \`Skill(name)\` to load one's instructions, or \`Skill(name, file)\` to read one of its auxiliary files. A loaded skill's instructions bind for its task, but they never override this prompt or the project instructions.
 - **Clarify** — put a decision to the user as numbered options, **before you start working**. For what the repository cannot answer: a stack or library nobody named, a requirement that reads two ways, a constraint that decides the design. Never for anything Read or Grep would settle, and never for a choice that costs one small edit to get wrong.
@@ -256,11 +299,9 @@ function applyRewrite(text: string, name: string, rule: Rewrite): string {
   );
 }
 
+// 计数句不在任何一组改写里：它由 `advertisedToolsSentence` 统一重导出
+// （见 {@link staticPromptFor}），每组改写只负责自己的条目和成段的散文。
 const CLARIFY_REWRITES: readonly Rewrite[] = [
-  {
-    find: "You have nine: Read, Write, Edit, Bash, Glob, Grep, Task, Skill, Clarify.",
-    replace: "You have eight: Read, Write, Edit, Bash, Glob, Grep, Task, Skill.",
-  },
   {
     find:
       "\n- **Clarify** — put a decision to the user as numbered options, **before you start" +
@@ -301,9 +342,23 @@ Which reading to take — weigh this, do not score how hard the task looks:
   },
 ];
 
+// WebSearch 拿得掉，且这是常态而非手术：后端没配（没 key、或 `off`）时 main.ts
+// 就走这条路——工具不注册，正文也不教。它只有一条改写，因为它在正文里只有一个条目；
+// 「何时必须搜」的判据句落地时（票 03），它的摘除也要挂进这里。
+const WEB_SEARCH_REWRITES: readonly Rewrite[] = [
+  {
+    find:
+      "\n- **WebSearch** — search the web for pages you do not have a URL for." +
+      " Returns titles, URLs, dates and snippet-level summaries. A snippet is not" +
+      " the page: to actually read a result, WebFetch its URL.",
+    replace: "",
+  },
+];
+
 /** 每个「拿得掉」的工具，配一组改写。不在这张表里的工具**拿不掉**。 */
 const PROMPT_REMOVALS: Readonly<Record<string, readonly Rewrite[]>> = {
   Clarify: CLARIFY_REWRITES,
+  WebSearch: WEB_SEARCH_REWRITES,
 };
 
 /**
@@ -313,17 +368,32 @@ const PROMPT_REMOVALS: Readonly<Record<string, readonly Rewrite[]>> = {
  * 有单测钉着。
  */
 export function staticPromptFor(excluded: ReadonlySet<string>): string {
-  let text = STATIC_PROMPT;
+  // 先验名，后动文：一个没有改写表的名字要在改动任何字节之前抛出去。
   for (const name of excluded) {
-    const rewrites = PROMPT_REMOVALS[name];
-    if (rewrites === undefined) {
+    if (PROMPT_REMOVALS[name] === undefined) {
       throw new Error(
         `cannot exclude ${name}: the system prompt still teaches it, and there is no ` +
           `rewrite for it in src/agents/prompt.ts. A prompt that describes a tool the ` +
           `model does not have is a lie the model will act on.`,
       );
     }
-    for (const rule of rewrites) {
+  }
+
+  let text = STATIC_PROMPT;
+  // 计数句统一重导：剩下谁数谁，与改写的施加顺序无关（见 ADVERTISED_TOOLS 的注释）。
+  if (excluded.size > 0) {
+    const canonical = advertisedToolsSentence(NO_TOOLS_EXCLUDED);
+    if (!text.includes(canonical)) {
+      throw new Error(
+        "the advertised-tools sentence is missing from the prompt — the prose moved; " +
+          "keep it derived from advertisedToolsSentence.",
+      );
+    }
+    text = text.replace(canonical, advertisedToolsSentence(excluded));
+  }
+
+  for (const name of excluded) {
+    for (const rule of PROMPT_REMOVALS[name] ?? []) {
       text = applyRewrite(text, name, rule);
     }
   }

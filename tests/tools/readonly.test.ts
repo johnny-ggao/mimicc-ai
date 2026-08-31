@@ -78,11 +78,11 @@ test("defaults the grep glob to the whole tree", async () => {
   expect(hits).toContain("src/agents/loop.ts:");
 });
 
-// The system prompt names all six by name and describes what each one does, so
-// the registry and `src/agents/prompt.ts` are one specification in two places. A tool
+// The system prompt names each of these and describes what it does, so the
+// registry and `src/agents/prompt.ts` are one specification in two places. A tool
 // the prompt promises but the registry lacks costs a whole lap of the loop:
 // ToolNode turns "not found" into a tool message and the model tries again.
-test("registers the six tools the prompt advertises, in order", () => {
+test("registers the unconditional tools the prompt advertises, in order", () => {
   expect(TOOLS.map((tool) => tool.name)).toEqual([
     "Read",
     "Write",
@@ -90,6 +90,9 @@ test("registers the six tools the prompt advertises, in order", () => {
     "Bash",
     "Glob",
     "Grep",
+    // Appended 2026-08-31 (web-tools ticket 02) — appended, not inserted, so
+    // the cached prefix over the first six survived the addition.
+    "WebFetch",
   ]);
 });
 

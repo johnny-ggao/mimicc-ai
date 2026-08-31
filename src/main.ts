@@ -16,6 +16,7 @@ import { resolveSession } from "./session";
 import { defaultSkillRoots, loadSkills, SkillRegistry } from "./skills";
 import {
   killRunningCommands,
+  resolveSearchBackend,
   setCommandCeiling,
   UNATTENDED_COMMAND_CEILING_MS,
 } from "./tools";
@@ -90,14 +91,32 @@ async function main(): Promise<void> {
   // usage line rather than a connection.
   const start = await resolveStart(stateDir);
 
+  // Resolved here like the model: which backend lives is an environment
+  // question. `undefined` — no key, or `off` — means the WebSearch tool is not
+  // registered *and* the prompt does not teach it, via the same removal
+  // machinery `--exclude-tools` uses (one source, two landing sites, below).
+  const searchBackend = resolveSearchBackend(config);
+
   // 🔑 **提示词在这里拼，不在上面。** 它要带上这次调用的总闸（票 09），而总闸只有读完
   // 参数才知道。搬下来是安全的：中间那几样（instructions / rules / stateDir）谁也不读它。
   // 两个落点，一个来源：不注册的工具既要从工具清单里去掉，也要从提示词里去掉。
   // 只做前者，正文还在教它，模型会去调一个不存在的工具（`agents/prompt.ts`）。
-  const excludeTools = start.excludeTools ?? [];
+  // `--exclude-tools WebSearch` with no backend resolved would otherwise hit
+  // `registeredTools`' unknown-name refusal — the tool is already absent, and
+  // "no tool named WebSearch" about a tool that exists misleads. Excluding an
+  // absent tool is a no-op, not a typo.
+  const excludeTools = (start.excludeTools ?? []).filter(
+    (name) => !(name === "WebSearch" && searchBackend === undefined),
+  );
+  const promptExcluded = [
+    ...excludeTools,
+    ...(searchBackend === undefined && !excludeTools.includes("WebSearch")
+      ? ["WebSearch"]
+      : []),
+  ];
   const systemPrompt = buildSystemPrompt({
     ...describeEnvironment(),
-    ...(excludeTools.length > 0 ? { excludedTools: excludeTools } : {}),
+    ...(promptExcluded.length > 0 ? { excludedTools: promptExcluded } : {}),
     ...(start.kind === "print"
       ? {
           runSeconds: Math.round(
@@ -136,6 +155,7 @@ async function main(): Promise<void> {
     ...(instructions !== undefined ? { projectInstructions: instructions } : {}),
     checkpointer: new JsonlSaver(stateDir),
     memory,
+    ...(searchBackend !== undefined ? { webSearch: searchBackend } : {}),
     skills,
     // The same path, so a tool call's journal lands beside its session's file.
     stateDir,
@@ -180,6 +200,9 @@ async function main(): Promise<void> {
     systemPromptChars: systemPrompt.length,
     projectInstructionsChars: instructions?.length ?? 0,
     skills: skills.all().length,
+    // Which backend answers WebSearch — or that none does, which is the fact
+    // behind "why is the tool missing".
+    webSearch: searchBackend?.id ?? "off",
     // Printed because "where did my history go" is otherwise a guess, and
     // because the answer differs between development and a released build.
     stateDir,

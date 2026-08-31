@@ -4,7 +4,13 @@ import type { AnyAgentMiddleware } from "langchain";
 import { pinTurnTask, projectInstructions } from "../context";
 import { injectMemory, type MemoryStore } from "../memory";
 import { OUTPUT_BUDGET } from "../models";
-import { globTool, grepTool, readTool, type SubagentSpec } from "../tools";
+import {
+  globTool,
+  grepTool,
+  readTool,
+  type SearchBackend,
+  type SubagentSpec,
+} from "../tools";
 import { type RuleSet } from "../tools/permission";
 import { assertBlocksInFrequencyOrder } from "./blockOrder";
 import { permissionGate } from "./permissionGate";
@@ -124,6 +130,15 @@ export interface AgentEnvironment {
    * of subagent exists that outlives one dispatch.
    */
   memory?: MemoryStore;
+  /**
+   * The live web-search backend, when configuration resolved one.
+   *
+   * Main-agent-only today, like memory: `EXPLORE_TOOLS` does not include the
+   * web pair — an Explore investigates *this repository*. The kind that does
+   * carry them is the Research kind (`.scratch/research-kind/`), which will
+   * read this same field when it lands.
+   */
+  webSearch?: SearchBackend;
   /**
    * The permission rules, already read and merged, or absent for none. Shared by
    * every kind through `agentStack`, so a subagent's `Read` keeps the hard floor

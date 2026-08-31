@@ -1,7 +1,27 @@
 import { bashTool, editTool, writeTool } from "./mutating";
 import { globTool, grepTool, readTool } from "./readonly";
+import { webFetchTool } from "./webfetch";
 
 export { globTool, grepTool, readTool } from "./readonly";
+export {
+  EXTERNALIZE_MIN_CHARS,
+  extractReadable,
+  WEB_FETCH_TOOL_NAME,
+  webFetch,
+  webFetchTool,
+} from "./webfetch";
+export {
+  createWebSearchTool,
+  resolveSearchBackend,
+  SEARCH_COUNT_DEFAULT,
+  SEARCH_COUNT_MAX,
+  WEB_SEARCH_TOOL_NAME,
+  zhipuWebSearch,
+  type SearchBackend,
+  type SearchHit,
+  type SearchOptions,
+} from "./websearch";
+export { neutralizeControlTags } from "./untrusted";
 export {
   bothSafe,
   declaredReplay,
@@ -45,8 +65,9 @@ export {
 } from "./clarify";
 
 /**
- * The six the system prompt advertises. Order is the order the model sees them
- * in, and `tests/agent.test.ts` pins it.
+ * The unconditional tools the system prompt advertises. Order is the order the
+ * model sees them in, and `tests/agent.test.ts` pins it — a new tool appends,
+ * so the cached prefix survives.
  *
  * Three of these can destroy work, and the permission gate guards them on two
  * axes. Write and Edit are confined by the hard floor — they cannot leave the
@@ -55,12 +76,25 @@ export {
  * it cannot be confined that way: it can curl, it can rm, it can rewrite git
  * history, and a command classifier is an arms race.
  *
+ * WebFetch is here and WebSearch is not, and the asymmetry is a fact about
+ * dependencies, not about the web: fetching needs nothing but the network,
+ * while searching needs a backend resolved from configuration — so it joins the
+ * way the memory tools do, conditionally, in `registeredTools`.
+ *
  * Dispatch is not here: `ToolNode` looks tools up by name, validates arguments
  * against the zod schema, runs them in parallel, and turns every failure —
  * unknown tool, bad arguments, a tool that throws — into a tool message the
  * model can read.
  */
-export const TOOLS = [readTool, writeTool, editTool, bashTool, globTool, grepTool];
+export const TOOLS = [
+  readTool,
+  writeTool,
+  editTool,
+  bashTool,
+  globTool,
+  grepTool,
+  webFetchTool,
+];
 
 /**
  * `Task` is not in TOOLS, and cannot be: it needs a model, which the agent

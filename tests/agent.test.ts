@@ -160,6 +160,7 @@ describe("createAgent", () => {
         "Bash",
         "Glob",
         "Grep",
+        "WebFetch",
         TASK_TOOL_NAME,
         CLARIFY_TOOL_NAME,
       ]);
@@ -216,6 +217,10 @@ test("every registered tool has an explicit confirmation decision", () => {
   // Skills are supplied for the same reason: the Skill tool is registered
   // whenever a registry exists, even an empty one, so it too must have a
   // decision in the policy.
+  //
+  // The fake search backend, likewise: WebSearch only registers when a backend
+  // resolved, and a conditional tool shipping without a confirmation decision
+  // is exactly the fail-open gap this test exists to close.
   const registered = registeredTools(
     {
       model: new FakeListChatModel({ responses: ["unused"] }),
@@ -224,6 +229,7 @@ test("every registered tool has an explicit confirmation decision", () => {
         global: "/nonexistent/global",
         project: "/nonexistent/project",
       }),
+      webSearch: { id: "fake", search: () => Promise.resolve([]) },
     },
     new SkillRegistry([]),
   ).map((tool) => tool.name);

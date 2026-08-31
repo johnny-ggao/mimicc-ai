@@ -76,8 +76,25 @@ describe("系统提示词", () => {
     const text = staticPromptFor(new Set([CLARIFY_TOOL_NAME]));
     expect(text).not.toMatch(/\bClarify\b/);
     // 工具花名册的数目也要跟着改，否则它自己就是一句谎。
-    expect(text).toContain("You have eight:");
-    expect(text).not.toContain("You have nine:");
+    // （2026-08-31 起全量是 eleven——web 双工具进了花名册，计数句改为推导。）
+    expect(text).toContain("You have ten:");
+    expect(text).not.toContain("You have eleven:");
+  });
+
+  test("排除 WebSearch 之后，正文里一个 WebSearch 都不剩", () => {
+    // 这不是手术是常态：搜索后端没配（没 key、或 `off`）时 main.ts 就走这条路。
+    const text = staticPromptFor(new Set(["WebSearch"]));
+    expect(text).not.toMatch(/\bWebSearch\b/);
+    expect(text).toContain("You have ten:");
+    // WebFetch 独立于 WebSearch，摘掉后者不许伤到前者。
+    expect(text).toMatch(/\bWebFetch\b/);
+  });
+
+  test("两个可摘工具一起摘，计数句不依赖施加顺序", () => {
+    const text = staticPromptFor(new Set([CLARIFY_TOOL_NAME, "WebSearch"]));
+    expect(text).not.toMatch(/\bClarify\b/);
+    expect(text).not.toMatch(/\bWebSearch\b/);
+    expect(text).toContain("You have nine:");
   });
 
   test("那句「自己定，并说清假设」搬进了提示词", () => {

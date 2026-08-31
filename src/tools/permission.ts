@@ -243,6 +243,13 @@ const ALLOW_BY_DEFAULT = new Set([
   "MemoryAdd",
   "MemoryUpdate",
   "MemoryDelete",
+  // The web pair is read-only in the sense that matters to this gate: neither
+  // mutates the workspace, and each is its own floor — WebFetch refuses private
+  // addresses in-tool (SSRF), WebSearch spends fractions of a cent per call. A
+  // gate firing on every search would stop being read, same as the memory
+  // tools' reasoning above.
+  "WebSearch",
+  "WebFetch",
 ]);
 
 /**

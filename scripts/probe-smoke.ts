@@ -78,6 +78,11 @@ const PAID: Record<string, string> = {
     "三格各 1 次真写码任务，走真 agent 与真闸，实测 6.8 万 in / 1.6k out",
   "44-was-it-the-wording.ts":
     "两臂 × 5 次，走真 agent 与真闸，实测 11.1 万 in / 3.5k out",
+  // 56 在当前 key 上不花钱（429 零计费）；列在这里为的是不打真网络——
+  // 它认 `LLM_BASE_URL`，stub 的 chat.completion 形状会让它落进「两个预设答案都不是」，
+  // 冒烟只判它活到了发请求那一步。
+  "56-is-the-search-api-reachable.ts":
+    "一发 search_std，¥0.01；当前 key 是 429 零计费（2026-08-31 实测）",
 };
 
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */

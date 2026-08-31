@@ -27,9 +27,13 @@ import {
   CLARIFY_TOOL_NAME,
   TASK_TOOL_NAME,
   TOOLS,
+  WEB_FETCH_TOOL_NAME,
+  WEB_SEARCH_TOOL_NAME,
   clarifyGate,
   clarifyTool,
   createTaskTool,
+  createWebSearchTool,
+  type SearchBackend,
 } from "../tools";
 import { decide, toolCallOf, type RuleSet } from "../tools/permission";
 import type { ModelUsage } from "../usage";
@@ -183,6 +187,16 @@ export interface AgentOptions {
    * does not reach a capability the program actually ships.
    */
   memory?: MemoryDirs;
+  /**
+   * The live web-search backend, or absent to run without the WebSearch tool.
+   *
+   * A resolved backend rather than a key and a name, for the same reason
+   * `skills` is a registry and `projectInstructions` is a string: `main.ts`
+   * resolves configuration, the agent builder does not. Like `memory` above,
+   * this is a **named capability with a named dependency**, not the general
+   * tool-injection seam declined on 2026-08-17.
+   */
+  webSearch?: SearchBackend;
   /**
    * The skills installed outside the repository, already read and indexed, or
    * absent to run without any.
@@ -505,6 +519,18 @@ export const CONFIRMATION_POLICY: Record<string, InterruptOnConfig> = {
     allowedDecisions: ["approve", "reject"],
     description: "Run a shell command",
   },
+  // The web pair allows by default (`decide`'s baseline names them) — these
+  // entries exist for the exhaustiveness test, like Task's and the memory
+  // tools' above. WebFetch carries its own floor in-tool: it refuses private
+  // and internal addresses before any request is made.
+  [WEB_FETCH_TOOL_NAME]: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Fetch a public web page",
+  },
+  [WEB_SEARCH_TOOL_NAME]: {
+    allowedDecisions: ["approve", "reject"],
+    description: "Search the web",
+  },
 };
 
 /** The `when` predicate: ask exactly when the rule engine says "ask". */
@@ -673,6 +699,13 @@ function allRegisteredTools(
     // kind that cannot `interrupt()` cannot ask (docs/adr/0003), and a tool that
     // can only fail is worse than a capability the model was never offered.
     clarifyTool,
+    // Conditional like the memory tools, and for the same honest default: no
+    // resolved search backend means no WebSearch — a tool that can only fail is
+    // worse than a capability the model was never offered. `main.ts` removes it
+    // from the prompt in the same breath (one source, two landing sites).
+    ...(environment.webSearch !== undefined
+      ? [createWebSearchTool(environment.webSearch)]
+      : []),
     ...(environment.memory !== undefined
       ? createMemoryTools({ store: environment.memory })
       : []),
@@ -711,6 +744,7 @@ function environment(
     ...(options.memory !== undefined
       ? { memory: new MemoryStore(options.memory) }
       : {}),
+    ...(options.webSearch !== undefined ? { webSearch: options.webSearch } : {}),
     ...(options.rules !== undefined ? { rules: options.rules } : {}),
   };
 }

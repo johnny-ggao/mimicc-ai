@@ -15,9 +15,16 @@ import { bothSafe, declaredReplay, replayOf } from "@/tools";
 function registered() {
   // A fake model because `registeredTools` builds the dispatch tool and that
   // needs one; nothing here calls it. Same seam `tests/agent.test.ts` uses for
-  // the confirmation gate's coverage.
+  // the confirmation gate's coverage. The fake search backend is there for the
+  // same reason the exhaustiveness tests supply memory: WebSearch only
+  // registers when a backend exists, and its replay declaration must be a
+  // decision this file can see.
   const model = new FakeListChatModel({ responses: ["unused"] });
-  return registeredTools({ model, modelFor: () => model });
+  return registeredTools({
+    model,
+    modelFor: () => model,
+    webSearch: { id: "fake", search: () => Promise.resolve([]) },
+  });
 }
 
 /**
@@ -64,6 +71,12 @@ test("the classification is the one the criterion produces", () => {
     // the answer that stays right if that interception is removed — a crash can
     // land *after* the user answered, and replaying would discard their answer.
     Clarify: "never",
+    // A GET of an arbitrary URL is not guaranteed effect-free — somebody's
+    // /logout is a GET.
+    WebFetch: "never",
+    // Every call bills the search account. "Unchanged" includes money — the
+    // same clause that makes Task unreplayable.
+    WebSearch: "never",
   });
 });
 

@@ -49,6 +49,12 @@ const envSchema = z.object({
   LLM_MOONSHOT_CN_API_KEY: z.string().min(1).optional(),
   LLM_ZHIPU_CN_API_KEY: z.string().min(1).optional(),
 
+  // Which web-search backend the WebSearch tool runs on (web-tools ticket 01).
+  // One name, one live backend — the seam is designed for swapping, not for a
+  // fleet. `off` disables the tool; an unknown name throws at startup
+  // (`resolveSearchBackend`), same refuse-don't-fallback as `--exclude-tools`.
+  MIMICC_WEB_SEARCH_BACKEND: z.string().min(1).default("zhipu-web-search"),
+
   // Turn-budget overrides (turn-budget ticket 02). The work budget lives on the
   // token/time axis — there is no step budget. Defaults: token budget = the
   // effective window limit × 4, wall-clock backstop = 10 minutes per turn.
