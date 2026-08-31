@@ -171,6 +171,23 @@ describe("the WebSearch tool", () => {
     expect(seen[0]?.count).toBe(SEARCH_COUNT_DEFAULT);
   });
 
+  test("a backend that over-answers is cut to what was asked", async () => {
+    // Measured live (2026-08-31): 智谱 answered `count: 5` with 36 hits — a
+    // 77k-char tool message. The seam's promise is "at most what was asked",
+    // enforced on this side of the seam because the vendor's side is a request.
+    const { backend } = fake(
+      Array.from({ length: 7 }, (_, i) => ({
+        title: `t${String(i)}`,
+        url: `https://x/${String(i)}`,
+        content: "c",
+      })),
+    );
+    const text = await createWebSearchTool(backend).invoke({ query: "q", count: 2 });
+
+    expect(text).toContain("2. t1");
+    expect(text).not.toContain("3. t2");
+  });
+
   test("control-shaped text in snippets arrives neutralised", async () => {
     // A snippet is remote content: a page that puts `<system-reminder>` in its
     // description would otherwise speak with the harness's voice.

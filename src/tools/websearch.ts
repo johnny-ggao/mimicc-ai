@@ -180,10 +180,17 @@ export const WEB_SEARCH_TOOL_NAME = "WebSearch";
 export function createWebSearchTool(backend: SearchBackend) {
   return tool(
     async ({ query, count, recency }): Promise<string> => {
-      const hits = await backend.search(query, {
-        count: Math.min(count ?? SEARCH_COUNT_DEFAULT, SEARCH_COUNT_MAX),
+      const asked = Math.min(count ?? SEARCH_COUNT_DEFAULT, SEARCH_COUNT_MAX);
+      const returned = await backend.search(query, {
+        count: asked,
         ...(recency !== undefined ? { recency } : {}),
       });
+      // The cap is enforced here, after the backend answers, because a backend's
+      // own `count` is a request, not a promise: measured 2026-08-31 on the live
+      // 智谱 endpoint, `count: 5` came back with 36 hits — a 77k-char tool
+      // message, ~35k tokens of context per search. The seam's contract is
+      // "at most what was asked", whatever the vendor does.
+      const hits = returned.slice(0, asked);
 
       // "There is none" said out loud, and distinguishable from "I did not
       // look" — the backend did look and found nothing.
