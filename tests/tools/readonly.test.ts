@@ -69,13 +69,26 @@ test("reports a malformed regular expression", async () => {
   );
 });
 
+// 🔴 This used to grep `createUniversalAgent` and assert on `src/agents/loop.ts`.
+// That symbol has more matches than MAX_GREP_HITS, so whether `src/` lands
+// inside the first 100 depends on directory-enumeration order — APFS happened
+// to put it early, ext4 on CI walked README → repro/ → docs/ → bench/ → tests/
+// and truncated before ever reaching `src/`. Green locally, red on every CI
+// run. The needle below is unique, so the limit never engages.
 test("defaults the grep glob to the whole tree", async () => {
-  const hits = await grepTool.invoke({ pattern: "createUniversalAgent" });
+  const DEEP = "test-default-glob-tmp";
+  mkdirSync(`${DEEP}/nested/deeper`, { recursive: true });
+  writeFileSync(`${DEEP}/nested/deeper/needle.txt`, "zz_default_glob_needle\n");
+  try {
+    const hits = await grepTool.invoke({ pattern: "zz_default_glob_needle" });
 
-  // A real path in a subdirectory, because the claim is that the default glob
-  // recurses — an assertion against a file in `src/` alone would still pass if
-  // the default were `src/*`.
-  expect(hits).toContain("src/agents/loop.ts:");
+    // A path in a *nested* directory, because the claim is that the default
+    // glob recurses from the root — this fails if the default were `src/*`,
+    // `tests/**`, or `**/*.ts`.
+    expect(hits).toContain(`${DEEP}/nested/deeper/needle.txt:`);
+  } finally {
+    rmSync(DEEP, { recursive: true, force: true });
+  }
 });
 
 // The system prompt names each of these and describes what it does, so the
