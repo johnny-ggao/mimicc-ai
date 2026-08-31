@@ -85,6 +85,24 @@ const PAID: Record<string, string> = {
     "一发 search_std，¥0.01；当前 key 是 429 零计费（2026-08-31 实测）",
 };
 
+/**
+ * 花钱的探针在 stub 环境里拿到的假 key。
+ *
+ * CI 和 git worktree 没有 `.env`，而 key 检查发生在**客户端构造时、发第一枪之前**
+ * （`resolveModelConfig` 缺 key 直接抛）——缺了它，探针死在「stub 收到过请求没有」
+ * 这个观测点的前面，整张表红成 `missing API key`（2026-08-31 实测，CI 上这一步
+ * 自 8-19 加进去就没真跑过，一直被前面的覆盖率门挡着）。
+ *
+ * 假 key 花不了钱：`LLM_BASE_URL` 把请求全部按进本地 stub，key 根本不被看；
+ * 就算哪个探针不认 `LLM_BASE_URL` 打了真端点，假 key 也是 401 零计费。
+ * `...process.env` 摆在后面——本机真有 key 时真 key 优先，行为与从前一字不差。
+ */
+const SMOKE_KEYS: Record<string, string> = {
+  LLM_DEEPSEEK_API_KEY: "smoke-dummy",
+  LLM_MOONSHOT_CN_API_KEY: "smoke-dummy",
+  LLM_ZHIPU_CN_API_KEY: "smoke-dummy",
+};
+
 /** 单个探针的上限。13 / 15 / 23 靠 sleep 制造时序，慢是设计不是卡住。 */
 const TIMEOUT_MS = 180_000;
 
@@ -172,7 +190,11 @@ async function run(file: string, paid: boolean): Promise<Result> {
     env:
       stub === null
         ? process.env
-        : { ...process.env, LLM_BASE_URL: `http://localhost:${String(stub.port)}` },
+        : {
+            ...SMOKE_KEYS,
+            ...process.env,
+            LLM_BASE_URL: `http://localhost:${String(stub.port)}`,
+          },
     stdout: "pipe",
     stderr: "pipe",
   });
