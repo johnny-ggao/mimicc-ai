@@ -62,7 +62,21 @@ const STORE_DIR = join(tmpdir(), "mimicc-web");
 
 /* ---------- SSRF floor ---------- */
 
-/** Whether an IPv4 address (as dotted quad) is private, loopback, link-local or otherwise not the public internet. */
+/**
+ * Whether an IPv4 address (as dotted quad) is private, loopback, link-local or
+ * otherwise not the public internet.
+ *
+ * 🔴 **198.18.0.0/15 (RFC 2544 benchmarking) is deliberately NOT here**, and it
+ * was, briefly. Measured on this very machine the hour the floor landed:
+ * `example.com` resolved to `198.18.0.229` — proxy clients in fake-IP mode
+ * (the Clash family) answer **every** DNS query out of exactly that pool and
+ * intercept the connection on the way out. With the range blocked, WebFetch
+ * refused the entire internet for every user behind such a proxy. The range
+ * hosts no credible internal attack surface (unlike RFC1918, loopback, or
+ * CGNAT — which Tailscale really does hand out to private machines), so the
+ * trade is: keep the SSRF floor honest where it defends something, and do not
+ * brick the tool on the machines it ships to.
+ */
 function isPrivateV4(address: string): boolean {
   const parts = address.split(".").map(Number);
   const [a, b] = parts;
@@ -72,12 +86,11 @@ function isPrivateV4(address: string): boolean {
     a === 0 || // "this network"
     a === 10 ||
     a === 127 || // loopback
-    (a === 100 && b >= 64 && b <= 127) || // CGNAT
+    (a === 100 && b >= 64 && b <= 127) || // CGNAT — Tailscale hands these to real private machines
     (a === 169 && b === 254) || // link-local
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 192 && b === 0) || // 192.0.0.0/24 special
-    (a === 198 && (b === 18 || b === 19)) || // benchmarking
     a >= 224 // multicast + reserved + broadcast
   );
 }
