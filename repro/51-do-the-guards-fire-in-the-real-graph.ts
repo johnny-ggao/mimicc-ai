@@ -288,8 +288,11 @@ console.log(`   [exit] 打印完毕 @${String(Date.now() - startedA)}ms（从甲
 console.log("—— 判读 ——");
 const guardStopped = caps.includes("loop_capped");
 const budgetStopped = capsD.includes("budget_exhausted");
+// 🔴 失败必须落在退出码上：冒烟对不花钱的探针只看退出码，只印红字不退非零，
+// 守卫哑了 CI 照样绿——那是「哑掉的守卫在守哑掉的守卫」（2026-08-31 审查发现）。
 if (!criterionWorks) {
   console.log("🔴 丙格就不绿，判据本身坏了，别的格另有解释。");
+  process.exitCode = 1;
 } else if (guardStopped && budgetStopped && gateParked) {
   console.log(
     "✅ 四格齐了：病态由 loopGuard 停（重复调用），健康地忙由回合预算停，门照常拦。\n" +
@@ -302,4 +305,5 @@ if (!criterionWorks) {
       "   ⚠️ 先查 stub：每次回复的 `id` 必须唯一，否则 `add_messages` 会按 id 覆写，\n" +
       "   整段历史里只剩一条 `ai`，所有读「最后一条消息」的判据都会假性哑掉。",
   );
+  process.exitCode = 1;
 }
