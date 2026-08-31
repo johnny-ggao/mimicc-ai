@@ -407,6 +407,13 @@ export function subagentSpecs(environment: AgentEnvironment): SubagentSpec[] {
             // Same reasoning as Explore's window, only more so: one thorough
             // dispatch can fetch several externalised pages and Read them back.
             middleware: agentStack(research, environment),
+            // Double the shared default (16 = 8 laps), which was sized for an
+            // Explore hunt and killed two of the three research dispatches on
+            // the acceptance probes (2026-08-31): sweep + read + cross-check is
+            // structurally more laps, not a lost agent. 32 = 16 laps holds a
+            // medium-thoroughness run with room; a run still lost at 16 laps
+            // is genuinely lost.
+            recursionLimit: 32,
           },
         ]
       : []),

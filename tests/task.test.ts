@@ -348,6 +348,38 @@ describe("the guards", () => {
     expect(failure).not.toContain("GraphRecursionError");
   });
 
+  // The ceiling is a property of the kind's job — research died twice at the
+  // Explore-sized default on the acceptance probes (2026-08-31) — so a spec that
+  // declares its own gets it, and the failure message counts in *its* steps.
+  test("a kind's own recursion limit overrides the shared default", async () => {
+    const looper: SubagentSpec = {
+      name: "roomy",
+      description: "never stops, but declares its own ceiling",
+      prompt: "you are a looper",
+      tools: [
+        tool(() => Promise.resolve("pong"), {
+          name: "Ping",
+          description: "answers pong",
+          schema: z.object({}),
+        }),
+      ],
+      recursionLimit: 6,
+    };
+
+    const failure = await failureFrom(
+      createTaskTool({
+        model: liveModel(),
+        subagents: [looper],
+        // The options-level value stays the default for kinds that declare
+        // nothing — the spec's own must beat it, or the field is decoration.
+        recursionLimit: 4,
+      }).invoke({ description: "go forever", subagent_type: "roomy" }),
+    );
+
+    expect(failure).toContain("used all 6 steps");
+    expect(failure).not.toContain("used all 4 steps");
+  });
+
   /**
    * `ToolNode` runs a lap's tool calls concurrently with no throttle, so five
    * dispatches in one turn means five agents unless something says otherwise.

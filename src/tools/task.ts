@@ -100,6 +100,15 @@ export interface SubagentSpec {
   tools: ClientTool[];
   /** Installed on this kind only. The parent's middleware does not reach here. */
   middleware?: AnyAgentMiddleware[];
+  /**
+   * This kind's own step ceiling, in node executions, when the shared default
+   * does not fit its work. {@link SUBAGENT_RECURSION_LIMIT} was sized for an
+   * Explore run — a handful of grep-and-read laps — and the research kind died
+   * at it twice on the acceptance probes (2026-08-31): sweep, read, cross-check
+   * is more laps than hunt-and-report, structurally, not pathologically. The
+   * ceiling is a property of the kind's job, so it rides on the spec.
+   */
+  recursionLimit?: number;
 }
 
 /**
@@ -198,7 +207,6 @@ export function createTaskTool(options: TaskToolOptions) {
     );
   }
 
-  const limit = options.recursionLimit ?? SUBAGENT_RECURSION_LIMIT;
   const enter = gate(options.maxConcurrent ?? MAX_CONCURRENT_SUBAGENTS);
   const graphs = new Map(
     options.subagents.map((spec) => [
@@ -229,6 +237,15 @@ export function createTaskTool(options: TaskToolOptions) {
       }),
     ]),
   );
+  // Per kind, because the ceiling is a property of the kind's job (see the note
+  // on `SubagentSpec.recursionLimit`); the options-level override keeps its old
+  // meaning as the default for kinds that declare nothing.
+  const limits = new Map(
+    options.subagents.map((spec) => [
+      spec.name,
+      spec.recursionLimit ?? options.recursionLimit ?? SUBAGENT_RECURSION_LIMIT,
+    ]),
+  );
 
   return tool(
     async (
@@ -245,6 +262,7 @@ export function createTaskTool(options: TaskToolOptions) {
           `no subagent of type ${subagent_type}; the only allowed types are ${allowed}`,
         );
       }
+      const limit = limits.get(subagent_type) ?? SUBAGENT_RECURSION_LIMIT;
 
       const result = await enter(async () => {
         try {
