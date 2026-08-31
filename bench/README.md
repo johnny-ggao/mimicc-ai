@@ -25,7 +25,6 @@ bun bench/measure.ts
 - 上面两条自 2026-08-31 起有指纹对账：`bun run bench:fingerprint`（CI 每次 push 跑，
   守卫在 `scripts/bench-fingerprint.ts`）。**有意作废基线**时 `--write` 重打指纹，
   与改动一起提交并在提交信息里写明——挡的是无声改，不是改。
-- 外部 benchmark（Terminal-Bench）的标准配置与断线记账在 [`external.md`](external.md)。
 
 ## 判据挂在哪
 
