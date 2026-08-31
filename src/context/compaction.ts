@@ -20,6 +20,7 @@ import {
   tailWithin,
   type Cut,
 } from "./projection";
+import { OUTPUT_BUDGET } from "../models";
 import { cacheReadOf, usageOf, type ModelUsage } from "../usage";
 
 /**
@@ -261,11 +262,21 @@ export function summaryOutputCeiling(inputTokens: number, limit: number): number
 /**
  * The most the summarising call will ever ask for, before the window clamps it.
  *
- * ⚠️ **Today's effective value, not a defended one.** 4096 is what a DeepSeek
- * instance carried when this was split out of the agent's own ceiling, so
- * nothing changed on the wire the day it moved.
+ * Derived, not picked — pi sizes the summary against the space reserved for the
+ * next answer: `min(floor(0.8 × reserveTokens), model cap)`
+ * (`packages/coding-agent/src/core/compaction/compaction.ts:637`). pi's
+ * `reserveTokens` plays two roles at once — compaction headroom *and* answer
+ * reserve; this repo splits them, and the anchor here is the answer reserve
+ * alone ({@link OUTPUT_BUDGET}). Anchoring on our compaction headroom instead
+ * would yield a ~167k "summary" on a 1M window, which is how you can tell that
+ * mapping is wrong. The model cap half of pi's `min` is applied downstream:
+ * {@link summaryOutputCeiling} clamps to the live window, and the smallest
+ * registered `maxOutputTokens` (32,768) sits far above this figure.
+ *
+ * Replaces the 4096 that ticket 01 left behind as "today's effective value, not
+ * a defended one".
  */
-export const SUMMARY_OUTPUT_BUDGET = 4096;
+export const SUMMARY_OUTPUT_BUDGET = Math.floor(0.8 * OUTPUT_BUDGET);
 
 const SUMMARY_PROMPT = `You are compacting a coding session so it can continue in a smaller context.
 
