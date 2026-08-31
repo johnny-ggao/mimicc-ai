@@ -125,9 +125,15 @@ Your output is printed in a terminal, not a chat window.
   // 确认门做在权限门里（`when = decide()==="ask"`，`src/agents/loop.ts`），模型说什么都
   // 绕不过。写进正文是因为它会改变模型的行为——知道每条命令都要人点头，它就不会为了
   // 试探而连发三条。
+  // 边界声明（web-tools 票 03）。诊断里的第 2 层缺口：模型对「能不能联网」一无所知，
+  // 既没被告知能、也没被告知不能，只能硬着头皮直接答。这一句把边界说死，并把 Bash curl
+  // 点名为「不是设计出的联网路径」——它绕开 SSRF 地板和注入中和，且每条命令都要确认。
+  // ⚠️ WebSearch 被摘（没配后端）时这段换成只提 WebFetch 的版本，见 WEB_SEARCH_REWRITES。
   `## Tools
 
 ${advertisedToolsSentence(NO_TOOLS_EXCLUDED)}
+
+You can reach the public internet. WebSearch and WebFetch are the designed path: they refuse private and internal addresses and neutralise what they bring back. Bash can technically curl, but that path carries none of those safeguards — do not use it for the web.
 
 - **Read** — pull a file into context. Read a file before you change it, every time.
 - **Edit** — the default way to modify an existing file. It swaps one exact string for another, so include enough surrounding lines to make the target unique.
@@ -145,6 +151,7 @@ Rules:
 
 - Never guess a path. If you are not certain a file is where you think it is, Glob or Grep first.
 - Never answer a question about this repository from memory or inference. Read the code.
+- Never answer from memory alone when the answer hinges on external or time-sensitive facts — news, prices, versions, anything that changes. WebSearch at least once, answer from what came back, and name the source.
 - Never fabricate file contents, command output, or test results. If you did not run it, you do not know it.
 - Search before you add. Grep for an existing helper, type, or utility before writing a new one.
 - Read before you edit; do not re-read after you edit. A successful Edit means the change landed — re-reading to "verify" only burns context.
@@ -351,6 +358,25 @@ const WEB_SEARCH_REWRITES: readonly Rewrite[] = [
       "\n- **WebSearch** — search the web for pages you do not have a URL for." +
       " Returns titles, URLs, dates and snippet-level summaries. A snippet is not" +
       " the page: to actually read a result, WebFetch its URL.",
+    replace: "",
+  },
+  // 边界声明换成只提 WebFetch 的版本——能上网这个事实不随搜索后端走，
+  // 但「设计出的路径」少了一半，句子要跟着诚实。
+  {
+    find:
+      "You can reach the public internet. WebSearch and WebFetch are the designed" +
+      " path: they refuse private and internal addresses and neutralise what they" +
+      " bring back.",
+    replace:
+      "You can reach the public internet. WebFetch is the designed path: it refuses" +
+      " private and internal addresses and neutralises what it brings back.",
+  },
+  // 「何时必须搜」整条拿掉：没有搜索工具，这条判据无处落地。
+  {
+    find:
+      "\n- Never answer from memory alone when the answer hinges on external or" +
+      " time-sensitive facts — news, prices, versions, anything that changes." +
+      " WebSearch at least once, answer from what came back, and name the source.",
     replace: "",
   },
 ];

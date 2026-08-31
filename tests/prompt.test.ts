@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { buildSystemPrompt, STATIC_PROMPT, type PromptEnvironment } from "@/agents";
+import { createWebSearchTool } from "@/tools";
 
 const ENV: PromptEnvironment = {
   cwd: "/tmp/example",
@@ -126,4 +127,26 @@ test("动手之前先跑现成的检查，这句话还在", () => {
 
 test("跑得久的活要在中途留下产物，这句话还在", () => {
   expect(STATIC_PROMPT).toContain("leave something usable on the way");
+});
+
+// —— web-tools 票 03：能力边界与「何时必须搜」 ——
+//
+// 诊断的第 2 层缺口：模型对「能不能联网」一无所知——既没被告知能、也没被告知不能，
+// 于是零工具调用直接作答是它拿到的信息下的正确行为（复现记录见 .scratch/web-tools/map.md）。
+// 这两条钉的是词在不在，不是模型听不听——行为的裁决在 research-kind 线票 03 的探针上。
+
+test("边界声明说死了：能上网、走哪两个工具、curl 不是那条路", () => {
+  expect(STATIC_PROMPT).toContain("You can reach the public internet");
+  expect(STATIC_PROMPT).toContain("WebSearch and WebFetch are the designed path");
+  expect(STATIC_PROMPT).toContain("do not use it for the web");
+});
+
+test("the search gate is stated in both places the model reads", () => {
+  // 双写对账，手法同上面 Clarify 那条（源头是 deer-flow 的 write_todos 复杂度门）。
+  // 共享短语两边逐字一致；只剩一边时规则只对一半的路径生效。
+  const shared = "hinges on external or time-sensitive facts";
+
+  expect(STATIC_PROMPT).toContain(shared);
+  const tool = createWebSearchTool({ id: "fake", search: () => Promise.resolve([]) });
+  expect(tool.description).toContain(shared);
 });

@@ -209,7 +209,11 @@ export function createWebSearchTool(backend: SearchBackend) {
       // Never replayed: every call bills the search account. "Unchanged
       // includes money" — the same clause that makes Task unreplayable.
       metadata: { ...NEVER_REPLAY },
-      description: `Search the web. Returns up to ${String(SEARCH_COUNT_MAX)} results as titles, URLs, publish dates and snippet-level summaries — snippets, not pages. To read a result in full, follow up with WebFetch on its URL.`,
+      // The "when" gate is written twice on purpose — here and in the system
+      // prompt's rules — the same double-write deer-flow uses for its
+      // complexity gates, with `tests/prompt.test.ts` asserting the two copies
+      // agree. A rule that survives in only one place fires half the time.
+      description: `Search the web. Returns up to ${String(SEARCH_COUNT_MAX)} results as titles, URLs, publish dates and snippet-level summaries — snippets, not pages. To read a result in full, follow up with WebFetch on its URL. Use it whenever the answer hinges on external or time-sensitive facts.`,
       schema: z.object({
         query: z.string().min(1).describe("The search query"),
         count: z

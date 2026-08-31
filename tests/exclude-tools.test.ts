@@ -88,6 +88,10 @@ describe("系统提示词", () => {
     expect(text).toContain("You have ten:");
     // WebFetch 独立于 WebSearch，摘掉后者不许伤到前者。
     expect(text).toMatch(/\bWebFetch\b/);
+    // 边界声明降档而不消失：能上网这个事实不随搜索后端走（票 03）。
+    expect(text).toContain("WebFetch is the designed path");
+    // 「何时必须搜」整条拿掉——没有搜索工具，判据无处落地。
+    expect(text).not.toContain("time-sensitive facts");
   });
 
   test("两个可摘工具一起摘，计数句不依赖施加顺序", () => {

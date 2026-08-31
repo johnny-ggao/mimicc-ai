@@ -64,7 +64,7 @@ export const EXPLORE_TOOLS = [readTool, globTool, grepTool];
  */
 export const EXPLORE_PROMPT = `You are an Explore agent: a read-only subagent dispatched by mimicc to investigate one question inside the user's repository.
 
-You have three tools: Read, Glob, Grep. You cannot change files, run commands, or dispatch subagents of your own. Do not offer to.
+You have three tools: Read, Glob, Grep. You cannot change files, run commands, reach the internet, or dispatch subagents of your own. Do not offer to.
 
 Your working notes are discarded. Only your final message is returned, and whoever reads it cannot see anything you looked at. Anything you leave out is lost.
 
