@@ -28,6 +28,17 @@ export interface Skill {
   modelInvokable: boolean;
   /** Frontmatter `argument-hint`, when present. Parsed now, wired later. */
   argumentHint?: string;
+  /**
+   * Frontmatter `requires`: tool names this skill's instructions assume, comma
+   * separated. A skill that declares them is only advertised when every one is
+   * registered (research-kind ticket 02) — the borrowed-skill failure this
+   * closes is a skill promising "search the primary sources" to an agent with
+   * no way to reach them, and the model promising it onward to the user.
+   * Undeclared means unchecked: a foreign skill passes through exactly as
+   * before, because a fail-closed default would silently drop every skill
+   * written for some other agent.
+   */
+  requires?: string[];
   /** Absolute directory the skill was read from — the base for auxiliary files. */
   dir: string;
   /** The SKILL.md body with frontmatter stripped, clipped when oversized. */
@@ -114,6 +125,7 @@ function readSkill(dir: string, log: Logger): Skill | undefined {
     description: parsed.description,
     modelInvokable: !parsed.disableModelInvocation,
     ...(parsed.argumentHint !== undefined ? { argumentHint: parsed.argumentHint } : {}),
+    ...(parsed.requires !== undefined ? { requires: parsed.requires } : {}),
     dir,
     body: clip(parsed.body.trim()),
     files: siblingFiles(dir),
@@ -152,6 +164,7 @@ interface Frontmatter {
   description: string;
   disableModelInvocation: boolean;
   argumentHint?: string;
+  requires?: string[];
 }
 
 /**
@@ -185,6 +198,16 @@ function parseFrontmatter(raw: string): (Frontmatter & { body: string }) | undef
     else if (key === "disable-model-invocation")
       fm.disableModelInvocation = value === "true";
     else if (key === "argument-hint") fm.argumentHint = value;
+    else if (key === "requires") {
+      // Comma separated on one line, matching the parser's line discipline.
+      // An empty declaration is dropped rather than kept as [] — "requires
+      // nothing" and "declared nothing" must stay the same case.
+      const named = value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry !== "");
+      if (named.length > 0) fm.requires = named;
+    }
   }
 
   return {
@@ -192,6 +215,7 @@ function parseFrontmatter(raw: string): (Frontmatter & { body: string }) | undef
     description: fm.description,
     disableModelInvocation: fm.disableModelInvocation,
     ...(fm.argumentHint !== undefined ? { argumentHint: fm.argumentHint } : {}),
+    ...(fm.requires !== undefined ? { requires: fm.requires } : {}),
     body: lines.slice(close + 1).join("\n"),
   };
 }

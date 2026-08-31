@@ -45,6 +45,30 @@ export class SkillRegistry {
   }
 
   /**
+   * The registry split against what is actually registered: skills whose
+   * declared `requires` are all present stay, the rest are dropped **with the
+   * names of what they were missing** — the caller reports them, because a
+   * capability that silently vanished reads as a capability that never existed.
+   *
+   * A skill that declares nothing is kept unchecked, deliberately: `requires`
+   * is this program's key, and a fail-closed default would drop every skill
+   * written for some other agent (see the note on `Skill.requires`).
+   */
+  satisfiedBy(roster: ReadonlySet<string>): {
+    kept: SkillRegistry;
+    dropped: { name: string; missing: string[] }[];
+  } {
+    const kept: Skill[] = [];
+    const dropped: { name: string; missing: string[] }[] = [];
+    for (const skill of this.byName.values()) {
+      const missing = (skill.requires ?? []).filter((tool) => !roster.has(tool));
+      if (missing.length === 0) kept.push(skill);
+      else dropped.push({ name: skill.name, missing });
+    }
+    return { kept: new SkillRegistry(kept), dropped };
+  }
+
+  /**
    * The injected catalogue, or undefined when there is nothing to inject.
    *
    * Only model-invoked skills appear: a `disable-model-invocation` skill is the

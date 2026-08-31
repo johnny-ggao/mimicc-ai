@@ -25,6 +25,7 @@ export {
   DURABILITY,
   MAIN_AGENT,
   RECURSION_LIMIT,
+  registeredToolNames,
   registeredTools,
   type AgentGraph,
   type AgentOptions,

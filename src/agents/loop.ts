@@ -231,6 +231,13 @@ export interface AgentOptions {
    */
   onWindow?: (event: WindowEvent) => void;
   /**
+   * Told when requirement filtering dropped skills: each entry names the skill
+   * and the tools it declared but this run does not register. Optional like the
+   * listeners above, and for the same reason main.ts always passes one — a
+   * capability that silently vanished reads as one that never existed.
+   */
+  onSkillsUnavailable?: (dropped: { name: string; missing: string[] }[]) => void;
+  /**
    * Overrides for where the context window is cut.
    *
    * The defaults are the measured ones and nothing in the program changes them.
@@ -693,6 +700,38 @@ function withoutWebSearch(environment: AgentEnvironment): AgentEnvironment {
   return rest;
 }
 
+/**
+ * The names {@link registeredTools} will register, computed without building.
+ *
+ * Exists for skill filtering: a skill's declared `requires` has to be checked
+ * against the roster *before* the Skill tool is built, because that tool closes
+ * over the registry it will serve — building first and filtering after leaves a
+ * tool that can still load what the catalogue no longer advertises. Deriving
+ * names without construction is a second copy of `allRegisteredTools`'
+ * conditionals, which is exactly the drift the exhaustiveness tests exist to
+ * catch — so `tests/skills.test.ts` pins this function against the real
+ * assembly across every conditional, and the memory literals here are the same
+ * four the confirmation policy already names.
+ */
+export function registeredToolNames(
+  environment: AgentEnvironment,
+  hasSkills: boolean,
+  exclude?: readonly string[],
+): Set<string> {
+  const excluded = new Set(exclude ?? []);
+  const names = [
+    ...TOOLS.map((tool) => tool.name),
+    TASK_TOOL_NAME,
+    ...(hasSkills ? [SKILL_TOOL_NAME] : []),
+    CLARIFY_TOOL_NAME,
+    ...(environment.webSearch !== undefined ? [WEB_SEARCH_TOOL_NAME] : []),
+    ...(environment.memory !== undefined
+      ? ["MemorySearch", "MemoryAdd", "MemoryUpdate", "MemoryDelete"]
+      : []),
+  ];
+  return new Set(names.filter((name) => !excluded.has(name)));
+}
+
 function allRegisteredTools(
   environment: AgentEnvironment,
   skills?: SkillRegistry,
@@ -944,11 +983,24 @@ export function createUniversalAgent(options: AgentOptions) {
   // tools, once for the middleware — which was harmless only because it is pure.
   const env = environment(model, modelFor, options);
 
+  // Skills checked against the roster before anything closes over them: a skill
+  // that declared `requires` it cannot have here is dropped — from the
+  // catalogue AND from what the Skill tool can load, which is why the filtering
+  // sits before both. The drop is reported, not silent (research-kind ticket
+  // 02: the failure this closes is a skill promising web research to an agent
+  // that had no way to do it, and the model promising it onward).
+  const filtered = options.skills?.satisfiedBy(
+    registeredToolNames(env, options.skills !== undefined, options.excludeTools),
+  );
+  if (filtered !== undefined && filtered.dropped.length > 0) {
+    options.onSkillsUnavailable?.(filtered.dropped);
+  }
+  const skills = filtered?.kept;
+
   // The catalogue is built (or not) here rather than inline, so the decision
   // "no model-invoked skills → no middleware" is made once and the array below
   // reads as a plain conditional.
-  const skillCatalog =
-    options.skills === undefined ? undefined : injectSkillCatalog(options.skills);
+  const skillCatalog = skills === undefined ? undefined : injectSkillCatalog(skills);
 
   const middleware: AnyAgentMiddleware[] = [
     ...agentStack(MAIN_AGENT, env),
@@ -960,7 +1012,7 @@ export function createUniversalAgent(options: AgentOptions) {
     // first-in-outermost, and it has to see the final result of a Skill call,
     // however the inner wraps shaped it.
     ...(skillCatalog !== undefined ? [skillCatalog] : []),
-    ...(options.skills !== undefined ? [pinSkillLoads()] : []),
+    ...(skills !== undefined ? [pinSkillLoads()] : []),
     // Before the gate, so it hashes the raw model output rather than whatever
     // the gate did to it.
     loopGuard(options.onCap !== undefined ? { onCap: options.onCap } : {}),
@@ -1006,7 +1058,7 @@ export function createUniversalAgent(options: AgentOptions) {
 
   const graph = createAgent({
     model,
-    tools: registeredTools(env, options.skills, options.excludeTools),
+    tools: registeredTools(env, skills, options.excludeTools),
     // Wrapped, not handed over as a string, and the difference is on the wire.
     // `normalizeSystemPrompt` returns a SystemMessage untouched but converts a
     // string into `new SystemMessage({ content: [{ type: "text", text }] })` —

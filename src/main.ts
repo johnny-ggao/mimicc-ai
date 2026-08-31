@@ -177,6 +177,14 @@ async function main(): Promise<void> {
     onWindow: (event) => {
       log.info("context_window", { ...event });
     },
+    // A skill declared tools this run does not register, so it was dropped from
+    // the catalogue. Warned per skill, with what was missing — "why is my skill
+    // not offered" must be answerable from the log.
+    onSkillsUnavailable: (dropped) => {
+      for (const skill of dropped) {
+        log.warn("skill_unavailable", { name: skill.name, missing: skill.missing });
+      }
+    },
     // A turn that was force-stopped is neither a failure nor a clean success;
     // it is the third state the loop guard reports, and it must be observable
     // as structured data rather than inferred from the transcript.

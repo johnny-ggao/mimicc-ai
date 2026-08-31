@@ -409,3 +409,82 @@ describe("one loader, one product", () => {
     expect(viaSlash).toBe(viaTool);
   });
 });
+
+/**
+ * `requires`: a skill's declared tool assumptions, and the filter that keeps a
+ * skill from being advertised to an agent that cannot honour it
+ * (research-kind ticket 02 — the borrowed research skill promised web research
+ * while nothing here could reach the web, and the model promised it onward).
+ */
+describe("declared requirements", () => {
+  test("requires is parsed as a comma list; absent and empty stay undeclared", () => {
+    const dir = join(DIR, "requires-parse");
+    mkdirSync(join(dir, "declared"), { recursive: true });
+    writeFileSync(
+      join(dir, "declared", "SKILL.md"),
+      "---\nname: declared\ndescription: d\nrequires: WebSearch, WebFetch\n---\nbody",
+    );
+    mkdirSync(join(dir, "undeclared"), { recursive: true });
+    writeFileSync(
+      join(dir, "undeclared", "SKILL.md"),
+      "---\nname: undeclared\ndescription: d\n---\nbody",
+    );
+    mkdirSync(join(dir, "empty"), { recursive: true });
+    writeFileSync(
+      join(dir, "empty", "SKILL.md"),
+      "---\nname: empty\ndescription: d\nrequires:\n---\nbody",
+    );
+
+    const skills = loadSkills([dir], recorder().log);
+    expect(skills.find((s) => s.name === "declared")?.requires).toEqual([
+      "WebSearch",
+      "WebFetch",
+    ]);
+    // "declared nothing" and "requires nothing" must stay the same case.
+    expect(skills.find((s) => s.name === "undeclared")?.requires).toBeUndefined();
+    expect(skills.find((s) => s.name === "empty")?.requires).toBeUndefined();
+  });
+
+  test("satisfiedBy keeps the satisfied and the undeclared, drops the rest by name", () => {
+    const skill = (name: string, requires?: string[]) => ({
+      name,
+      description: "d",
+      modelInvokable: true,
+      dir: "/x",
+      body: "b",
+      files: [],
+      ...(requires !== undefined ? { requires } : {}),
+    });
+    const registry = new SkillRegistry([
+      skill("fits", ["Read"]),
+      skill("foreign"),
+      skill("stranded", ["WebSearch", "Bash"]),
+    ]);
+
+    const { kept, dropped } = registry.satisfiedBy(new Set(["Read", "Bash"]));
+
+    expect(
+      kept
+        .all()
+        .map((s) => s.name)
+        .sort(),
+    ).toEqual(["fits", "foreign"]);
+    // The dropped entry says what was missing — "why is my skill not offered"
+    // must be answerable, so silence is not an option here.
+    expect(dropped).toEqual([{ name: "stranded", missing: ["WebSearch"] }]);
+    // Out of the catalogue too, not just the list: the catalogue is what the
+    // model reads before promising a capability onward.
+    expect(kept.catalogText()).not.toContain("stranded");
+  });
+
+  test("the repository's own research skill declares the web pair", () => {
+    // The canonical copy of the replacement skill (ticket 02's second half).
+    // If this stops parsing, the installed copy is being edited blind.
+    const skills = loadSkills(["skills"], recorder().log);
+    const research = skills.find((s) => s.name === "research");
+
+    expect(research?.requires).toEqual(["WebSearch", "WebFetch"]);
+    expect(research?.modelInvokable).toBe(true);
+    expect(research?.body).toContain("[citation:Title](URL)");
+  });
+});

@@ -10,6 +10,7 @@ import { FakeListChatModel } from "@langchain/core/utils/testing";
 
 import {
   CONFIRMATION_POLICY,
+  registeredToolNames,
   createUniversalAgent,
   RECURSION_LIMIT,
   registeredTools,
@@ -421,4 +422,43 @@ test("sends the system prompt as plain string content, not blocks", async () => 
   await graph.invoke({ messages: [new HumanMessage("what is package.json?")] }, CONFIG);
 
   expect(requests[0]?.messages[0]).toEqual({ role: "system", content: "be terse" });
+});
+
+/**
+ * `registeredToolNames` is a names-only copy of `allRegisteredTools`'
+ * conditionals — a second copy is drift waiting to happen, so this pins the two
+ * against each other across every conditional that changes the roster.
+ */
+test("the derived tool names match the built roster, in every configuration", () => {
+  const model = () => new FakeListChatModel({ responses: ["unused"] });
+  const memory = () =>
+    new MemoryStore({ global: "/nonexistent/g", project: "/nonexistent/p" });
+  const backend = { id: "fake", search: () => Promise.resolve([]) };
+
+  const cases: {
+    env: Parameters<typeof registeredTools>[0];
+    skills?: SkillRegistry;
+    exclude?: string[];
+  }[] = [
+    { env: { model: model(), modelFor: model } },
+    { env: { model: model(), modelFor: model, memory: memory() } },
+    { env: { model: model(), modelFor: model, webSearch: backend } },
+    {
+      env: { model: model(), modelFor: model, webSearch: backend, memory: memory() },
+      skills: new SkillRegistry([]),
+    },
+    { env: { model: model(), modelFor: model }, exclude: ["Clarify"] },
+    // The strip path: excluding WebSearch removes it at the source, together
+    // with the research kind that carries it.
+    {
+      env: { model: model(), modelFor: model, webSearch: backend },
+      exclude: ["WebSearch"],
+    },
+  ];
+
+  for (const { env, skills, exclude } of cases) {
+    const built = registeredTools(env, skills, exclude).map((tool) => tool.name);
+    const derived = registeredToolNames(env, skills !== undefined, exclude);
+    expect([...derived].sort()).toEqual([...built].sort());
+  }
 });
